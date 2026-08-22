@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/kai-lexer",
+    "crates/kai-ast",
+    "crates/kai-parser",
+    "crates/kai-resolver",
+    "crates/kai-tast",
+    "crates/kai-typecheck",
+    "crates/kai-diagnostics",
+    "crates/kai-codegen",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+
+[workspace.dependencies]
+kai-lexer = { path = "crates/kai-lexer" }
+kai-ast = { path = "crates/kai-ast" }
+kai-parser = { path = "crates/kai-parser" }
+kai-resolver = { path = "crates/kai-resolver" }
+kai-tast = { path = "crates/kai-tast" }
+kai-typecheck = { path = "crates/kai-typecheck" }
+kai-diagnostics = { path = "crates/kai-diagnostics" }
+kai-codegen = { path = "crates/kai-codegen" }
+inkwell = { version = "0.10.0", features = ["llvm22-1"] }
+
+[profile.dev]
+debug = 1

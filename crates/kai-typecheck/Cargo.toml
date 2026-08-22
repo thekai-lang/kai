@@ -1,0 +1,8 @@
+[package]
+name = "kai-typecheck"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kai-tast = { workspace = true }
+kai-diagnostics = { workspace = true }

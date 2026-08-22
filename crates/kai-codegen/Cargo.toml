@@ -1,0 +1,8 @@
+[package]
+name = "kai-codegen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kai-tast = { workspace = true }
+inkwell = { workspace = true }

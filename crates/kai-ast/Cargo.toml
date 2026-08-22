@@ -1,0 +1,6 @@
+[package]
+name = "kai-ast"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

@@ -1,0 +1,6 @@
+[package]
+name = "kai-tast"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
