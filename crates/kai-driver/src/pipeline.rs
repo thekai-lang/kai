@@ -63,12 +63,9 @@ fn lower(source: &str) -> Result<TypedProgram, Failure> {
 
     let ast = kai_parser::parse(&lexed.tokens).map_err(fail("parse"))?;
 
-    let resolve_diags = kai_resolver::check_entry(&ast);
-    if !resolve_diags.is_empty() {
-        return Err(fail("resolve")(resolve_diags));
-    }
+    let resolution = kai_resolver::analyze(&ast).map_err(fail("resolve"))?;
 
-    kai_typecheck::check(&ast).map_err(fail("typecheck"))
+    kai_typecheck::check_with(&ast, &resolution).map_err(fail("typecheck"))
 }
 
 fn internal(message: String) -> Diagnostic {

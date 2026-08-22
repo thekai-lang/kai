@@ -123,6 +123,7 @@ dependencies = [
  "kai-diagnostics",
  "kai-lexer",
  "kai-parser",
+ "kai-resolver",
  "kai-tast",
 ]
 

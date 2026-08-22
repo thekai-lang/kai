@@ -1,32 +1,11 @@
-//! Entry-point resolution for v0.0.1:
-//! - exactly one `main`
-//! - no duplicate top-level function names
-//! - `main` must be `() -> int32`
+//! Entry-point contract: exactly one `main`, no parameters, returns int32.
+//! (Duplicate top-level names live in `tables` — one check per namespace.)
 
 use kai_ast::{Program, Ty};
 use kai_diagnostics::{Diagnostic, Span};
 
-pub fn check_entry(program: &Program) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-
-    check_duplicate_names(program, &mut diagnostics);
-    check_main(program, &mut diagnostics);
-
-    diagnostics
-}
-
-fn check_duplicate_names(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
-    for (idx, decl) in program.fns.iter().enumerate() {
-        if program.fns[..idx]
-            .iter()
-            .any(|other| other.name.name == decl.name.name)
-        {
-            diagnostics.push(Diagnostic::error(
-                format!("duplicate function `{}`", decl.name.name),
-                decl.name.span,
-            ));
-        }
-    }
+pub fn check_entry(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
+    check_main(program, diagnostics);
 }
 
 fn check_main(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
@@ -98,13 +77,19 @@ mod tests {
         }
     }
 
+    fn diags_of(program: &Program) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+        check_entry(program, &mut diagnostics);
+        diagnostics
+    }
+
     #[test]
     fn accepts_valid_main() {
         let program = Program {
             fns: vec![decl("main", named("int32"))],
             types: Vec::new(),
         };
-        assert!(check_entry(&program).is_empty());
+        assert!(diags_of(&program).is_empty());
     }
 
     #[test]
@@ -113,7 +98,7 @@ mod tests {
             fns: vec![decl("main", named("int"))],
             types: Vec::new(),
         };
-        assert!(check_entry(&program).is_empty());
+        assert!(diags_of(&program).is_empty());
     }
 
     #[test]
@@ -123,7 +108,7 @@ mod tests {
             types: Vec::new(),
         };
         assert_eq!(
-            check_entry(&program)[0].message,
+            diags_of(&program)[0].message,
             "program has no `main` function"
         );
     }
@@ -134,16 +119,30 @@ mod tests {
             fns: vec![decl("main", named("bool"))],
             types: Vec::new(),
         };
-        assert_eq!(check_entry(&program).len(), 1);
-        assert!(check_entry(&program)[0].message.contains("`int32`"));
+        let diags = diags_of(&program);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`int32`"));
     }
 
     #[test]
-    fn rejects_duplicate_names() {
+    fn rejects_main_with_parameters() {
+        let mut main = decl("main", named("int32"));
+        main.params.push(Param {
+            name: Ident {
+                name: "x".into(),
+                span: Span::new(0, 0),
+            },
+            ty: named("int32"),
+            mutable: false,
+        });
         let program = Program {
-            fns: vec![decl("main", named("int32")), decl("main", named("int32"))],
+            fns: vec![main],
             types: Vec::new(),
         };
-        assert_eq!(check_entry(&program).len(), 1);
+        assert!(
+            diags_of(&program)[0]
+                .message
+                .contains("must take no parameters")
+        );
     }
 }

@@ -14,12 +14,24 @@ pub mod ty;
 
 use kai_ast::Program;
 use kai_diagnostics::Diagnostic;
+use kai_resolver::Resolution;
 use kai_tast::TypedProgram;
 
-/// Lowers a full program to TAST. Returns every diagnostic found; the TAST is
-/// only produced when none occurred, so downstream phases can trust it fully.
+/// Typecheck-only entry (unit tests / tools): no name resolution performed,
+/// so surface names cannot be resolved beyond primitives. The pipeline uses
+/// `analyze` + `check_with`.
 pub fn check(program: &Program) -> Result<TypedProgram, Vec<Diagnostic>> {
-    let mut state = checker::Checker::new();
+    check_with(program, &Resolution::default())
+}
+
+/// Lowers a full program to TAST using the resolver's name tables. Returns
+/// every diagnostic found; the TAST is only produced when none occurred, so
+/// downstream phases can trust it fully.
+pub fn check_with(
+    program: &Program,
+    resolution: &Resolution,
+) -> Result<TypedProgram, Vec<Diagnostic>> {
+    let mut state = checker::Checker::new(resolution);
     let typed = decl::program(&mut state, program);
 
     if !state.failed() {

@@ -7,6 +7,7 @@ edition.workspace = true
 kai-ast = { workspace = true }
 kai-tast = { workspace = true }
 kai-diagnostics = { workspace = true }
+kai-resolver = { workspace = true }
 
 [dev-dependencies]
 kai-lexer = { workspace = true }
