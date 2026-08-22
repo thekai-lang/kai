@@ -1,5 +1,6 @@
 use crate::cursor::Cursor;
 use crate::keywords;
+use crate::operators;
 use crate::token::{Token, TokenKind};
 use kai_diagnostics::{Diagnostic, Span};
 
@@ -61,28 +62,85 @@ impl<'src> Lexer<'src> {
             b'{' => Some(self.token(TokenKind::LBrace, start)),
             b'}' => Some(self.token(TokenKind::RBrace, start)),
             b';' => Some(self.token(TokenKind::Semi, start)),
-            b'-' if self.cursor.peek() == Some(b'>') => {
-                self.cursor.bump();
-                Some(self.token(TokenKind::Arrow, start))
-            }
-            b'0'..=b'9' => Some(self.scan_int(byte, start)),
+            b':' => Some(self.token(TokenKind::Colon, start)),
+            b'-' => Some(self.scan_minus(start)),
+            b'0'..=b'9' => Some(self.scan_number(byte, start)),
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.scan_word(start),
-            _ => {
-                self.diagnostics.push(Diagnostic::error(
-                    format!("unexpected character `{}`", byte as char),
-                    Span::new(start, start + 1),
-                ));
-                None
-            }
+            _ => match operators::scan(&mut self.cursor, byte) {
+                Some(Ok(kind)) => Some(self.token(kind, start)),
+                Some(Err(expected)) => {
+                    let found = byte as char;
+                    self.diagnostics.push(Diagnostic::error(
+                        format!(
+                            "unexpected character `{found}` (did you mean `{expected}{expected}`?)"
+                        ),
+                        Span::new(start, self.cursor.pos()),
+                    ));
+                    None
+                }
+                None => {
+                    self.diagnostics.push(Diagnostic::error(
+                        format!("unexpected character `{}`", byte as char),
+                        Span::new(start, start + 1),
+                    ));
+                    None
+                }
+            },
         }
     }
 
-    /// `first` is the leading digit already consumed by the scan loop; it
-    /// counts toward the value.
-    fn scan_int(&mut self, first: u8, start: usize) -> Token {
-        let mut overflowed = false;
-        let mut value = u64::from(first - b'0');
+    /// `-` is three tokens deep: `->`, `-=`, or plain minus.
+    fn scan_minus(&mut self, start: usize) -> Token {
+        let kind = match self.cursor.peek() {
+            Some(b'>') => {
+                self.cursor.bump();
+                TokenKind::Arrow
+            }
+            Some(b'=') => {
+                self.cursor.bump();
+                TokenKind::MinusEq
+            }
+            _ => TokenKind::Minus,
+        };
+        self.token(kind, start)
+    }
 
+    /// Integer or float literal; `first` is the leading digit already
+    /// consumed by the scan loop.
+    fn scan_number(&mut self, first: u8, start: usize) -> Token {
+        let mut overflowed = false;
+        let int_part = self.accumulate_int(u64::from(first - b'0'), &mut overflowed);
+
+        // Float requires at least one digit after '.' (EBNF: "1." is invalid).
+        if self.cursor.peek() == Some(b'.')
+            && self
+                .cursor
+                .peek_second()
+                .is_some_and(|b| b.is_ascii_digit())
+        {
+            self.cursor.bump(); // '.'
+            let fraction = self.accumulate_int(0, &mut overflowed);
+            let mut scale = 1.0f64;
+            let mut remaining = fraction;
+            while remaining > 0 {
+                scale /= 10.0;
+                remaining /= 10;
+            }
+            let value = int_part as f64 + fraction as f64 * scale;
+            return self.token(TokenKind::FloatLit(value), start);
+        }
+
+        if overflowed {
+            self.report_int_overflow(start);
+        }
+        self.token(TokenKind::IntLit(int_part), start)
+    }
+
+    /// Accumulates trailing digits into `base`, saturating at `u64::MAX`.
+    /// Saturation is reported by the caller so the span covers the whole
+    /// literal and floats don't double-report.
+    fn accumulate_int(&mut self, base: u64, overflowed: &mut bool) -> u64 {
+        let mut value = base;
         while let Some(digit) = self.cursor.eat_if(|b| b.is_ascii_digit()) {
             value = match value
                 .checked_mul(10)
@@ -90,17 +148,12 @@ impl<'src> Lexer<'src> {
             {
                 Some(next) => next,
                 None => {
-                    overflowed = true;
+                    *overflowed = true;
                     u64::MAX
                 }
             };
         }
-
-        if overflowed {
-            self.report_int_overflow(start);
-        }
-
-        self.token(TokenKind::IntLit(value), start)
+        value
     }
 
     fn scan_word(&mut self, start: usize) -> Option<Token> {
@@ -233,10 +286,70 @@ mod tests {
     }
 
     #[test]
-    fn bare_minus_without_arrow_is_error() {
-        let out = lex("return 0 - 1;");
-        // `-` followed by space is not `->`; v0.0.1 has no subtraction yet.
+    fn lexes_float_literals() {
+        let out = lex("let x = 3.25;");
+        assert_eq!(
+            kinds(&out.tokens),
+            vec![
+                &TokenKind::Let,
+                &TokenKind::Ident("x".into()),
+                &TokenKind::Eq,
+                &TokenKind::FloatLit(3.25),
+                &TokenKind::Semi,
+                &TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn dot_without_digit_is_not_a_float() {
+        // "1." must not become FloatLit; the '.' itself has no token yet.
+        let out = lex("1.x");
+        assert_eq!(out.tokens[0].kind, TokenKind::IntLit(1));
+        assert!(!out.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn disambiguates_minus_forms() {
+        let out = lex("-> -= -");
+        assert_eq!(
+            kinds(&out.tokens),
+            vec![
+                &TokenKind::Arrow,
+                &TokenKind::MinusEq,
+                &TokenKind::Minus,
+                &TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_logic_and_comparison_operators() {
+        let out = lex("a && b || !c == 1 != 2 >= 3");
+        assert!(out.diagnostics.is_empty());
+        let ops: Vec<&TokenKind> = out
+            .tokens
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.kind,
+                    TokenKind::AmpAmp
+                        | TokenKind::PipePipe
+                        | TokenKind::Bang
+                        | TokenKind::EqEq
+                        | TokenKind::NotEq
+                        | TokenKind::Ge
+                )
+            })
+            .map(|t| &t.kind)
+            .collect();
+        assert_eq!(ops.len(), 6);
+    }
+
+    #[test]
+    fn lone_ampersand_suggests_double() {
+        let out = lex("if a & b {}");
         assert_eq!(out.diagnostics.len(), 1);
-        assert_eq!(out.diagnostics[0].message, "unexpected character `-`");
+        assert!(out.diagnostics[0].message.contains("&&"));
     }
 }

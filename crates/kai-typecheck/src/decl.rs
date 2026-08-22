@@ -1,33 +1,34 @@
 //! Function-declaration lowering: resolve signatures, lower bodies, enforce
-//! the "must actually return" rule.
+//! the "must actually return" rule via definite-return analysis.
 
+use crate::checker::Checker;
 use crate::error;
+use crate::scope::Locals;
 use crate::stmt;
 use crate::ty;
 use kai_ast::Program;
-use kai_diagnostics::Diagnostic;
 use kai_tast::{FunctionId, KaiType, TypedBlock, TypedFnDecl, TypedProgram};
 
-pub fn program(program: &Program, diagnostics: &mut Vec<Diagnostic>) -> TypedProgram {
+pub(crate) fn program(checker: &mut Checker, program: &Program) -> TypedProgram {
     let fns = program
         .fns
         .iter()
         .enumerate()
-        .map(|(id, decl)| fn_decl(decl, FunctionId(id as u32), diagnostics))
+        .map(|(id, decl)| {
+            // Each function starts from a clean local-variable slate.
+            checker.locals = Locals::new();
+            fn_decl(checker, decl, FunctionId(id as u32))
+        })
         .collect();
 
     TypedProgram { fns }
 }
 
-fn fn_decl(
-    decl: &kai_ast::FnDecl,
-    id: FunctionId,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> TypedFnDecl {
-    let ret = ty::resolve(&decl.ret, decl.ret.span(), diagnostics);
-    let body: TypedBlock = stmt::block(&decl.body, ret, diagnostics);
+fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> TypedFnDecl {
+    let ret = ty::resolve(checker, &decl.ret);
+    let body = stmt::lower_block(checker, &decl.body, ret);
 
-    ensure_has_return(decl, ret, &body, diagnostics);
+    ensure_returns_on_all_paths(checker, decl, ret, &body);
 
     TypedFnDecl {
         id,
@@ -37,24 +38,30 @@ fn fn_decl(
     }
 }
 
-/// v0.0.1 simplification: every non-unit function must contain a `return`
-/// statement somewhere in its body, otherwise the emitted LLVM function would
-/// fall through without a value. Proper flow analysis arrives with `if/else`.
-fn ensure_has_return(
+/// A block definitely returns when its last statement is a `return`, or an
+/// `if/else` whose both arms definitely return (§9.4).
+fn definitely_returns(block: &TypedBlock) -> bool {
+    match block.stmts.last() {
+        Some(kai_tast::TypedStmt::Return(_)) => true,
+        Some(kai_tast::TypedStmt::If(if_)) => {
+            let then_ret = definitely_returns(&if_.then_block);
+            let else_ret = if_.else_block.as_ref().is_some_and(definitely_returns);
+            then_ret && else_ret
+        }
+        _ => false,
+    }
+}
+
+fn ensure_returns_on_all_paths(
+    checker: &mut Checker,
     decl: &kai_ast::FnDecl,
     ret: KaiType,
     body: &TypedBlock,
-    diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let has_return = body
-        .stmts
-        .iter()
-        .any(|stmt| matches!(stmt, kai_tast::TypedStmt::Return(_)));
-    if !has_return {
-        diagnostics.push(error::function_needs_return(
-            &decl.name.name,
-            ret,
-            decl.span,
-        ));
+    if ret == KaiType::Unit || definitely_returns(body) {
+        return;
     }
+    let span = decl.span;
+    let name = decl.name.name.clone();
+    checker.error(error::function_needs_return(&name, ret, span));
 }

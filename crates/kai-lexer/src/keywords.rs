@@ -7,6 +7,12 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
     match word {
         "fn" => Some(TokenKind::Fn),
         "return" => Some(TokenKind::Return),
+        "let" => Some(TokenKind::Let),
+        "var" => Some(TokenKind::Var),
+        "if" => Some(TokenKind::If),
+        "else" => Some(TokenKind::Else),
+        "true" => Some(TokenKind::True),
+        "false" => Some(TokenKind::False),
         _ => None,
     }
 }
@@ -19,6 +25,9 @@ mod tests {
     fn recognizes_keywords() {
         assert_eq!(lookup("fn"), Some(TokenKind::Fn));
         assert_eq!(lookup("return"), Some(TokenKind::Return));
+        for kw in ["let", "var", "if", "else", "true", "false"] {
+            assert!(lookup(kw).is_some(), "`{kw}` should be a keyword");
+        }
     }
 
     #[test]

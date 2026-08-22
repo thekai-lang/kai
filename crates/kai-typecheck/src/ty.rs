@@ -1,15 +1,22 @@
+//! Surface type names -> concrete `KaiType`. Aliases per §3.2: `int` = int32,
+//! `float` = float64.
+
+use crate::checker::Checker;
 use crate::error;
 use kai_ast::Ty;
-use kai_diagnostics::{Diagnostic, Span};
 use kai_tast::KaiType;
 
-/// Surface name -> concrete type. `int` is an alias for `int32` (§3.2).
-pub fn resolve(ty: &Ty, span: Span, diagnostics: &mut Vec<Diagnostic>) -> KaiType {
+pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
     match ty {
         Ty::Named(ident) => match ident.name.as_str() {
             "int32" | "int" => KaiType::Int32,
+            "int64" => KaiType::Int64,
+            "float64" | "float" => KaiType::Float64,
+            "bool" => KaiType::Bool,
+            "unit" => KaiType::Unit,
             other => {
-                diagnostics.push(error::unknown_type(other, span));
+                let span = ident.span;
+                checker.error(error::unknown_type(other, span));
                 KaiType::Int32 // placeholder; program is discarded on error anyway
             }
         },

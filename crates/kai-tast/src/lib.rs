@@ -8,9 +8,9 @@ pub mod stmt;
 pub mod symbol;
 pub mod ty;
 
-pub use expr::{TypedExpr, TypedExprKind};
+pub use expr::{BinaryOp, TypedExpr, TypedExprKind};
 pub use fn_decl::TypedFnDecl;
 pub use program::TypedProgram;
-pub use stmt::{TypedBlock, TypedStmt};
-pub use symbol::FunctionId;
+pub use stmt::{TypedAssign, TypedBlock, TypedIf, TypedLet, TypedStmt};
+pub use symbol::{FunctionId, LocalId};
 pub use ty::KaiType;

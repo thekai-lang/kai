@@ -3,6 +3,7 @@
 pub mod cursor;
 pub mod keywords;
 pub mod lexer;
+pub mod operators;
 pub mod token;
 
 pub use lexer::{LexOutput, lex};

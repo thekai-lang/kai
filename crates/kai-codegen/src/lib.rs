@@ -3,6 +3,7 @@
 
 pub(crate) mod context;
 pub(crate) mod emit;
+pub(crate) mod frame;
 pub(crate) mod module;
 pub(crate) mod types;
 

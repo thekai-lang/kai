@@ -13,14 +13,17 @@ pub(crate) fn program(ctx: &Ctx, program: &kai_tast::TypedProgram) {
 }
 
 fn function(ctx: &Ctx, decl: &kai_tast::TypedFnDecl) {
-    let ret_ty = types::to_llvm(ctx, decl.ret);
-    let fn_type = ret_ty.fn_type(&[], false);
+    let fn_type = types::fn_signature(ctx, decl.ret);
     let function = ctx.module.add_function(&decl.name, fn_type, None);
     let entry = ctx.context.append_basic_block(function, "entry");
     ctx.builder.position_at_end(entry);
 
+    let mut frame = crate::frame::Frame::new();
     for stmt in &decl.body.stmts {
-        // Infallible for valid TAST: every statement terminates the block.
-        stmt::emit(ctx, stmt);
+        stmt::emit(ctx, &mut frame, stmt);
     }
+
+    // Control flow can leave the last block unterminated (both `if` arms
+    // returned); close it with a dead fallback return so the module verifies.
+    stmt::fallback_return(ctx, decl.ret);
 }

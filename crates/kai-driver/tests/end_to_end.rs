@@ -64,3 +64,167 @@ fn lex_error_reports_unknown_character() {
     assert_eq!(failure.phase, "lex");
     assert!(failure.diagnostics[0].message.contains("@"));
 }
+
+// ---------------------------------------------------------------------------
+// v0.0.2: bindings, mutability, control flow, boolean logic, widened types.
+// ---------------------------------------------------------------------------
+
+const V002: &str = "v0002/main.kai";
+
+#[test]
+fn v002_full_pipeline_matches_golden_ir() {
+    let source = fixture(V002);
+    let ir = pipeline::compile(&source).expect("compilation should succeed");
+
+    let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/v0002/main.expected.ll");
+    if !golden.exists() {
+        std::fs::write(&golden, &ir).unwrap();
+        panic!("golden file missing — wrote it, re-run the test to compare");
+    }
+
+    let expected = std::fs::read_to_string(&golden).unwrap();
+    assert_eq!(ir, expected, "generated IR diverged from golden file");
+}
+
+#[test]
+fn v002_jit_executes_bindings_and_logic() {
+    // total = 6*7+1 = 43; `43 >= 42 && !(43 > 43)` holds → returns 42.
+    assert_eq!(pipeline::jit(&fixture(V002)).unwrap(), 42);
+}
+
+#[test]
+fn v002_jit_arithmetic_precedence() {
+    let src = "fn main() -> int32 { return 2 + 3 * 4 - 1; }";
+    assert_eq!(pipeline::jit(src).unwrap(), 13);
+}
+
+#[test]
+fn v002_jit_mutation_and_compound_assign() {
+    let src = "fn main() -> int32 { var x = 5; x += 3; x = x * 2; return x; }";
+    assert_eq!(pipeline::jit(src).unwrap(), 16);
+}
+
+#[test]
+fn v002_jit_else_branch_taken() {
+    let src = "fn main() -> int32 { if 1 < 0 { return 1; } else { return 9; } }";
+    assert_eq!(pipeline::jit(src).unwrap(), 9);
+}
+
+#[test]
+fn v002_jit_short_circuit_skips_division_by_zero() {
+    // Eager evaluation would trap on `10 / d`; short-circuiting must skip it.
+    let and_src =
+        "fn main() -> int32 { let d = 0; if false && 10 / d == 0 { return 1; } return 2; }";
+    assert_eq!(pipeline::jit(and_src).unwrap(), 2);
+
+    let or_src = "fn main() -> int32 { let d = 0; if true || 10 / d == 0 { return 3; } return 4; }";
+    assert_eq!(pipeline::jit(or_src).unwrap(), 3);
+}
+
+#[test]
+fn v002_jit_int64_literals_via_annotation() {
+    let src = concat!(
+        "fn main() -> int32 {",
+        " let big: int64 = 5000000000;",
+        " let half: int64 = big / 2 + big % 2;",
+        " if half == 2500000000 { return 1; }",
+        " return 0; }"
+    );
+    assert_eq!(pipeline::jit(src).unwrap(), 1);
+}
+
+#[test]
+fn v002_jit_float_arithmetic() {
+    let src =
+        "fn main() -> int32 { let f = 2.5; if f * 2.0 == 5.0 && f < 3.0 { return 7; } return 0; }";
+    assert_eq!(pipeline::jit(src).unwrap(), 7);
+}
+
+#[test]
+fn v002_jit_unary_minus_and_modulo() {
+    let src = "fn main() -> int32 { return -8 + 17 % 5 + 48; }";
+    assert_eq!(pipeline::jit(src).unwrap(), 42);
+}
+
+#[test]
+fn v002_jit_nested_scopes_shadowing() {
+    // Inner scope shadows `x` with a mutable binding; outer stays 1.
+    let src = "fn main() -> int32 { let x = 1; { var x = 100; x += 1; } return x; }";
+    assert_eq!(pipeline::jit(src).unwrap(), 1);
+}
+
+#[test]
+fn v002_error_assign_to_immutable() {
+    let failure =
+        pipeline::compile("fn main() -> int32 { let x = 1; x = 2; return x; }").unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("cannot assign to `x`")
+    );
+}
+
+#[test]
+fn v002_error_condition_not_bool() {
+    let failure =
+        pipeline::compile("fn main() -> int32 { if 1 { return 2; } return 0; }").unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("condition must be `bool`")
+    );
+}
+
+#[test]
+fn v002_error_mixed_arithmetic() {
+    // int64 widening via the other operand is allowed by design; int+float
+    // never mixes, with or without hints.
+    let failure =
+        pipeline::compile("fn main() -> int32 { let f = 2.5; return 1 + f; }").unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("requires equal types")
+    );
+}
+
+#[test]
+fn v002_error_undeclared_variable() {
+    let failure = pipeline::compile("fn main() -> int32 { return n; }").unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("undeclared variable `n`")
+    );
+}
+
+#[test]
+fn v002_error_invalid_assignment_target_is_parse_phase() {
+    let failure = pipeline::compile("fn main() -> int32 { 1 + 1 = 2; return 0; }").unwrap_err();
+    assert_eq!(failure.phase, "parse");
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("invalid assignment target")
+    );
+}
+
+#[test]
+fn v002_error_duplicate_local_same_scope() {
+    let failure =
+        pipeline::compile("fn main() -> int32 { let x = 1; let x = 2; return x; }").unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(failure.diagnostics[0].message.contains("already declared"));
+}
+
+#[test]
+fn v002_error_definite_return_still_enforced_with_if() {
+    let failure = pipeline::compile("fn main() -> int32 { if true { return 1; } }").unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(failure.diagnostics[0].message.contains("has no `return`"));
+}

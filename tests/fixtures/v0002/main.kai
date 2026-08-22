@@ -1,0 +1,11 @@
+fn main() -> int32 {
+    let base = 6;
+    var total = base * 7;
+    total += 1;
+
+    if total >= 42 && !(total > 43) {
+        return total - 1;
+    } else {
+        return 0;
+    }
+}
