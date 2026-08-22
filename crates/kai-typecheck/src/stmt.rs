@@ -7,7 +7,7 @@ use crate::expr;
 use crate::ty;
 use kai_ast::{AssignOp, Block as AstBlock, Stmt, StmtKind};
 use kai_tast::{
-    BinaryOp, KaiType, TypedAssign, TypedBlock, TypedExpr, TypedIf, TypedLet, TypedStmt,
+    BinaryOp, FieldStep, KaiType, TypedAssign, TypedBlock, TypedExpr, TypedIf, TypedLet, TypedStmt,
 };
 
 /// Lower a whole function body. `return_type` drives return checks.
@@ -113,43 +113,66 @@ fn assign(
     op: AssignOp,
     value: &kai_ast::Expr,
 ) -> Option<TypedStmt> {
-    // Field-place writes land later in v0.0.3, together with the type table;
-    // until then they are rejected here so nothing half-typed reaches codegen.
-    let kai_ast::AssignTarget::Named(name) = target else {
-        checker.error(error::unsupported_expression(target.span()));
-        return None;
+    // The ROOT binding gates the whole place (§9.3): `mut` on a stack-type
+    // param is a purely local permission; immutability of the root rejects
+    // writes through any field path too.
+    let (root_name, root_span, path_idents) = match target {
+        kai_ast::AssignTarget::Named(name) => (name.name.clone(), name.span, Vec::new()),
+        kai_ast::AssignTarget::Field { root, path } => (root.name.clone(), root.span, path.clone()),
     };
 
-    let info = match checker.locals.lookup(&name.name) {
+    let info = match checker.locals.lookup(&root_name) {
         Some(info) => info,
         None => {
-            let span = name.span;
-            let text = name.name.clone();
-            checker.error(error::undeclared_variable(&text, span));
+            checker.error(error::undeclared_variable(&root_name, root_span));
             return None;
         }
     };
 
     if !info.mutable {
-        let span = name.span;
-        let text = name.name.clone();
-        checker.error(error::assign_to_immutable(&text, span));
+        checker.error(error::assign_to_immutable(&root_name, root_span));
     }
 
-    let typed_value = expr::lower(checker, value, Some(info.ty));
+    // Walk the field chain, resolving each segment against the layout table.
+    let mut cur_ty = info.ty;
+    let mut steps: Vec<FieldStep> = Vec::new();
+    for seg in &path_idents {
+        cur_ty = match cur_ty {
+            KaiType::Struct(struct_id) => match checker.field_slot(struct_id, &seg.name) {
+                Some((index, slot)) => {
+                    steps.push(FieldStep {
+                        struct_id,
+                        field: index,
+                    });
+                    slot.ty
+                }
+                None => {
+                    let ty_name = checker.type_name(struct_id).to_string();
+                    let field = seg.name.clone();
+                    checker.error(error::no_such_field(&ty_name, &field, seg.span));
+                    return None;
+                }
+            },
+            other => {
+                checker.error(error::field_access_on_non_struct(other, seg.span));
+                return None;
+            }
+        };
+    }
+
+    let typed_value = expr::lower(checker, value, Some(cur_ty));
 
     // Compound ops are read-modify-write: validate like the binary operator.
     let compound = compound_op(op);
     match compound {
         Some(binop) => {
-            check_compound(checker, binop, info.ty, &typed_value, value.span);
+            check_compound(checker, binop, cur_ty, &typed_value, value.span);
         }
-        None if typed_value.ty != info.ty => {
+        None if typed_value.ty != cur_ty => {
             let span = value.span;
             let found = typed_value.ty;
-            let text = name.name.clone();
             checker.error(kai_diagnostics::Diagnostic::error(
-                format!("cannot assign `{found}` to `{text}` of type `{}`", info.ty),
+                format!("cannot assign `{found}` to a place of type `{cur_ty}`"),
                 span,
             ));
         }
@@ -157,7 +180,8 @@ fn assign(
     }
 
     Some(TypedStmt::Assign(TypedAssign {
-        local: info.id,
+        root: info.id,
+        path: steps,
         op: compound,
         value: typed_value,
     }))

@@ -27,6 +27,12 @@ pub(crate) fn emit<'ctx>(
         // Poisoned recovery node; only reachable in programs that failed
         // upstream. `undef` keeps emission total without inventing behavior.
         TypedExprKind::Invalid => undef_of(ctx, expr.ty),
+        // v0.0.3 nodes. Emission lands in the next phase; for now they keep
+        // every match total with a scalar placeholder so struct-typed
+        // programs cannot ICE mid-transition.
+        TypedExprKind::Call { .. }
+        | TypedExprKind::FieldAccess { .. }
+        | TypedExprKind::StructLit { .. } => ctx.context.i32_type().get_undef().into(),
     }
 }
 

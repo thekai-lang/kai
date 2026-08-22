@@ -1,5 +1,5 @@
 use crate::expr::{BinaryOp, TypedExpr};
-use crate::symbol::LocalId;
+use crate::symbol::{LocalId, StructId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedBlock {
@@ -26,11 +26,22 @@ pub struct TypedLet {
     pub init: TypedExpr,
 }
 
+/// One hop of a field-place path (`root.a.b` carries two steps), resolved to
+/// the declaring struct and the field's position in it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FieldStep {
+    pub struct_id: StructId,
+    pub field: u16,
+}
+
 /// `op == None` is plain store; `Some(op)` is read-modify-write
-/// (`x += e` lowers to load, add, store).
+/// (`x += e` lowers to load, add, store). The write goes to `root`, or —
+/// when `path` is non-empty — through the field chain starting at `root`.
+/// Mutability was enforced upstream against the ROOT binding (§9.3).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedAssign {
-    pub local: LocalId,
+    pub root: LocalId,
+    pub path: Vec<FieldStep>,
     pub op: Option<BinaryOp>,
     pub value: TypedExpr,
 }

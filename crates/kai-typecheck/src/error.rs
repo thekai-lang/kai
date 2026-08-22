@@ -97,3 +97,70 @@ pub fn unsupported_expression(span: Span) -> Diagnostic {
         span,
     )
 }
+
+// -- v0.0.3 ------------------------------------------------------------------
+
+pub fn unknown_function(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("unknown function `{name}`"), span)
+}
+
+pub fn indirect_call(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        "only direct calls to declared functions are supported",
+        span,
+    )
+}
+
+pub fn arg_count_mismatch(expected: usize, found: usize, span: Span) -> Diagnostic {
+    let plural = if expected == 1 { "" } else { "s" };
+    Diagnostic::error(
+        format!("this function takes {expected} argument{plural}, but {found} were supplied"),
+        span,
+    )
+}
+
+pub fn arg_type_mismatch(
+    param: KaiType,
+    found: KaiType,
+    position: usize,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        format!("argument {position}: expected `{param}`, found `{found}`"),
+        span,
+    )
+}
+
+pub fn field_type_mismatch(
+    field: &str,
+    expected: KaiType,
+    found: KaiType,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        format!("field `{field}`: expected `{expected}`, found `{found}`"),
+        span,
+    )
+}
+
+pub fn field_access_on_non_struct(ty: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("cannot access a field on a value of type `{ty}`"),
+        span,
+    )
+}
+
+pub fn no_such_field(ty_name: &str, field: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("type `{ty_name}` has no field `{field}`"), span)
+}
+
+pub fn duplicate_field_init(field: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("field `{field}` specified more than once"), span)
+}
+
+pub fn missing_field_in_lit(field: &str, ty_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("missing field `{field}` in `{ty_name}` literal"),
+        span,
+    )
+}

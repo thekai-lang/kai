@@ -62,6 +62,26 @@ pub enum TypedExprKind {
     /// programs that already failed; codegen lowers it to `undef` so every
     /// match stays total and no phase can mistake it for real code.
     Invalid,
+    /// `base.field`, resolved to a slot index in the struct layout. The
+    /// result type is the field's declared type; loads copy (§9.3).
+    FieldAccess {
+        base: Box<TypedExpr>,
+        struct_id: crate::symbol::StructId,
+        /// Position of the field in declaration order.
+        field: u16,
+    },
+    /// `Name { f: e, .. }` with values in FIELD DECLARATION order and
+    /// completeness already enforced by the type checker.
+    StructLit {
+        struct_id: crate::symbol::StructId,
+        values: Vec<TypedExpr>,
+    },
+    /// Direct call to a top-level function; argument types match the
+    /// signature exactly, result type is `self.ty`.
+    Call {
+        func: crate::symbol::FunctionId,
+        args: Vec<TypedExpr>,
+    },
 }
 
 impl TypedExpr {

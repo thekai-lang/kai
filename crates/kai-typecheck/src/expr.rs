@@ -5,9 +5,12 @@
 
 use crate::checker::Checker;
 use crate::error;
-use kai_ast::{BinaryExpr, BinaryOp as AstBinaryOp, Expr, ExprKind, Ident, UnaryOp};
+use kai_ast::{
+    BinaryExpr, BinaryOp as AstBinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr, Ident,
+    StructLitExpr, UnaryOp,
+};
 use kai_diagnostics::Span;
-use kai_tast::{BinaryOp, KaiType, TypedExpr, TypedExprKind};
+use kai_tast::{BinaryOp, FunctionId, KaiType, StructId, TypedExpr, TypedExprKind};
 
 /// Lower an AST expression to TAST. `expected` is a width hint for integer
 /// literals; it never enables implicit conversions.
@@ -26,14 +29,9 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         ExprKind::Ident(ident) => ident_ref(checker, ident),
         ExprKind::Unary(unary) => unary_expr(checker, unary.op, &unary.operand),
         ExprKind::Binary(binary) => binary_expr(checker, binary, expected),
-        // Calls, field reads, and struct literals are parsed by v0.0.3 but
-        // their typing rules land with the resolver/type-table work later in
-        // the same version; until then they are rejected here so nothing
-        // half-typed reaches codegen.
-        ExprKind::Call(_) | ExprKind::FieldAccess(_) | ExprKind::StructLit(_) => {
-            checker.error(error::unsupported_expression(expr.span));
-            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
-        }
+        ExprKind::Call(call) => call_expr(checker, call, expr.span),
+        ExprKind::FieldAccess(access) => field_access(checker, access),
+        ExprKind::StructLit(lit) => struct_lit(checker, lit),
         // Poisoned parser-recovery node. The program already failed upstream;
         // this defensive diagnostic keeps the phase contract explicit.
         ExprKind::Invalid => {
@@ -293,4 +291,157 @@ fn lhs_placeholder_ty(lhs: KaiType) -> KaiType {
     } else {
         KaiType::Int32
     }
+}
+
+// -- v0.0.3: calls, field access, struct literals ---------------------------
+
+/// Only direct calls to declared functions exist (§9.3). Functions and types
+/// share names freely — namespaces are separate — so a struct name is NOT a
+/// valid callee.
+fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
+    let func_id = match &call.callee.kind {
+        ExprKind::Ident(ident) => match checker.resolution.fns.get(&ident.name) {
+            Some(&idx) => FunctionId(idx as u32),
+            None => {
+                checker.error(error::unknown_function(&ident.name, ident.span));
+                return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+            }
+        },
+        _ => {
+            checker.error(error::indirect_call(span));
+            return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+        }
+    };
+
+    let sig = checker.fn_signature(func_id);
+    if call.args.len() != sig.param_tys.len() {
+        let expected = sig.param_tys.len();
+        let found = call.args.len();
+        checker.error(error::arg_count_mismatch(expected, found, span));
+        return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+    }
+
+    let mut args = Vec::with_capacity(call.args.len());
+    for (position, (arg, param_ty)) in call.args.iter().zip(&sig.param_tys).enumerate() {
+        let value = lower(checker, arg, Some(*param_ty));
+        // The hint widens int literals; everything else must match exactly.
+        if value.ty != *param_ty {
+            checker.error(error::arg_type_mismatch(
+                *param_ty,
+                value.ty,
+                position + 1,
+                arg.span,
+            ));
+        }
+        args.push(value);
+    }
+
+    TypedExpr::new(
+        TypedExprKind::Call {
+            func: func_id,
+            args,
+        },
+        sig.ret,
+    )
+}
+
+/// `base.field`. The base must be a declared struct; the result type is the
+/// field's type. Reads COPY out of the place (§9.3).
+fn field_access(checker: &mut Checker, access: &FieldAccessExpr) -> TypedExpr {
+    let base = lower(checker, &access.base, None);
+
+    let struct_id = match base.ty {
+        KaiType::Struct(id) => id,
+        other => {
+            checker.error(error::field_access_on_non_struct(other, access.field.span));
+            return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+        }
+    };
+
+    match checker.field_slot(struct_id, &access.field.name) {
+        Some((index, slot)) => TypedExpr::new(
+            TypedExprKind::FieldAccess {
+                base: Box::new(base),
+                struct_id,
+                field: index,
+            },
+            slot.ty,
+        ),
+        None => {
+            let ty_name = checker.type_name(struct_id).to_string();
+            let field = access.field.name.clone();
+            checker.error(error::no_such_field(&ty_name, &field, access.field.span));
+            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
+        }
+    }
+}
+
+/// `Name { f: e, .. }` — every field exactly once, in any source order; the
+/// lowered values are reordered into declaration order (the ABI layout).
+fn struct_lit(checker: &mut Checker, lit: &StructLitExpr) -> TypedExpr {
+    let struct_id = match checker.resolution.types.get(&lit.name.name) {
+        Some(&idx) => StructId(idx as u32),
+        None => {
+            checker.error(error::unknown_type(&lit.name.name, lit.name.span));
+            return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+        }
+    };
+    let ty_name = checker.type_name(struct_id).to_string();
+    let layout_len = checker.structs[struct_id.0 as usize].fields.len();
+
+    // provided[i] = Some(value) once field i has been initialized.
+    let mut provided: Vec<Option<TypedExpr>> = vec![None; layout_len];
+    let mut seen_dup: Vec<bool> = vec![false; layout_len];
+
+    for init in &lit.fields {
+        match checker.field_slot(struct_id, &init.name.name) {
+            Some((index, slot)) => {
+                let expected_ty = slot.ty;
+                if seen_dup[index as usize] {
+                    let field = init.name.name.clone();
+                    checker.error(error::duplicate_field_init(&field, init.name.span));
+                } else {
+                    seen_dup[index as usize] = true;
+                    let value = lower(checker, &init.value, Some(expected_ty));
+                    // The hint widens int literals; everything else must
+                    // match the declared field type exactly.
+                    if value.ty != expected_ty {
+                        let field = init.name.name.clone();
+                        checker.error(error::field_type_mismatch(
+                            &field,
+                            expected_ty,
+                            value.ty,
+                            init.value.span,
+                        ));
+                    }
+                    provided[index as usize] = Some(value);
+                }
+            }
+            None => {
+                let field = init.name.name.clone();
+                checker.error(error::no_such_field(&ty_name, &field, init.name.span));
+                // Lower anyway so nested errors surface too.
+                lower(checker, &init.value, None);
+            }
+        }
+    }
+
+    let mut values = Vec::with_capacity(layout_len);
+    for (slot_index, value) in provided.into_iter().enumerate() {
+        match value {
+            Some(v) => values.push(v),
+            None => {
+                let field = checker.structs[struct_id.0 as usize].fields[slot_index]
+                    .name
+                    .clone();
+                checker.error(error::missing_field_in_lit(&field, &ty_name, lit.name.span));
+                values.push(TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32));
+            }
+        }
+    }
+
+    TypedExpr::new(
+        TypedExprKind::StructLit { struct_id, values },
+        KaiType::Struct(struct_id),
+    )
 }

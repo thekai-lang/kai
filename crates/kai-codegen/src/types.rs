@@ -11,6 +11,9 @@ pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: KaiType) -> BasicTypeEnum<'ctx>
         KaiType::Float64 => ctx.context.f64_type().into(),
         KaiType::Bool => ctx.context.bool_type().into(),
         KaiType::Unit => unreachable!("unit has no LLVM value representation"),
+        // Struct LLVM types are built from the layout table by the struct
+        // emission phase; they never flow through the scalar path.
+        KaiType::Struct(_) => unreachable!("struct types are not scalars"),
     }
 }
 

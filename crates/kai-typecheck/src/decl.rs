@@ -10,6 +10,9 @@ use kai_ast::Program;
 use kai_tast::{FunctionId, KaiType, TypedBlock, TypedFnDecl, TypedProgram};
 
 pub(crate) fn program(checker: &mut Checker, program: &Program) -> TypedProgram {
+    build_struct_layouts(checker, program);
+    build_fn_signatures(checker, program);
+
     let fns = program
         .fns
         .iter()
@@ -24,8 +27,47 @@ pub(crate) fn program(checker: &mut Checker, program: &Program) -> TypedProgram 
     TypedProgram { fns }
 }
 
+/// Resolves every struct's field types once, in declaration order, so
+/// `StructId` doubles as an index into the layout table. Cycles were
+/// rejected by the resolver; unknown field types error here.
+fn build_struct_layouts(checker: &mut Checker, program: &Program) {
+    for decl in &program.types {
+        let fields = decl
+            .fields
+            .iter()
+            .map(|field| crate::checker::FieldSlot {
+                name: field.name.name.clone(),
+                ty: ty::resolve(checker, &field.ty),
+            })
+            .collect();
+        checker.structs.push(crate::checker::StructLayout {
+            name: decl.name.name.clone(),
+            fields,
+        });
+    }
+}
+
+/// Same pre-pass for function signatures: param/return types resolve against
+/// the now-complete struct table.
+fn build_fn_signatures(checker: &mut Checker, program: &Program) {
+    for decl in &program.fns {
+        let param_tys = decl
+            .params
+            .iter()
+            .map(|p| ty::resolve(checker, &p.ty))
+            .collect();
+        let ret = ty::resolve(checker, &decl.ret);
+        checker.fns.push(crate::checker::FnInfo {
+            name: decl.name.name.clone(),
+            param_tys,
+            ret,
+        });
+    }
+}
+
 fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> TypedFnDecl {
     let ret = ty::resolve(checker, &decl.ret);
+    let params = bind_params(checker, decl);
     let body = stmt::lower_block(checker, &decl.body, ret);
 
     ensure_returns_on_all_paths(checker, decl, ret, &body);
@@ -33,9 +75,35 @@ fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> Typ
     TypedFnDecl {
         id,
         name: decl.name.name.clone(),
+        params,
         ret,
         body,
     }
+}
+
+/// Declares parameters as function-root locals. `mut` on a stack-type param
+/// is a purely local permission (§9.3); it never changes the ABI.
+fn bind_params(checker: &mut Checker, decl: &kai_ast::FnDecl) -> Vec<kai_tast::TypedParam> {
+    decl.params
+        .iter()
+        .filter_map(|param| {
+            let param_ty = ty::resolve(checker, &param.ty);
+            match checker
+                .locals
+                .declare(&param.name.name, param_ty, param.mutable)
+            {
+                crate::scope::DeclareOutcome::Fresh(info) => Some(kai_tast::TypedParam {
+                    local: info.id,
+                    name: param.name.name.clone(),
+                    ty: param_ty,
+                }),
+                crate::scope::DeclareOutcome::Duplicate(_) => {
+                    checker.error(error::duplicate_local(&param.name.name, param.name.span));
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 /// A block definitely returns when its last statement is a `return`, or an

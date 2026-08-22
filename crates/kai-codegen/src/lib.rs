@@ -68,6 +68,7 @@ mod tests {
             fns: vec![TypedFnDecl {
                 id: FunctionId(0),
                 name: "main".into(),
+                params: Vec::new(),
                 ret: KaiType::Int32,
                 body: TypedBlock {
                     stmts: vec![TypedStmt::Return(Some(ret_expr))],
@@ -95,6 +96,7 @@ mod tests {
             fns: vec![TypedFnDecl {
                 id: FunctionId(0),
                 name: "main".into(),
+                params: Vec::new(),
                 ret: KaiType::Int32,
                 body: TypedBlock {
                     stmts: vec![TypedStmt::Return(Some(expr))],
@@ -108,6 +110,7 @@ mod tests {
         TypedFnDecl {
             id: FunctionId(0),
             name: name.into(),
+            params: Vec::new(),
             ret,
             body: TypedBlock { stmts },
         }

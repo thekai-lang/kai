@@ -9,8 +9,8 @@ pub mod symbol;
 pub mod ty;
 
 pub use expr::{BinaryOp, TypedExpr, TypedExprKind};
-pub use fn_decl::TypedFnDecl;
+pub use fn_decl::{TypedFnDecl, TypedParam};
 pub use program::TypedProgram;
-pub use stmt::{TypedAssign, TypedBlock, TypedIf, TypedLet, TypedStmt};
-pub use symbol::{FunctionId, LocalId};
+pub use stmt::{FieldStep, TypedAssign, TypedBlock, TypedIf, TypedLet, TypedStmt};
+pub use symbol::{FunctionId, LocalId, StructId};
 pub use ty::KaiType;

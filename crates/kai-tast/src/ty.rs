@@ -7,6 +7,9 @@ pub enum KaiType {
     Float64,
     Bool,
     Unit,
+    /// Nominal struct type; the layout (field order + types) lives with the
+    /// type checker and is mirrored into LLVM by codegen.
+    Struct(crate::symbol::StructId),
 }
 
 impl KaiType {
@@ -16,6 +19,10 @@ impl KaiType {
 
     pub fn is_numeric(self) -> bool {
         self.is_integer() || self == KaiType::Float64
+    }
+
+    pub fn is_struct(self) -> bool {
+        matches!(self, KaiType::Struct(_))
     }
 }
 
@@ -27,6 +34,9 @@ impl std::fmt::Display for KaiType {
             KaiType::Float64 => write!(f, "float64"),
             KaiType::Bool => write!(f, "bool"),
             KaiType::Unit => write!(f, "unit"),
+            // The struct NAME needs the declaration table, which lives with
+            // the type checker; generic display keeps this enum standalone.
+            KaiType::Struct(_) => write!(f, "struct"),
         }
     }
 }

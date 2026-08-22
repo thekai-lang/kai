@@ -73,7 +73,7 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
 
     let value = match assign.op {
         Some(op) => {
-            let slot = frame.slot(assign.local);
+            let slot = frame.slot(assign.root);
             let pointee = types::to_llvm(ctx, assign.value.ty);
             let old = ctx
                 .builder
@@ -84,7 +84,9 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
         None => value,
     };
 
-    let slot = frame.slot(assign.local);
+    // Field-path stores land with full struct emission in the next phase;
+    // plain binding writes are the only shape exercised until then.
+    let slot = frame.slot(assign.root);
     let _ = ctx.builder.build_store(slot, value);
 }
 

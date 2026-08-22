@@ -7,3 +7,9 @@ pub struct FunctionId(pub u32);
 /// scope resolution; codegen keys its alloca table off this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocalId(pub u32);
+
+/// Identity of a declared struct type. Equals the declaration index in
+/// `Program.types`, assigned by resolution; layouts live with the type
+/// checker, LLVM types are rebuilt by codegen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StructId(pub u32);

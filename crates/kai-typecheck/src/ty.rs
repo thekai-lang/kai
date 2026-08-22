@@ -1,10 +1,11 @@
 //! Surface type names -> concrete `KaiType`. Aliases per §3.2: `int` = int32,
-//! `float` = float64.
+//! `float` = float64; declared structs resolve nominally via the resolution
+//! tables.
 
 use crate::checker::Checker;
 use crate::error;
 use kai_ast::Ty;
-use kai_tast::KaiType;
+use kai_tast::{KaiType, StructId};
 
 pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
     match ty {
@@ -14,11 +15,14 @@ pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
             "float64" | "float" => KaiType::Float64,
             "bool" => KaiType::Bool,
             "unit" => KaiType::Unit,
-            other => {
-                let span = ident.span;
-                checker.error(error::unknown_type(other, span));
-                KaiType::Int32 // placeholder; program is discarded on error anyway
-            }
+            other => match checker.resolution.types.get(other) {
+                Some(&idx) => KaiType::Struct(StructId(idx as u32)),
+                None => {
+                    let span = ident.span;
+                    checker.error(error::unknown_type(other, span));
+                    KaiType::Int32 // placeholder; program is discarded on error anyway
+                }
+            },
         },
     }
 }
