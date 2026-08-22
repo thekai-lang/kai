@@ -92,7 +92,13 @@ fn type_decl(parser: &mut Parser) -> TypeDecl {
 
     let mut fields = Vec::new();
     while !matches!(parser.peek().kind, TokenKind::RBrace | TokenKind::Eof) {
+        let before = parser.pos();
         fields.push(field_decl(parser));
+        // A malformed field consumes nothing (expect_* never advances on
+        // mismatch); skipping one token guarantees the loop terminates.
+        if parser.pos() == before {
+            parser.bump();
+        }
     }
 
     let end_brace = parser.expect_simple(&TokenKind::RBrace);

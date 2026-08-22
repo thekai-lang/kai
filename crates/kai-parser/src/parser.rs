@@ -132,6 +132,11 @@ impl<'t> Parser<'t> {
         &self.tokens[self.pos.min(self.tokens.len() - 1)]
     }
 
+    /// Token cursor position; used by recovery loops to detect no progress.
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
+
     pub(crate) fn bump(&mut self) -> Token {
         let token = self.peek().clone();
         if !self.at_eof() {

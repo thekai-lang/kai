@@ -112,6 +112,16 @@ fn main() -> int32 { return 0; }";
     }
 
     #[test]
+    fn malformed_type_field_terminates_with_diagnostics() {
+        // Comma instead of semicolon: recovery must skip the offending
+        // token rather than spin forever (regression for an infinite loop).
+        let src = "type P = { x: int32, y: int32 }
+fn main() -> int32 { return 0; }";
+        let err = parse_src(src).unwrap_err();
+        assert!(!err.is_empty(), "malformed field must produce diagnostics");
+    }
+
+    #[test]
     fn parses_call_statement_and_args() {
         let program = parse_src("fn main() -> unit { print(1, 2 + 3); return; }").unwrap();
         match &program.fns[0].body.stmts[0].kind {

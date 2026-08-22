@@ -257,3 +257,57 @@ fn v0021_duplicate_declaration_keeps_original_id() {
     assert_eq!(failure.phase, "typecheck");
     assert!(failure.diagnostics[0].message.contains("already declared"));
 }
+
+// ---------------------------------------------------------------------------
+// v0.0.3: structs, parameters, calls, field access.
+// ---------------------------------------------------------------------------
+
+const V003: &str = "v0003/main.kai";
+
+#[test]
+fn v003_full_pipeline_matches_golden_ir() {
+    let source = fixture(V003);
+    let ir = pipeline::compile(&source).expect("compilation should succeed");
+
+    let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/v0003/main.expected.ll");
+    if !golden.exists() {
+        std::fs::write(&golden, &ir).unwrap();
+        panic!("golden file missing — wrote it, re-run the test to compare");
+    }
+
+    let expected = std::fs::read_to_string(&golden).unwrap();
+    assert_eq!(ir, expected, "generated IR diverged from golden file");
+}
+
+#[test]
+fn v003_jit_struct_params_are_by_value() {
+    // shift(seg.end, 5) returns 39 AND must not disturb seg.end.x: if the
+    // parameter were shared rather than copied, `seg.end.x == 30` would
+    // fail after the call and main would return 0.
+    assert_eq!(pipeline::jit(&fixture(V003)).unwrap(), 39);
+}
+
+#[test]
+fn v003_jit_call_results_compose() {
+    let src = "\
+type Pair = { a: int32; b: int32; }
+fn sum(p: Pair) -> int32 { return p.a + p.b; }
+fn make(a: int32, b: int32) -> Pair { return Pair { a: a, b: b }; }
+fn main() -> int32 { return sum(make(20, 1)) * 2; }";
+    assert_eq!(pipeline::jit(src).unwrap(), 42);
+}
+
+#[test]
+fn v003_parenthesized_struct_literal_in_condition_runs() {
+    // NO_STRUCT_LITERAL (§9.3): bare literals in if-conditions read as
+    // comparison + block; parentheses lift the ban.
+    let src = "\
+type Point = { x: int32; y: int32; }
+fn main() -> int32 {
+    var p = Point { x: 7, y: 8 };
+    if (p.x == 7 && p.y == 8) { return 1; }
+    return 0;
+}";
+    assert_eq!(pipeline::jit(src).unwrap(), 1);
+}

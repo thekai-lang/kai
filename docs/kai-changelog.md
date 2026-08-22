@@ -4,7 +4,21 @@ This file tracks **compiler implementation** releases (`vX.Y.Z`, what `kai build
 
 ---
 
-## v0.0.2.1 — Hardening (current)
+## v0.0.3 — Structs, parameters, calls, field access
+
+First aggregate value type, and with it real function interfaces.
+
+- **Struct types** — `type Name = { field: Type; … }` declarations anywhere in the file (order-independent: a struct may reference any other, cycles are a *compile error* reported as a path — `A → B → A`); fixed-size, stack-allocated, copy semantics throughout.
+- **Typed function signatures** — parameters (`fn add(a: int32, b: int32) -> int32`) with distinct fn/type namespaces (`Point { … }` vs `Point(…)` never collide at parse time); direct calls only — anything that is not a bare declared name is rejected with a targeted diagnostic rather than miscompiled.
+- **By-value parameter passing (§9.3)** — every argument is copied into the callee; `mut p: Point` gates writes to the callee's own copy with zero ABI difference from an unannotated parameter, locked end-to-end by a JIT test where caller state must survive a mutating call.
+- **Field access & places** — `value.field` chains of arbitrary depth as rvalues; assignment targets extend from plain bindings to field paths (`seg.start.y = 20;`, compound forms included) lowered as root-alloca + getelementptr chains; reads copy.
+- **Struct literals** — `Name { field: expr, … }`; fields may appear in any order (the type checker reorders them into declaration order), missing/duplicate/unknown fields are compile errors; literals are banned *bare* inside `if` conditions (NO_STRUCT_LITERAL — the `{` would read as a block), parentheses lift the ban.
+- **Strict same-type field rules** — field reads/writes type-check against the declaration exactly (no literal widening through fields); mismatched field init or assignment names the field and both types.
+- **Codegen** — two-pass emission (all signatures first, then bodies) so calls resolve regardless of definition order, recursion included; structs become named LLVM literal types; parameters land as entry-block allocas seeded from their incoming values.
+- **Parser robustness fix** — a malformed struct-declaration field used to spin the parser forever (expect_* recovery consumes nothing); recovery loops now detect no-progress and skip a token, locked by a regression test.
+- **Testing** — golden-IR fixture `v0003` (nested structs, mutating by-value call, nested field-place write) plus JIT tests for call composition and parenthesized-literal conditions.
+
+## v0.0.2.1 — Hardening
 
 Robustness pass over the v0.0.2 core; no new surface syntax.
 

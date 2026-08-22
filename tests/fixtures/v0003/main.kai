@@ -1,0 +1,29 @@
+type Point = {
+    x: int32;
+    y: int32;
+}
+
+type Segment = {
+    start: Point;
+    end: Point;
+}
+
+// Struct parameters pass BY VALUE: mutating the local copy never
+// reaches the caller's `seg.end`.
+fn shift(mut p: Point, dx: int32) -> int32 {
+    p.x += dx;
+    return p.x + p.y;
+}
+
+fn main() -> int32 {
+    var seg = Segment {
+        start: Point { x: 1, y: 2 },
+        end: Point { x: 30, y: 4 },
+    };
+    let moved = shift(seg.end, 5);
+    seg.start.y = 20;
+    if moved == 39 && seg.start.x == 1 && seg.start.y == 20 && seg.end.x == 30 {
+        return moved;
+    }
+    return 0;
+}
