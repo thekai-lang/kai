@@ -1,14 +1,14 @@
 # Kai
 ### A trust-aware programming language
 
-**Status:** Draft v0.3 — pre-implementation specification
+**Status:** Draft v0.5 — pre-implementation specification
 **Purpose:** Freeze scope before writing any compiler code. Nothing described here is authoritative until it appears in this document. Feature ideas that arise during implementation go into an `IDEAS.md` backlog, not into the compiler.
 
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
 
 **Changelog**
-- **Implementation note (unversioned)** — Compiler releases (`kai build --version`) carry their own `v0.X.Y` line, independent of this document's spec versions, and are tracked in [`kai-changelog.md`](kai-changelog.md). Status of the `v0.0.2` implementation against this spec: bindings, stack primitives, arithmetic, `if`/`else`, boolean logic, and assignment statements compile end-to-end. One known divergence from §10.2: the arithmetic panic checks (integer division/modulo by zero, signed `int32` overflow including `INT32_MIN / -1`) are **specified but not yet emitted** — codegen runs plain unchecked LLVM ops until the runtime-trap slot lands; `float64` already follows the IEEE `inf`/`NaN` clause. Hardening on this line so far: parser recursion budget with poisoned recovery nodes, entry-block alloca placement, precise malformed-literal diagnostics, and stable duplicate-binding ids.
-- **v0.3.1** — Grammar decisions locked during v0.0.2 implementation: boolean logic operators (`&&`, `||`, `!`) confirmed in the core language, with `&&` binding tighter than `||` and both short-circuiting; unary minus/NOT generalized (`UnaryExpr ::= ('-' | '!') UnaryExpr`); assignment made statement-only with an explicit assignable-place rule (identifier in v0.0.2); `string` deferred until the §9 ownership runtime exists; variable shadowing allowed across nested blocks, rejected within one scope. See `kai-ebnf.md` §1/§7 for the locked precedence chain.
+- **v0.5** — Inserted a new v0.0.5 ("Ownership runtime") into the roadmap between the module system (v0.0.4) and Optional/Result/closures — string, array literals + indexing, `for..in`, and actual retain/release enforcement (§9.4–9.9) all land together, since they're the first point any heap-bearing type exists. Everything previously numbered v0.0.5–v0.0.11 shifts to v0.0.6–v0.0.12; every cross-reference in this document is updated accordingly. Fixed §9.5's retain-rule enforcement claim, previously (incorrectly) attributed to v0.0.3 — v0.0.3 has zero heap-bearing types active (all structs are stack-only per §9.1), so retain literally cannot be exercised there; the claim now sits on the new v0.0.5. `mut` on a stack-type parameter is formalized as local-copy-permission only, with zero ABI difference from an unannotated parameter — one rule ("`mut` grants write access through the binding"), two consequences depending on whether the type is stack (invisible to caller) or heap (visible through the borrow, from v0.0.5 onward). §9.3's example fixed: no more bare `fn show(s: string) { ... }` (missing the mandatory `->`, and using a type with no version slot until this change) — replaced with a `Point`-based example matching v0.0.3's actual scope. v0.0.3's scope is now explicit about field read *and* write access (write gated by `mut`), and adds a compile-time cyclic-struct-definition check (DFS over the `TypeDecl` dependency graph, diagnostic reports the cycle path) — indirection/boxing to legitimately break such cycles is not yet designed and is called out as a known gap, not a silent omission. Discarding a non-`unit` call result is explicitly allowed without diagnostic in v0.0.3 (no correctness risk for scalars/structs); revisited once `Result` exists (new v0.0.6) where silently discarding it would violate §2.3.
+- **v0.4** — Absorbed core-language semantics that were decided during v0.0.1/v0.0.2 implementation but not yet recorded here, so the whitepaper stays the single source of truth rather than the compiler's own changelog competing with it: block scoping/shadowing rules, definite-return analysis, integer literal widening, and assignment-as-statement-not-expression (§3.2a, new). §3.6 now states explicitly, with no exceptions, that stdlib calls are always namespace-qualified (`io.println(...)`, never a bare `println`) — the v0.4.5 reference implementation's unqualified form is not carried forward.
 - **v0.3** — `kai debt` reframed explicitly as a *projection* of Trust state, not an independent fifth feature (Debt = unresolved Trust violations/degradation; Signal carries no debt). Reversibility formally split into two Trust subtypes in §5.0's table — Transactional (`state_after + inverse = state_before`) and Compensatable (`state_after + compensator ≈ acceptable_new_state`) — while `reversible` stays the single user-facing keyword. Added architectural principle: syntax lowers into one uniform `Trust<C>` IR; the effect checker and `kai debt` operate only on that IR, never on originating syntax (§5.0, §8 constraint 8). Added Decay taxonomy to Appendix A as a proposed, not-yet-adopted direction.
 - **v0.2** — Reframed §5 around a formal Trust model (§5.0). `assume` split into `require` (correctness, always panics) and `observe` (telemetry, never panics — not a Trust, a Signal). `@duration` split into `@local` (flow-relative, compiler-checked) and `@wallclock` (real-clock, runtime-checked; mandatory once a value crosses a process boundary). `reversible` split into transactional mutation (auto-invertible, "rollback" reserved for this) and `compensate` (manual, non-atomic, for external side effects — "rollback" is no longer used for this case). §9 clarified as compiler-internal guarantee, not a developer-facing model.
 - **v0.1** — Initial draft: core language, trust-aware layer (assume/@duration/reversible/dsl), ownership model, runtime error model.
@@ -51,7 +51,7 @@ These principles are the filter for every future feature decision. If a proposed
 
 ---
 
-## 3. Core language (v0.0.1 – v0.0.5 scope)
+## 3. Core language (v0.0.1 – v0.0.6 scope)
 
 This section is intentionally boring. It is Rust/Go-adjacent on purpose — the interesting ideas live in Section 5, not here.
 
@@ -81,6 +81,18 @@ Primitive families:
 
 `int`/`float` are **not** separate types — they are aliases (`type int = int32; type float = float64;`) so casual code doesn't need to think about width until it matters.
 
+### 3.2a Bindings, control flow, and literal rules
+
+These are genuine language-semantic rules (not implementation trivia) — they determine which programs are valid Kai, so they belong here rather than only in the compiler's own release notes.
+
+- **`let` vs `var`.** `let` is immutable (cannot be reassigned); `var` is mutable. Both require an initializer (§9.2) — type is inferred from it, or may be given explicitly (`let big: int64 = 5;`).
+- **Integer literal widening.** An explicit wider type annotation widens the literal to fit its declared type (`let big: int64 = 5;` — `5` widens to `int64`). This only applies to literals with an explicit target type; `int` and `float` values never mix implicitly, and there is no implicit narrowing.
+- **Assignment is a statement, not an expression.** `x = value;` and compound forms (`x += value;`, etc.) cannot appear nested inside another expression (`x = (y = 5)` is not valid Kai) — this avoids the classic `if (x = 5)` vs. `if (x == 5)` foot-gun by construction, not by lint.
+- **Block scoping and shadowing.** A `let`/`var` may shadow a binding from an *enclosing* scope. Redeclaring the same name within the *same* scope is rejected — this is not shadowing, it's a duplicate declaration error.
+- **`if`/`else` conditions must be `bool`.** No implicit truthiness for other types.
+- **Definite-return analysis.** A function with a non-`unit` return type must return on every reachable path. An `if` without a matching `else` does not, on its own, satisfy this — the compiler traces control flow, not just the presence of a `return` statement somewhere in the body.
+- **Discarding a call's return value is allowed, silently, in v0.0.3–v0.0.5.** `foo();` where `foo` returns a scalar or struct carries no correctness risk at this stage, so no diagnostic is produced. This is revisited once `Result` exists (v0.0.6): silently discarding a `Result` swallows its error channel, which directly violates §2.3 ("failure must be visible") — it must produce a diagnostic from v0.0.6 onward. Discarding an `Optional` is treated as lower-risk in principle (no error channel to swallow), but is deliberately left as an open decision for the same version rather than assumed permissive by default — see Appendix A.
+
 ### 3.3 Structs
 
 ```kai
@@ -92,7 +104,11 @@ type User = {
 let user = User { id: 1, name: "Kai" };
 ```
 
+**Cyclic struct definitions are a compile error.** A struct that references itself, directly or through a cycle of other struct types (`type A = { b: B }` / `type B = { a: A }`), has infinite size with no indirection to break it — structs are stack-allocated and fixed-size. This is detected as a DFS over the dependency graph formed by `TypeDecl` field types; the diagnostic reports the cycle path (`A → B → A`). **Indirection/boxing to legitimately express self-referential types (linked lists, trees) is not designed yet** — this is a known, explicit gap, not a silently missing feature. Until a boxing mechanism exists, such types simply cannot be expressed in Kai.
+
 ### 3.4 Arrays, Optionals, Results
+
+**Version note:** `int32[]`/array literals and indexing land at v0.0.5 (Ownership runtime — the first point any heap-bearing type exists, §9.4–9.9). `string` lands at the same version, for the same reason. `Optional`/`Result`/closures land at v0.0.6. The examples below use all of these together for readability; none of them are available before v0.0.5, and `Optional`/`Result` specifically not before v0.0.6.
 
 ```kai
 let values: int32[] = [1, 2, 3];
@@ -143,7 +159,7 @@ fn main() -> int32 {
 - Path segments `.`, `..`, `/`, `\` are rejected.
 - Circular imports are a diagnostic, not a silent stack overflow.
 - `public fn` is visible through the module alias; plain `fn` is module-private.
-- Imports never inject into global scope — always namespace-qualified.
+- Imports never inject into global scope — always namespace-qualified. **No exceptions, including stdlib.** `println` is always `io.println(...)`; there is no globally-injected builtin form. (This is a deliberate reversal of the v0.4.5 reference implementation, which called `println(msg)` unqualified — that form is not carried forward.)
 
 ### 3.7 Standard library (built-in, no disk resolution)
 
@@ -156,7 +172,7 @@ fn main() -> int32 {
 | `std.math` | `sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil`, `round`, `pow`, `abs`, `min`, `max` |
 | `std.time` | `now`, `millis`, `sleep_ms` |
 
-Everything above this line must be fully specified, implemented, and tested before Section 5 begins. This is the scope boundary for v0.0.1–v0.0.5.
+Everything above this line must be fully specified, implemented, and tested before Section 5 begins. This is the scope boundary for v0.0.1–v0.0.6 (the new v0.0.5 ownership-runtime slot plus what was v0.0.5 and is now v0.0.6).
 
 ---
 
@@ -169,7 +185,7 @@ Everything above this line must be fully specified, implemented, and tested befo
 
 ---
 
-## 5. Trust-aware layer (v0.0.6+ scope — built only after Section 3 is complete and tested)
+## 5. Trust-aware layer (v0.0.7+ scope — built only after Section 3 is complete and tested)
 
 This is opt-in. None of it changes how a function looks unless the function actually depends on external trust.
 
@@ -386,15 +402,16 @@ Strict ordering. A version does not start until the previous one has a working, 
 |---|---|---|
 | v0.0.1 | `fn main`, `return`, `int32` literal | Full lexer→parser→typecheck→TAST→codegen(LLVM) pipeline, as separate modules with the AST/TAST boundary enforced, on the smallest possible program |
 | v0.0.2 | `let`/`var`, primitives, arithmetic, `if/else` | `let` vs `var` mutability enforced (§9.3) |
-| v0.0.3 | `type` structs, struct literals, function calls with params, `mut` parameters | Type checker does real signature/field matching; ownership-transfer retain rule (§9.5) enforced for `return`/struct-literal/array-literal; parameter mutability (§9.3) rejected without `mut` |
+| v0.0.3 | `type` structs, struct literals, field read **and** field write (write gated by `mut`), function calls with params, `mut` parameters, cyclic-struct-definition rejection | Type checker does real signature/field matching; `Place` rule covers field access for assignment (grammar); `mut` on a stack-type parameter is local-copy-permission only, zero ABI difference, not observable by the caller (§9.3) — **no retain-rule claim here**, since v0.0.3 has zero heap-bearing types active; cyclic struct defs rejected via DFS over the `TypeDecl` graph with the cycle path in the diagnostic |
 | v0.0.4 | `use` / module system | Circular import detection tested |
-| v0.0.5 | `Optional`, `Result`, closures | Generic/parametric typing works |
-| v0.0.6 | `@local`, `@wallclock`, temporal flow analysis, cross-boundary rule | Compile error enforced when `@local` crosses a compiler-untraceable boundary (§5.1) |
-| v0.0.7 | `require`, `observe` | `require` violation always panics per §10.3, recorded to debt ledger before exit; `observe` never panics, tracked as Signal only, not debt |
-| v0.0.8 | `reversible` (transactional + `compensate`) | Automatic invertibility for arithmetic mutations; mandatory unwind on panic per §10.4, distinguishing rollback from compensation |
-| v0.0.9 | `dsl sql` + snapshot mechanism | `kai sync` for at least one DB (e.g. Postgres) |
-| v0.0.10 | `dsl api` + OpenAPI sync | |
-| v0.0.11 | `@override` + `kai debt` unified ledger | |
+| v0.0.5 | **Ownership runtime** — `string`, array literals + indexing, `for..in`, retain/release enforcement | Ownership-transfer retain rule (§9.5) actually exercised and tested for `return`/struct-literal/array-literal, now that heap-bearing types (`string`, arrays) exist to trigger it; `for..in` borrows each element per iteration (§9.9) |
+| v0.0.6 | `Optional`, `Result`, closures | Generic/parametric typing works; discarding a `Result` becomes a diagnostic (§3.2a); discarding an `Optional` — policy decided in this version, not deferred further (Appendix A) |
+| v0.0.7 | `@local`, `@wallclock`, temporal flow analysis, cross-boundary rule | Compile error enforced when `@local` crosses a compiler-untraceable boundary (§5.1) |
+| v0.0.8 | `require`, `observe` | `require` violation always panics per §10.3, recorded to debt ledger before exit; `observe` never panics, tracked as Signal only, not debt |
+| v0.0.9 | `reversible` (transactional + `compensate`) | Automatic invertibility for arithmetic mutations; mandatory unwind on panic per §10.4, distinguishing rollback from compensation |
+| v0.0.10 | `dsl sql` + snapshot mechanism | `kai sync` for at least one DB (e.g. Postgres) |
+| v0.0.11 | `dsl api` + OpenAPI sync | |
+| v0.0.12 | `@override` + `kai debt` unified ledger | |
 
 Anything not on this table is out of scope until this document is amended.
 
@@ -410,7 +427,7 @@ Toolchain carried over from v0.4.5, kept deliberately: hand-written recursive-de
 
 2. **Codegen depends only on `tast/`, never on `ast/`.** This is enforced at the module-visibility level (`pub(crate)` boundaries), not left as a convention — codegen must be structurally unable to import raw AST. If codegen needs information it doesn't have, that information is missing from TAST and belongs in the type checker, not inferred ad hoc in codegen.
 
-3. **Effect checking (`require`, `observe`, `reversible`, `@local`/`@wallclock`) runs after typecheck, before lowering** — it consumes TAST and produces a "checked" TAST (or rejects with a diagnostic). It never lives inside the type checker or inside codegen; it is its own phase with its own module, from the version it's introduced (v0.0.6+).
+3. **Effect checking (`require`, `observe`, `reversible`, `@local`/`@wallclock`) runs after typecheck, before lowering** — it consumes TAST and produces a "checked" TAST (or rejects with a diagnostic). It never lives inside the type checker or inside codegen; it is its own phase with its own module, from the version it's introduced (v0.0.7+).
 
 4. Lexer, parser, AST definitions, resolver, type checker, effect checker, and codegen are separate modules from commit #1. No file exceeds ~500 LOC without being split. AST/TAST node definitions contain no logic — only shape.
 
@@ -446,19 +463,31 @@ Custom structs are stack-only if all fields are stack types; heap-bearing if any
 
 Mutability and ownership are independent axes. A binding or parameter can be borrowed-and-immutable, borrowed-and-mutable, owned-and-immutable, or owned-and-mutable — ownership answers "who releases this," mutability answers "can this be written through."
 
-```kai
-let x = 1;          // immutable binding
-var y = 1;           // mutable binding, may be reassigned
+**One rule, two consequences.** `mut` grants write access through the binding. What that write is *observed by* depends entirely on whether the type is stack or heap — not on any special-cased syntax:
 
-fn show(s: string) { ... }              // borrowed, immutable — cannot mutate s or its fields
-fn touch(mut s: string) { ... }          // borrowed, mutable — may mutate s's contents, still does not own it
+- **Stack types** (all of them are copy-semantics, §9.1, no exception): the write permission is local to the callee. The caller never observes it, because there was never anything shared to begin with — the parameter is a copy. `mut` here is purely a compile-time permission gate with **zero ABI difference** from an unannotated parameter; both are passed identically under the hood.
+- **Heap types** (from v0.0.5 onward, once any exist): a write through a `mut` borrow reaches the caller's own storage, because the borrow is a reference to shared, owned data — there is no copy to isolate it behind.
+
+```kai
+type Point = { x: int32; y: int32; }
+
+fn show(p: Point) { ... }                 // borrowed, immutable — cannot mutate p or its fields
+fn touch(p: Point) { p.x = 5; }           // COMPILE ERROR — p is immutable
+fn touch_mut(mut p: Point) { p.x = 5; }   // OK — permitted locally; caller's Point is unaffected (stack, copy semantics)
+```
+
+The realistic use case for field writes at v0.0.3 (before any heap type exists) is actually a `var` local, not a `mut` parameter — and that already works fully under copy semantics:
+
+```kai
+var p = Point { x: 0, y: 0 };
+p.x = 5;   // fine — p is a local var, no parameter/borrow involved
 ```
 
 Rules:
 - `let` bindings cannot be reassigned and cannot have their fields mutated through them.
 - `var` bindings may be reassigned; if heap-bearing, reassignment releases the old owned value after the replacement is prepared (§9.4).
-- Function parameters are borrowed and **immutable by default**. A parameter must be declared `mut` to permit mutation of its contents (`u.name = "x"` inside the function body) — without `mut`, this is a compile error, not a runtime borrow-check.
-- `mut` on a parameter changes mutability only. It never changes ownership — a `mut` parameter is still borrowed; the callee never releases it at scope exit, and the caller remains the owner.
+- Function parameters are borrowed and **immutable by default**. A parameter must be declared `mut` to permit mutation of its contents (`p.x = 5` inside the function body) — without `mut`, this is a compile error, not a runtime borrow-check.
+- `mut` on a parameter changes mutability only. It never changes ownership — a `mut` parameter is still borrowed; the callee never releases it at scope exit, and the caller remains the owner. For stack types this is entirely a static gate (§9.3 above); for heap types it additionally determines whether writes propagate to the caller's storage.
 
 This is a hard requirement introduced at v0.0.2 scope (where `let`/`var` first exist) and extended to parameters at v0.0.3 (where function calls with params first exist) — mutability checking is not deferred to a later version, since retrofitting it has the same "touch everything at once" risk called out in §8.
 
@@ -479,7 +508,7 @@ Assigning into an existing heap-bearing `var` releases the old owned value after
 
 ### 9.5 The ownership-transfer boundary (correctness rule)
 
-This is the rule that v0.4.x got wrong and must be enforced from the version it first becomes reachable (v0.0.3, once `return` combined with heap-bearing params/fields exists):
+This is the rule that v0.4.x got wrong and must be enforced from the version it first becomes reachable — **v0.0.5**, the new "Ownership runtime" slot, where `string` and arrays (the first heap-bearing types) actually exist. It does not apply at v0.0.3: struct/field mechanics land there, but with zero heap-bearing types active (all v0.0.3 structs are stack-only per §9.1), there is nothing for retain to ever insert — the rule is correct as written but has no exercisable case until v0.0.5.
 
 > **Every time a *borrowed* reference — a parameter, a field access, an array element, or any binding still owned elsewhere — moves into a position that demands ownership (`return`, a struct-literal field, an array-literal element, assignment into an owning `var`/field), the compiler inserts an explicit retain at that point.** Only genuinely owned temporaries (the direct, unretained result of an expression with no other owner) may be moved without a retain.
 
@@ -650,9 +679,11 @@ These are known unresolved design questions. They are *not* to be decided ad-hoc
 
 - Are `require`, `reversible`, `@local`/`@wallclock` part of the type system (checked, can reject a program) or purely annotations read by tooling? This determines whether an effect-tracking layer is required in the type checker. (Note: regardless of the answer, their runtime failure behavior is now fixed — §10.3, §10.4.)
 - Conflict resolution when two overrides on the same field disagree over time — last-write-wins with a flagged history, or hard block until reconciled?
-- Where does `observe`'s history report to — local file, opt-in telemetry, or pluggable sink? Needs a decision before v0.0.7.
-- Severity heuristics for `kai debt` — fully compiler-inferred, fully config-driven, or hybrid (default + override)? Leaning hybrid; needs a concrete default rule set written down before v0.0.11.
-- **Precise definition of "compiler-untraceable boundary"** for §5.1's `@local`→`@wallclock` rule. Queue sends and explicit serialization are clear cases; less clear: does spawning an async task count, does an in-process channel count, does a thread pool hand-off count? Needs an exact, exhaustive list (or a structural rule the compiler can apply generally) before v0.0.6.
-- **`@wallclock` serialization format.** The embedded timestamp needs a concrete wire representation once a `Token @wallclock(...)` is serialized (for the queue-send case in §5.1) — needs a decision before v0.0.6, likely tied to whatever `dsl api`/`dsl sql` end up using for payload encoding.
+- Where does `observe`'s history report to — local file, opt-in telemetry, or pluggable sink? Needs a decision before v0.0.8.
+- Severity heuristics for `kai debt` — fully compiler-inferred, fully config-driven, or hybrid (default + override)? Leaning hybrid; needs a concrete default rule set written down before v0.0.12.
+- **Precise definition of "compiler-untraceable boundary"** for §5.1's `@local`→`@wallclock` rule. Queue sends and explicit serialization are clear cases; less clear: does spawning an async task count, does an in-process channel count, does a thread pool hand-off count? Needs an exact, exhaustive list (or a structural rule the compiler can apply generally) before v0.0.7.
+- **`@wallclock` serialization format.** The embedded timestamp needs a concrete wire representation once a `Token @wallclock(...)` is serialized (for the queue-send case in §5.1) — needs a decision before v0.0.7, likely tied to whatever `dsl api`/`dsl sql` end up using for payload encoding.
+- **Boxing/indirection mechanism — undesigned.** §3.3 rejects cyclic struct definitions outright (compile error, no exception), but Kai has no way to legitimately express a self-referential type (linked list, tree, recursive enum) once one is actually wanted. Needs a design before any real program that needs such a structure can be written — likely a `Box<T>`-equivalent introducing one level of heap indirection, but the mechanism, its interaction with the ownership model (§9), and which version it belongs to are all open.
+- **Discarding an `Optional`** — deferred to the same version as `Result` (v0.0.6) rather than decided now. In principle it's lower-risk than discarding a `Result` (no error channel gets silently swallowed), but "lower risk" isn't the same as "decided" — needs an explicit allow/warn/reject call at v0.0.6, not an assumption carried over from the `Result` decision.
 - **Reference cycles.** Pure RC (§9) leaks on cycles — the clearest case is a closure that captures itself (directly or via a chain) for recursion. Not addressed yet; deferred on purpose. Candidate directions to evaluate later: a `weak` reference kind for capture sites the compiler can identify as recursive, or a narrow, opt-in cycle collector scoped only to closure environments (not a general tracing GC, which is explicitly out of scope per §9.12). Needs a decision before recursive closures are considered supported — until then, they are a known-unsound construct and should be flagged, not silently allowed.
 - **Decay taxonomy — proposed, not yet adopted.** §5.0 defines Decay as a required field of `Trust⟨C⟩` but does not currently classify *kinds* of Decay; each Trust instance just names its own mechanism in prose. A candidate taxonomy worth evaluating: `temporal` (time passes — Temporal Trust), `external` (an outside authority changes — Contract Trust), `stateful` (in-process world state changes — Correctness Trust), `invalidation` (a specific event revokes the claim — candidate fit for Reversibility, though its Decay is currently left as "—" in §5.0's table and may not need one at all). If this holds up under scrutiny, it sharpens Trust's definition from "a claim with a confidence level" to "a claim with a defined expiration mechanism," which is a stronger and more specific claim than the current draft makes. This is deliberately not promoted into §5.0 yet — it needs to be checked against each of the four instances (including the Transactional/Compensatable split) before it's treated as load-bearing, not just descriptive.
