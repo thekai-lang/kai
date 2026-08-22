@@ -112,6 +112,63 @@ fn main() -> int32 { return 0; }";
     }
 
     #[test]
+    fn parses_use_decls_with_dotted_paths() {
+        let src = "use support.math;\nuse std.io;\nfn main() -> int32 { return 0; }";
+        let program = parse_src(src).unwrap();
+        assert_eq!(program.use_decls.len(), 2);
+        let path: Vec<&str> = program.use_decls[0]
+            .path
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(path, vec!["support", "math"]);
+        assert_eq!(program.use_decls[1].path.len(), 2);
+        // Imports precede declarations.
+        assert_eq!(program.fns.len(), 1);
+    }
+
+    #[test]
+    fn import_after_declaration_is_rejected() {
+        let src = "fn main() -> int32 { return 0; }\nuse math.extra;";
+        let err = parse_src(src).unwrap_err();
+        assert!(
+            err.iter()
+                .any(|d| d.message.contains("before all declarations")),
+            "expected ordering diagnostic, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn public_flags_parse_on_fn_and_type() {
+        let src = "public type Point = { x: int32; }\npublic fn make() -> Point { return Point { x: 1 }; }\nfn main() -> int32 { return 0; }";
+        let program = parse_src(src).unwrap();
+        assert!(program.types[0].is_public);
+        assert!(program.fns[0].is_public);
+        assert!(!program.fns[1].is_public);
+    }
+
+    #[test]
+    fn qualified_struct_literal_head_parses_as_path() {
+        let src = "fn main() -> int32 { return math.Point { x: 1 }.x; }";
+        let program = parse_src(src).unwrap();
+        let stmts = &program.fns[0].body.stmts;
+        match &stmts[0].kind {
+            kai_ast::StmtKind::Return(Some(e)) => match &e.kind {
+                kai_ast::ExprKind::FieldAccess(access) => match &access.base.kind {
+                    kai_ast::ExprKind::StructLit(lit) => {
+                        let names: Vec<&str> = lit.path.iter().map(|i| i.name.as_str()).collect();
+                        assert_eq!(names, vec!["math", "Point"]);
+                        assert_eq!(lit.fields.len(), 1);
+                    }
+                    other => panic!("expected qualified literal base, got {other:?}"),
+                },
+                other => panic!("expected field access on literal, got {other:?}"),
+            },
+            other => panic!("expected return, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn malformed_type_field_terminates_with_diagnostics() {
         // Comma instead of semicolon: recovery must skip the offending
         // token rather than spin forever (regression for an infinite loop).
@@ -169,7 +226,8 @@ fn main() -> int32 { return 0; }";
         match &stmts[0].kind {
             kai_ast::StmtKind::Let(l) => match &l.init.kind {
                 kai_ast::ExprKind::StructLit(slit) => {
-                    assert_eq!(slit.name.name, "Point");
+                    assert_eq!(slit.path.len(), 1);
+                    assert_eq!(slit.path[0].name, "Point");
                     assert_eq!(slit.fields.len(), 2);
                     assert_eq!(slit.fields[0].name.name, "x");
                 }

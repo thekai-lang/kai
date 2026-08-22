@@ -137,6 +137,13 @@ impl<'t> Parser<'t> {
         self.pos
     }
 
+    /// Kind of the token AFTER the current one, if any. Used by dotted-path
+    /// parsing (so a trailing `.field {`-style dot is left to the caller that
+    /// owns the brace) and by `public`-prefixed declaration dispatch.
+    pub(crate) fn peek_ahead_kind(&self) -> Option<&TokenKind> {
+        self.tokens.get(self.pos + 1).map(|t| &t.kind)
+    }
+
     pub(crate) fn bump(&mut self) -> Token {
         let token = self.peek().clone();
         if !self.at_eof() {

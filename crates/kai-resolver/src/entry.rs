@@ -60,6 +60,7 @@ mod tests {
 
     fn decl(name: &str, ret: Ty) -> FnDecl {
         FnDecl {
+            is_public: false,
             name: Ident {
                 name: name.into(),
                 span: Span::new(0, 0),
@@ -86,6 +87,7 @@ mod tests {
     #[test]
     fn accepts_valid_main() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int32"))],
             types: Vec::new(),
         };
@@ -95,6 +97,7 @@ mod tests {
     #[test]
     fn accepts_int_alias_for_main() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int"))],
             types: Vec::new(),
         };
@@ -104,6 +107,7 @@ mod tests {
     #[test]
     fn rejects_missing_main() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("foo", named("int32"))],
             types: Vec::new(),
         };
@@ -116,6 +120,7 @@ mod tests {
     #[test]
     fn rejects_wrong_main_return_type() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("bool"))],
             types: Vec::new(),
         };
@@ -136,6 +141,7 @@ mod tests {
             mutable: false,
         });
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![main],
             types: Vec::new(),
         };

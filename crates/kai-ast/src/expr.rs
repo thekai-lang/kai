@@ -90,7 +90,10 @@ pub struct FieldAccessExpr {
 /// `Name { field: expr, ... }` — struct literal (v0.0.3).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructLitExpr {
-    pub name: Ident,
+    /// Dotted head (`QualifiedName`): len 1 is the plain `Point { .. }`
+    /// form; longer paths are module-qualified (`math.Point { .. }`).
+    /// Whether the qualifier names a module is decided by the resolver.
+    pub path: Vec<Ident>,
     pub fields: Vec<FieldInit>,
 }
 

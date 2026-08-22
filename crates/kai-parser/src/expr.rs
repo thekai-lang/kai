@@ -204,21 +204,44 @@ fn primary(parser: &mut Parser) -> Expr {
             span: token.span
         }),
         TokenKind::Ident(name) => {
-            // Consume the identifier first, then decide what follows it:
-            // `{` opens a struct literal (§9.2) unless we are inside an if
-            // condition — there the NO_STRUCT_LITERAL rule (§9.3) leaves the
-            // brace to the statement grammar as a block.
+            // Consume the identifier, then its dotted continuation (the
+            // QualifiedName shape — `p.x`, `math.Point`, bare `Point`).
+            // Only AFTER the whole path is consumed do we decide whether a
+            // following `{` opens a struct literal (§9.2) or belongs to the
+            // statement grammar (NO_STRUCT_LITERAL, §9.3, in if conditions).
+            // The path itself folds into plain Ident/FieldAccess shapes:
+            // whether the head names a module is a resolver question.
             parser.bump();
-            if parser.peek().kind == TokenKind::LBrace && !parser.struct_lits_banned() {
-                return struct_lit(parser, name, token.span);
-            }
-            Expr {
-                kind: ExprKind::Ident(kai_ast::Ident {
-                    name,
-                    span: token.span,
-                }),
+            let mut path = vec![kai_ast::Ident {
+                name,
                 span: token.span,
+            }];
+            while parser.peek().kind == TokenKind::Dot
+                && matches!(parser.peek_ahead_kind(), Some(TokenKind::Ident(_)))
+            {
+                parser.bump(); // `.`
+                path.push(parser.expect_ident("a name"));
             }
+
+            if parser.peek().kind == TokenKind::LBrace && !parser.struct_lits_banned() {
+                return struct_lit(parser, path);
+            }
+
+            let mut e = Expr {
+                kind: ExprKind::Ident(path[0].clone()),
+                span: token.span,
+            };
+            for segment in path.into_iter().skip(1) {
+                let span = Span::merge(e.span, segment.span);
+                e = Expr {
+                    span,
+                    kind: ExprKind::FieldAccess(FieldAccessExpr {
+                        base: Box::new(e),
+                        field: segment,
+                    }),
+                };
+            }
+            e
         }
         TokenKind::LParen => {
             parser.bump(); // `(`
@@ -256,14 +279,12 @@ fn primary(parser: &mut Parser) -> Expr {
     }
 }
 
-/// `Name { field: expr, ... }` — struct literal (§9.2). The identifier has
-/// already been consumed by the caller; all fields of the type must be given
-/// exactly once (checked in the type checker, not here).
-fn struct_lit(parser: &mut Parser, name: String, name_span: Span) -> Expr {
-    let ident = kai_ast::Ident {
-        name,
-        span: name_span,
-    };
+/// `Name { field: expr, ... }` — struct literal (§9.2). The QualifiedName
+/// head has already been consumed by the caller (a bare Ident is just the
+/// len-1 case). All fields of the type must be given exactly once (checked
+/// in the type checker, not here).
+fn struct_lit(parser: &mut Parser, path: Vec<kai_ast::Ident>) -> Expr {
+    let start_span = path[0].span;
     parser.bump(); // `{`
 
     let mut fields = Vec::new();
@@ -287,10 +308,7 @@ fn struct_lit(parser: &mut Parser, name: String, name_span: Span) -> Expr {
 
     let end = parser.expect_simple(&TokenKind::RBrace);
     Expr {
-        span: Span::merge(name_span, end),
-        kind: ExprKind::StructLit(StructLitExpr {
-            name: ident,
-            fields,
-        }),
+        span: Span::merge(start_span, end),
+        kind: ExprKind::StructLit(StructLitExpr { path, fields }),
     }
 }

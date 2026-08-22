@@ -17,6 +17,10 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         // mutable parameter (§9.3).
         "type" => Some(TokenKind::Type),
         "mut" => Some(TokenKind::Mut),
+        // v0.0.4 keywords. `use` opens a module import; `public` marks a
+        // fn/type as visible through the importing module's alias (§3.6).
+        "use" => Some(TokenKind::Use),
+        "public" => Some(TokenKind::Public),
         _ => None,
     }
 }
@@ -37,5 +41,11 @@ mod tests {
     #[test]
     fn type_names_are_not_keywords() {
         assert_eq!(lookup("int32"), None);
+    }
+
+    #[test]
+    fn module_keywords() {
+        assert_eq!(lookup("use"), Some(TokenKind::Use));
+        assert_eq!(lookup("public"), Some(TokenKind::Public));
     }
 }

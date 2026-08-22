@@ -9,6 +9,7 @@ pub mod program;
 pub mod stmt;
 pub mod ty;
 pub mod type_decl;
+pub mod use_decl;
 
 pub use assign::{AssignOp, AssignTarget};
 pub use expr::{
@@ -22,3 +23,4 @@ pub use program::Program;
 pub use stmt::{AssignStmt, Block, IfStmt, LetStmt, Stmt, StmtKind};
 pub use ty::Ty;
 pub use type_decl::{FieldDecl, TypeDecl};
+pub use use_decl::UseDecl;

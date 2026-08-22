@@ -56,6 +56,7 @@ mod tests {
 
     fn decl(name: &str, ret: Ty) -> FnDecl {
         FnDecl {
+            is_public: false,
             name: ident(name),
             params: Vec::<Param>::new(),
             ret,
@@ -72,6 +73,7 @@ mod tests {
 
     fn type_decl(name: &str, fields: Vec<(&str, &str)>) -> TypeDecl {
         TypeDecl {
+            is_public: false,
             name: ident(name),
             fields: fields
                 .into_iter()
@@ -92,6 +94,7 @@ mod tests {
     fn builds_separate_namespaces() {
         // Rust-style: a struct and a function may share one name.
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int32")), decl("Point", named("int32"))],
             types: vec![type_decl("Point", vec![("x", "int32")])],
         };
@@ -104,6 +107,7 @@ mod tests {
     #[test]
     fn rejects_duplicate_types() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int32"))],
             types: vec![
                 type_decl("Point", vec![("x", "int32")]),
@@ -120,6 +124,7 @@ mod tests {
     #[test]
     fn rejects_duplicate_fields_in_one_type() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int32"))],
             types: vec![type_decl("P", vec![("x", "int32"), ("x", "int64")])],
         };
@@ -133,6 +138,7 @@ mod tests {
     #[test]
     fn detects_direct_self_cycle() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int32"))],
             types: vec![type_decl("A", vec![("next", "A")])],
         };
@@ -146,6 +152,7 @@ mod tests {
     #[test]
     fn detects_two_node_cycle_with_path() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int32"))],
             types: vec![
                 type_decl("A", vec![("b", "B")]),
@@ -164,6 +171,7 @@ mod tests {
         // `Foo` is undeclared; the cycle check must not treat it as a
         // self-edge or crash. The unknown name is reported by the checker.
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int32"))],
             types: vec![type_decl("A", vec![("f", "Foo")])],
         };
@@ -173,6 +181,7 @@ mod tests {
     #[test]
     fn acyclic_chain_is_accepted() {
         let program = Program {
+            use_decls: Vec::new(),
             fns: vec![decl("main", named("int32"))],
             types: vec![
                 type_decl("Inner", vec![("v", "int32")]),

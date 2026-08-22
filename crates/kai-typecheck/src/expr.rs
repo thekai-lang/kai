@@ -379,10 +379,14 @@ fn field_access(checker: &mut Checker, access: &FieldAccessExpr) -> TypedExpr {
 /// `Name { f: e, .. }` — every field exactly once, in any source order; the
 /// lowered values are reordered into declaration order (the ABI layout).
 fn struct_lit(checker: &mut Checker, lit: &StructLitExpr) -> TypedExpr {
-    let struct_id = match checker.resolution.types.get(&lit.name.name) {
+    // Transitional: only the len-1 (unqualified) form resolves. Module-
+    // qualified heads gain real resolution with v0.0.4's multi-module
+    // resolver; until then the last segment is looked up locally.
+    let type_name = lit.path.last().expect("non-empty literal head");
+    let struct_id = match checker.resolution.types.get(&type_name.name) {
         Some(&idx) => StructId(idx as u32),
         None => {
-            checker.error(error::unknown_type(&lit.name.name, lit.name.span));
+            checker.error(error::unknown_type(&type_name.name, type_name.span));
             return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
         }
     };
@@ -434,7 +438,11 @@ fn struct_lit(checker: &mut Checker, lit: &StructLitExpr) -> TypedExpr {
                 let field = checker.structs[struct_id.0 as usize].fields[slot_index]
                     .name
                     .clone();
-                checker.error(error::missing_field_in_lit(&field, &ty_name, lit.name.span));
+                checker.error(error::missing_field_in_lit(
+                    &field,
+                    &ty_name,
+                    type_name.span,
+                ));
                 values.push(TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32));
             }
         }
