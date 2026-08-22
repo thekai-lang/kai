@@ -3,11 +3,11 @@ source_filename = "kai_module"
 
 define i32 @main() {
 entry:
+  %total = alloca i32, align 4
   %base = alloca i32, align 4
   store i32 6, ptr %base, align 4
   %tmp = load i32, ptr %base, align 4
   %mul = mul i32 %tmp, 7
-  %total = alloca i32, align 4
   store i32 %mul, ptr %total, align 4
   %old = load i32, ptr %total, align 4
   %add = add i32 %old, 1

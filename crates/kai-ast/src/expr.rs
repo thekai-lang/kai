@@ -76,10 +76,17 @@ pub struct BinaryExpr {
 pub enum ExprKind {
     IntLit(IntLit),
     FloatLit(FloatLit),
-    BoolLit { value: bool, span: Span },
+    BoolLit {
+        value: bool,
+        span: Span,
+    },
     Ident(Ident),
     Unary(UnaryExpr),
     Binary(BinaryExpr),
+    /// Poisoned node produced only by parser error recovery (e.g. an
+    /// expression nested past the recursion budget). Downstream phases treat
+    /// it as an error marker, never as compilable code.
+    Invalid,
 }
 
 use crate::ident::Ident;

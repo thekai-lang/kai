@@ -66,6 +66,26 @@ impl<'src> Lexer<'src> {
             b'-' => Some(self.scan_minus(start)),
             b'0'..=b'9' => Some(self.scan_number(byte, start)),
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.scan_word(start),
+            b'.' => {
+                // `.5` and friends: numbers must start with a digit. Consume
+                // the dot/digit run as one recovery region; one diagnostic.
+                loop {
+                    match self.cursor.peek() {
+                        Some(b'.') => {
+                            self.cursor.bump();
+                        }
+                        Some(d) if d.is_ascii_digit() => {
+                            self.cursor.bump();
+                        }
+                        _ => break,
+                    }
+                }
+                self.diagnostics.push(Diagnostic::error(
+                    "number literals must start with a digit",
+                    Span::new(start, self.cursor.pos()),
+                ));
+                None
+            }
             _ => match operators::scan(&mut self.cursor, byte) {
                 Some(Ok(kind)) => Some(self.token(kind, start)),
                 Some(Err(expected)) => {
@@ -112,22 +132,36 @@ impl<'src> Lexer<'src> {
         let int_part = self.accumulate_int(u64::from(first - b'0'), &mut overflowed);
 
         // Float requires at least one digit after '.' (EBNF: "1." is invalid).
-        if self.cursor.peek() == Some(b'.')
-            && self
-                .cursor
-                .peek_second()
-                .is_some_and(|b| b.is_ascii_digit())
-        {
-            self.cursor.bump(); // '.'
-            let fraction = self.accumulate_int(0, &mut overflowed);
-            let mut scale = 1.0f64;
-            let mut remaining = fraction;
-            while remaining > 0 {
-                scale /= 10.0;
-                remaining /= 10;
+        match self.cursor.peek() {
+            Some(b'.')
+                if self
+                    .cursor
+                    .peek_second()
+                    .is_some_and(|b| b.is_ascii_digit()) =>
+            {
+                self.cursor.bump(); // '.'
+                let fraction = self.accumulate_int(0, &mut overflowed);
+                let mut scale = 1.0f64;
+                let mut remaining = fraction;
+                while remaining > 0 {
+                    scale /= 10.0;
+                    remaining /= 10;
+                }
+                let value = int_part as f64 + fraction as f64 * scale;
+                return self.token(TokenKind::FloatLit(value), start);
             }
-            let value = int_part as f64 + fraction as f64 * scale;
-            return self.token(TokenKind::FloatLit(value), start);
+            // Malformed like `1.` / `1..2`: consume the dot run as one
+            // recovery region so the literal reports exactly once.
+            Some(b'.') => {
+                while self.cursor.peek() == Some(b'.') {
+                    self.cursor.bump();
+                }
+                self.diagnostics.push(Diagnostic::error(
+                    "float literal needs a digit after `.`",
+                    Span::new(start, self.cursor.pos()),
+                ));
+            }
+            _ => {}
         }
 
         if overflowed {
@@ -303,10 +337,77 @@ mod tests {
 
     #[test]
     fn dot_without_digit_is_not_a_float() {
-        // "1." must not become FloatLit; the '.' itself has no token yet.
+        // "1." must not become FloatLit; it reports a dedicated diagnostic.
         let out = lex("1.x");
         assert_eq!(out.tokens[0].kind, TokenKind::IntLit(1));
-        assert!(!out.diagnostics.is_empty());
+        assert_eq!(out.diagnostics.len(), 1);
+        assert!(out.diagnostics[0].message.contains("needs a digit after"));
+    }
+
+    /// Numeric literal matrix: each malformed shape reports exactly one clear
+    /// diagnostic; valid shapes stay silent.
+    #[test]
+    fn numeric_literal_matrix() {
+        let cases: &[(&str, Vec<TokenKind>, usize)] = &[
+            ("1", vec![TokenKind::IntLit(1)], 0),
+            ("1.2", vec![TokenKind::FloatLit(1.2)], 0),
+            (
+                "1.",
+                vec![TokenKind::IntLit(1)],
+                1, // needs a digit after `.`
+            ),
+            (
+                "1.foo",
+                vec![TokenKind::IntLit(1), TokenKind::Ident("foo".into())],
+                1,
+            ),
+            (
+                "1..2",
+                vec![TokenKind::IntLit(1), TokenKind::IntLit(2)],
+                1, // both dots consumed as one recovery region
+            ),
+            (
+                ".5",
+                vec![], // whole run consumed as one recovery region
+                1,      // must start with digit
+            ),
+        ];
+
+        for (source, expected_kinds, expected_diags) in cases {
+            let out = lex(source);
+            assert_eq!(
+                out.diagnostics.len(),
+                *expected_diags,
+                "diagnostics for {source:?}: {:?}",
+                out.diagnostics
+                    .iter()
+                    .map(|d| &d.message)
+                    .collect::<Vec<_>>()
+            );
+            let actual: Vec<&TokenKind> = out
+                .tokens
+                .iter()
+                .filter(|t| !matches!(t.kind, TokenKind::Eof))
+                .map(|t| &t.kind)
+                .collect();
+            let expected_refs: Vec<&TokenKind> = expected_kinds.iter().by_ref().collect();
+            assert_eq!(actual, expected_refs, "tokens for {source:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_float_messages_are_precise() {
+        let out = lex("let x = 1.;");
+        assert_eq!(out.diagnostics.len(), 1);
+        assert!(out.diagnostics[0].message.contains("needs a digit after"));
+
+        let out = lex("return .5;");
+        assert_eq!(out.diagnostics.len(), 1);
+        assert!(
+            out.diagnostics[0]
+                .message
+                .contains("must start with a digit")
+        );
     }
 
     #[test]

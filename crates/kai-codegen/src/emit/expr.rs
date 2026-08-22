@@ -24,6 +24,17 @@ pub(crate) fn emit<'ctx>(
         TypedExprKind::Neg(inner) => neg(ctx, frame, inner, expr.ty),
         TypedExprKind::Not(inner) => not(ctx, frame, inner),
         TypedExprKind::Binary { op, lhs, rhs } => binary(ctx, frame, *op, lhs, rhs),
+        // Poisoned recovery node; only reachable in programs that failed
+        // upstream. `undef` keeps emission total without inventing behavior.
+        TypedExprKind::Invalid => undef_of(ctx, expr.ty),
+    }
+}
+
+fn undef_of<'ctx>(ctx: &Ctx<'ctx>, ty: KaiType) -> BasicValueEnum<'ctx> {
+    match crate::types::to_llvm(ctx, ty) {
+        inkwell::types::BasicTypeEnum::IntType(int_ty) => int_ty.get_undef().into(),
+        inkwell::types::BasicTypeEnum::FloatType(float_ty) => float_ty.get_undef().into(),
+        _ => unreachable!("scalar types only"),
     }
 }
 

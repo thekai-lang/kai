@@ -89,17 +89,17 @@ fn binding(
     let declared_name = name.name.clone();
     let span = name.span;
     match checker.locals.declare(&declared_name, value.ty, mutable) {
-        Some(info) => Some(TypedStmt::Let(TypedLet {
+        crate::scope::DeclareOutcome::Fresh(info) => Some(TypedStmt::Let(TypedLet {
             local: info.id,
             name: declared_name,
             init: value,
         })),
-        None => {
-            // Redeclaration: keep a fresh id so codegen stays consistent.
-            let id = kai_tast::LocalId(u32::MAX);
+        // Redeclaration keeps the ORIGINAL id so references resolve to the
+        // first binding; the diagnostic alone flags the error.
+        crate::scope::DeclareOutcome::Duplicate(info) => {
             checker.error(error::duplicate_local(&declared_name, span));
             Some(TypedStmt::Let(TypedLet {
-                local: id,
+                local: info.id,
                 name: declared_name,
                 init: value,
             }))

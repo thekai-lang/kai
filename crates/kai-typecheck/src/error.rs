@@ -86,3 +86,7 @@ pub fn binary_type_mismatch(op: &str, lhs: KaiType, rhs: KaiType, span: Span) ->
 pub fn mod_requires_integers(span: Span) -> Diagnostic {
     Diagnostic::error("`%` requires integer operands", span)
 }
+
+pub fn invalid_expression(span: Span) -> Diagnostic {
+    Diagnostic::error("expression could not be parsed", span)
+}

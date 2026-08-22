@@ -1,6 +1,12 @@
 use crate::error;
+use kai_ast::{Expr, ExprKind};
 use kai_diagnostics::{Diagnostic, Span};
 use kai_lexer::{Token, TokenKind};
+
+/// Recursion budget for expression parsing. Every potentially recursive
+/// production funnels through `expr()`, so one counter bounds the AST depth
+/// no matter how nesting is written (parens today; calls/postfix later).
+pub(crate) const MAX_EXPR_DEPTH: u32 = 256;
 
 /// Token-stream cursor shared by all parsing submodules. Owns the diagnostic
 /// list; submodule parsers push errors and recover locally.
@@ -8,6 +14,10 @@ pub struct Parser<'t> {
     tokens: &'t [Token],
     pos: usize,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    depth: u32,
+    /// Scoped to a single overflow event: reset once its recovery region has
+    /// been skipped, so later independent deep expressions report too.
+    pub(crate) depth_reported: bool,
 }
 
 impl<'t> Parser<'t> {
@@ -16,7 +26,79 @@ impl<'t> Parser<'t> {
             tokens,
             pos: 0,
             diagnostics: Vec::new(),
+            depth: 0,
+            depth_reported: false,
         }
+    }
+
+    /// Enters an expression-production recursion level. `false` = budget
+    /// exhausted; the counter is left untouched and the caller must recover
+    /// without recursing further.
+    pub(crate) fn enter_expr(&mut self) -> bool {
+        if self.depth >= MAX_EXPR_DEPTH {
+            if !self.depth_reported {
+                self.depth_reported = true;
+                let span = self.span_here();
+                self.diagnostics.push(error::expression_too_deep(span));
+            }
+            return false;
+        }
+        self.depth += 1;
+        true
+    }
+
+    pub(crate) fn exit_expr(&mut self) {
+        self.depth -= 1;
+    }
+
+    /// Runs `body` under budget accounting. Over-budget invocations skip the
+    /// enclosing paren group iteratively and yield `ExprKind::Invalid`.
+    pub(crate) fn guarded_expr(&mut self, body: impl FnOnce(&mut Self) -> Expr) -> Expr {
+        if !self.enter_expr() {
+            let span = self.skip_to_group_end();
+            // Recovery region closed: future deep expressions report again.
+            self.depth_reported = false;
+            return Expr {
+                kind: ExprKind::Invalid,
+                span,
+            };
+        }
+        let out = body(self);
+        self.exit_expr();
+        out
+    }
+
+    /// Iteratively advances past the token range belonging to the paren group
+    /// whose contents will not be parsed (budget recovery). Stops after the
+    /// `)` that closes the innermost unclosed group; at nesting level zero it
+    /// stops BEFORE statement boundaries (`;`, `}`) so the enclosing grammar
+    /// keeps its own delimiters. EOF-safe.
+    pub(crate) fn skip_to_group_end(&mut self) -> Span {
+        let start = self.span_here();
+        let mut balance: i32 = 0;
+        let mut end = start;
+        while !self.at_eof() {
+            match self.peek().kind {
+                TokenKind::LParen => balance += 1,
+                TokenKind::RParen => {
+                    balance -= 1;
+                    end = self.span_here();
+                    self.bump();
+                    if balance < 0 {
+                        return Span::merge(start, end);
+                    }
+                    continue;
+                }
+                // Statement boundary: leave it for the caller's grammar.
+                TokenKind::Semi | TokenKind::RBrace if balance == 0 => {
+                    return Span::merge(start, end);
+                }
+                _ => {}
+            }
+            end = self.span_here();
+            self.bump();
+        }
+        Span::merge(start, end)
     }
 
     pub(crate) fn peek(&self) -> &Token {

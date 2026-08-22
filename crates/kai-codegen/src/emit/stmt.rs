@@ -40,12 +40,30 @@ fn ret<'ctx>(ctx: &Ctx<'ctx>, frame: &Frame<'ctx>, value: Option<&kai_tast::Type
 
 fn let_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, binding: &TypedLet) {
     let value = expr::emit(ctx, frame, &binding.init);
-    let slot = ctx
-        .builder
-        .build_alloca(value.get_type(), &binding.name)
-        .expect("alloca for local");
+    let current: BasicBlock = ctx.builder.get_insert_block().expect("insert position");
+    let function = current.get_parent().expect("function");
+
+    let slot = alloca_in_entry(ctx, function, value.get_type(), &binding.name);
     let _ = ctx.builder.build_store(slot, value);
     frame.bind(binding.local, slot);
+}
+
+/// Codegen invariant: every stack allocation is emitted at the top of the
+/// function's entry block. What LLVM later does with them (e.g. promotion to
+/// registers) is its own business.
+fn alloca_in_entry<'ctx>(
+    ctx: &Ctx<'ctx>,
+    function: inkwell::values::FunctionValue<'ctx>,
+    ty: inkwell::types::BasicTypeEnum<'ctx>,
+    name: &str,
+) -> inkwell::values::PointerValue<'ctx> {
+    let entry = function.get_first_basic_block().expect("entry block");
+    let builder = ctx.context.create_builder();
+    match entry.get_first_instruction() {
+        Some(first) => builder.position_before(&first),
+        None => builder.position_at_end(entry),
+    }
+    builder.build_alloca(ty, name).expect("alloca for local")
 }
 
 fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAssign) {

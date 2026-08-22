@@ -8,8 +8,11 @@ use kai_ast::{BinaryExpr, BinaryOp, Expr, ExprKind, FloatLit, IntLit, UnaryExpr,
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
 
+/// Entry point for every expression production. All recursive nesting
+/// (parenthesized groups today; call arguments and indexing later) funnels
+/// through here, so the recursion budget bounds AST depth globally.
 pub fn expr(parser: &mut Parser) -> Expr {
-    logic_or(parser)
+    parser.guarded_expr(|parser| logic_or(parser))
 }
 
 macro_rules! left_assoc_level {
@@ -66,30 +69,52 @@ fn coalesce(parser: &mut Parser) -> Expr {
     equality(parser)
 }
 
+/// Prefix operators are collected iteratively (no parser recursion), but each
+/// one still consumes budget: the resulting AST nests once per operator, and
+/// downstream phases recurse over that depth.
 fn unary(parser: &mut Parser) -> Expr {
-    let op = match parser.peek().kind.clone() {
-        TokenKind::Minus => Some(UnaryOp::Neg),
-        TokenKind::Bang => Some(UnaryOp::Not),
-        _ => None,
-    };
+    let mut ops: Vec<(UnaryOp, Span)> = Vec::new();
+    loop {
+        let op = match parser.peek().kind.clone() {
+            TokenKind::Minus => Some(UnaryOp::Neg),
+            TokenKind::Bang => Some(UnaryOp::Not),
+            _ => None,
+        };
+        let Some(op) = op else { break };
 
-    match op {
-        Some(op) => {
-            let op_span = parser.span_here();
-            parser.bump();
-            let operand = unary(parser);
-            let span = Span::merge(op_span, operand.span);
-            Expr {
-                span,
-                kind: ExprKind::Unary(UnaryExpr {
-                    op,
-                    op_span,
-                    operand: Box::new(operand),
-                }),
+        if !parser.enter_expr() {
+            // Release the levels this chain already charged, then skip the
+            // rest of the enclosing group without parsing it.
+            for _ in &ops {
+                parser.exit_expr();
             }
+            let span = parser.skip_to_group_end();
+            parser.depth_reported = false;
+            return Expr {
+                kind: ExprKind::Invalid,
+                span,
+            };
         }
-        None => postfix(parser),
+
+        let op_span = parser.span_here();
+        parser.bump();
+        ops.push((op, op_span));
     }
+
+    let mut operand = postfix(parser);
+    for (op, op_span) in ops.into_iter().rev() {
+        parser.exit_expr();
+        let span = Span::merge(op_span, operand.span);
+        operand = Expr {
+            span,
+            kind: ExprKind::Unary(UnaryExpr {
+                op,
+                op_span,
+                operand: Box::new(operand),
+            }),
+        };
+    }
+    operand
 }
 
 fn postfix(parser: &mut Parser) -> Expr {
@@ -138,6 +163,17 @@ fn primary(parser: &mut Parser) -> Expr {
         TokenKind::LParen => {
             parser.bump(); // `(`
             let inner = expr(parser);
+            // A poisoned subtree means recovery already consumed (or
+            // discarded) the group's tail; demanding a closer here would
+            // only add cascade noise on top of the budget diagnostic.
+            if matches!(inner.kind, ExprKind::Invalid)
+                && !matches!(parser.peek().kind, TokenKind::RParen)
+            {
+                return Expr {
+                    kind: ExprKind::Invalid,
+                    span: token.span,
+                };
+            }
             let end = parser.expect_simple(&TokenKind::RParen);
             Expr {
                 kind: inner.kind,
@@ -145,15 +181,13 @@ fn primary(parser: &mut Parser) -> Expr {
             }
         }
         _ => {
+            // Recovery placeholder is poisoned, never valid-looking code.
             parser
                 .diagnostics
                 .push(error::expected("an expression", &token));
             parser.bump();
             Expr {
-                kind: ExprKind::IntLit(IntLit {
-                    value: 0,
-                    span: token.span,
-                }),
+                kind: ExprKind::Invalid,
                 span: token.span,
             }
         }

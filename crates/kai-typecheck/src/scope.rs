@@ -15,6 +15,16 @@ pub struct LocalInfo {
     pub mutable: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DeclareOutcome {
+    /// Name was new in this scope.
+    Fresh(LocalInfo),
+    /// Name already bound here; carries the ORIGINAL binding so every
+    /// reference keeps resolving to the first declaration. The caller
+    /// reports the diagnostic.
+    Duplicate(LocalInfo),
+}
+
 pub struct Locals {
     scopes: Vec<HashMap<String, LocalInfo>>,
     next_id: u32,
@@ -39,20 +49,22 @@ impl Locals {
         }
     }
 
-    /// Declares a binding in the current scope. Returns `None` when the name
-    /// already exists there (the caller reports the diagnostic; the id counter
-    /// still advances so ids stay unique).
-    pub fn declare(&mut self, name: &str, ty: KaiType, mutable: bool) -> Option<LocalInfo> {
-        let id = LocalId(self.next_id);
-        self.next_id += 1;
-        let info = LocalInfo { id, ty, mutable };
-
+    /// Declares a binding in the current scope. Ids only advance for fresh
+    /// bindings; duplicates resolve to the original id.
+    pub fn declare(&mut self, name: &str, ty: KaiType, mutable: bool) -> DeclareOutcome {
         let current = self.scopes.last_mut().expect("scope stack never empty");
-        if current.contains_key(name) {
-            return None;
+        if let Some(existing) = current.get(name).copied() {
+            return DeclareOutcome::Duplicate(existing);
         }
+
+        let info = LocalInfo {
+            id: LocalId(self.next_id),
+            ty,
+            mutable,
+        };
+        self.next_id += 1;
         current.insert(name.to_owned(), info);
-        Some(info)
+        DeclareOutcome::Fresh(info)
     }
 
     /// Innermost binding visible from the current point, if any.
@@ -72,24 +84,43 @@ mod tests {
     #[test]
     fn declares_and_looks_up() {
         let mut locals = Locals::new();
-        let info = locals.declare("x", KaiType::Int32, false).unwrap();
+        let DeclareOutcome::Fresh(info) = locals.declare("x", KaiType::Int32, false) else {
+            panic!("first declaration must be fresh");
+        };
         assert_eq!(locals.lookup("x").unwrap().id, info.id);
     }
 
     #[test]
-    fn same_scope_redeclaration_fails() {
+    fn duplicate_resolves_to_original_id() {
         let mut locals = Locals::new();
-        locals.declare("x", KaiType::Int32, false);
-        assert!(locals.declare("x", KaiType::Int64, true).is_none());
+        let DeclareOutcome::Fresh(first) = locals.declare("x", KaiType::Int32, false) else {
+            panic!("first declaration must be fresh");
+        };
+
+        match locals.declare("x", KaiType::Int64, true) {
+            DeclareOutcome::Duplicate(info) => assert_eq!(info.id, first.id),
+            DeclareOutcome::Fresh(_) => panic!("redeclaration must be Duplicate"),
+        }
+
+        // The counter did not advance: a later fresh name gets the next id.
+        let DeclareOutcome::Fresh(next) = locals.declare("y", KaiType::Bool, false) else {
+            panic!("distinct name must be fresh");
+        };
+        assert_eq!(next.id.0, first.id.0 + 1);
     }
 
     #[test]
     fn nested_scope_shadows_and_unshadows() {
         let mut locals = Locals::new();
-        let outer = locals.declare("x", KaiType::Int32, false).unwrap();
+        let DeclareOutcome::Fresh(outer) = locals.declare("x", KaiType::Int32, false) else {
+            panic!("outer must be fresh");
+        };
 
         locals.push_scope();
-        let inner = locals.declare("x", KaiType::Float64, true).unwrap();
+        // Shadowing in a nested scope is a genuinely new binding.
+        let DeclareOutcome::Fresh(inner) = locals.declare("x", KaiType::Float64, true) else {
+            panic!("shadowing must be fresh");
+        };
         assert_eq!(locals.lookup("x").unwrap(), inner);
 
         locals.pop_scope();

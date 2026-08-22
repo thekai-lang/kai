@@ -26,6 +26,13 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         ExprKind::Ident(ident) => ident_ref(checker, ident),
         ExprKind::Unary(unary) => unary_expr(checker, unary.op, &unary.operand),
         ExprKind::Binary(binary) => binary_expr(checker, binary, expected),
+        // Poisoned parser-recovery node. The program already failed upstream;
+        // this defensive diagnostic keeps the phase contract explicit.
+        ExprKind::Invalid => {
+            let span = expr.span;
+            checker.error(error::invalid_expression(span));
+            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
+        }
     }
 }
 

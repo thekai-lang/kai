@@ -58,6 +58,10 @@ pub enum TypedExprKind {
         lhs: Box<TypedExpr>,
         rhs: Box<TypedExpr>,
     },
+    /// Poisoned node carried over from parser recovery. Only ever present in
+    /// programs that already failed; codegen lowers it to `undef` so every
+    /// match stays total and no phase can mistake it for real code.
+    Invalid,
 }
 
 impl TypedExpr {

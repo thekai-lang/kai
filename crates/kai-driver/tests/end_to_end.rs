@@ -228,3 +228,32 @@ fn v002_error_definite_return_still_enforced_with_if() {
     assert_eq!(failure.phase, "typecheck");
     assert!(failure.diagnostics[0].message.contains("has no `return`"));
 }
+
+// ---------------------------------------------------------------------------
+// v0.0.2.1 hardening: recursion budget, poisoned recovery nodes.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v0021_deep_nesting_reports_diagnostic_not_crash() {
+    // 50k nested parens used to overflow the native stack before any
+    // diagnostic could be produced.
+    let mut src = String::from("fn main() -> int32 { return ");
+    src.push_str(&"(".repeat(50_000));
+    src.push('1');
+    src.push_str(&")".repeat(50_000));
+    src.push_str("; }");
+
+    let failure = pipeline::compile(&src).unwrap_err();
+    assert_eq!(failure.phase, "parse");
+    assert!(failure.diagnostics[0].message.contains("nested too deeply"));
+}
+
+#[test]
+fn v0021_duplicate_declaration_keeps_original_id() {
+    // The redeclaration is an error, but references must still resolve to the
+    // FIRST binding's slot — no u32::MAX sentinel can leak into codegen.
+    let failure =
+        pipeline::compile("fn main() -> int32 { let x = 1; let x = 2; return x; }").unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(failure.diagnostics[0].message.contains("already declared"));
+}

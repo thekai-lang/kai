@@ -11,3 +11,13 @@ pub fn expected(expected: impl Into<String>, found: &Token) -> Diagnostic {
 pub fn custom(message: impl Into<String>, span: kai_diagnostics::Span) -> Diagnostic {
     Diagnostic::error(message, span)
 }
+
+pub fn expression_too_deep(span: kai_diagnostics::Span) -> Diagnostic {
+    Diagnostic::error(
+        format!(
+            "expression nested too deeply (max {} levels)",
+            crate::parser::MAX_EXPR_DEPTH
+        ),
+        span,
+    )
+}
