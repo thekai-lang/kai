@@ -72,6 +72,34 @@ pub struct BinaryExpr {
     pub rhs: Box<Expr>,
 }
 
+/// `callee(args)` — v0.0.3 restricts valid callees to top-level functions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallExpr {
+    pub callee: Box<Expr>,
+    pub args: Vec<Expr>,
+}
+
+/// `base.field` — struct field read (v0.0.3); chains nest naturally
+/// (`line.start.x` is FieldAccess(FieldAccess(Ident, start), x)).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldAccessExpr {
+    pub base: Box<Expr>,
+    pub field: Ident,
+}
+
+/// `Name { field: expr, ... }` — struct literal (v0.0.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructLitExpr {
+    pub name: Ident,
+    pub fields: Vec<FieldInit>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldInit {
+    pub name: Ident,
+    pub value: Expr,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     IntLit(IntLit),
@@ -83,6 +111,9 @@ pub enum ExprKind {
     Ident(Ident),
     Unary(UnaryExpr),
     Binary(BinaryExpr),
+    Call(CallExpr),
+    FieldAccess(FieldAccessExpr),
+    StructLit(StructLitExpr),
     /// Poisoned node produced only by parser error recovery (e.g. an
     /// expression nested past the recursion budget). Downstream phases treat
     /// it as an error marker, never as compilable code.

@@ -18,6 +18,10 @@ pub struct Parser<'t> {
     /// Scoped to a single overflow event: reset once its recovery region has
     /// been skipped, so later independent deep expressions report too.
     pub(crate) depth_reported: bool,
+    /// Rust's NO_STRUCT_LITERAL rule (§9.3): inside an `if` condition a bare
+    /// `Ident {` never starts a struct literal — the `{` belongs to the block.
+    /// Cleared again inside parentheses, so `(Point { x: 1 } == p)` works.
+    struct_lit_banned: bool,
 }
 
 impl<'t> Parser<'t> {
@@ -28,7 +32,30 @@ impl<'t> Parser<'t> {
             diagnostics: Vec::new(),
             depth: 0,
             depth_reported: false,
+            struct_lit_banned: false,
         }
+    }
+
+    /// Parses `body` with struct literals banned (`if` conditions). Restores
+    /// the previous state afterwards, including for `else if` chains.
+    pub(crate) fn with_struct_lits_banned(&mut self, body: impl FnOnce(&mut Self) -> Expr) -> Expr {
+        let saved = std::mem::replace(&mut self.struct_lit_banned, true);
+        let out = body(self);
+        self.struct_lit_banned = saved;
+        out
+    }
+
+    pub(crate) fn struct_lits_banned(&self) -> bool {
+        self.struct_lit_banned
+    }
+
+    /// Parses `body` inside explicit parens, where struct literals are always
+    /// allowed regardless of the surrounding ban state.
+    pub(crate) fn with_paren_escape(&mut self, body: impl FnOnce(&mut Self) -> Expr) -> Expr {
+        let saved = std::mem::replace(&mut self.struct_lit_banned, false);
+        let out = body(self);
+        self.struct_lit_banned = saved;
+        out
     }
 
     /// Enters an expression-production recursion level. `false` = budget

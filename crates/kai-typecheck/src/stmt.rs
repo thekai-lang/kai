@@ -113,7 +113,12 @@ fn assign(
     op: AssignOp,
     value: &kai_ast::Expr,
 ) -> Option<TypedStmt> {
-    let kai_ast::AssignTarget::Named(name) = target;
+    // Field-place writes land later in v0.0.3, together with the type table;
+    // until then they are rejected here so nothing half-typed reaches codegen.
+    let kai_ast::AssignTarget::Named(name) = target else {
+        checker.error(error::unsupported_expression(target.span()));
+        return None;
+    };
 
     let info = match checker.locals.lookup(&name.name) {
         Some(info) => info,

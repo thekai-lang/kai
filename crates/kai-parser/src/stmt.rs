@@ -4,7 +4,9 @@ use crate::error;
 use crate::expr;
 use crate::parser::Parser;
 use crate::ty;
-use kai_ast::{AssignOp, AssignStmt, AssignTarget, Block, Expr, IfStmt, LetStmt, Stmt, StmtKind};
+use kai_ast::{
+    AssignOp, AssignStmt, AssignTarget, Block, Expr, ExprKind, IfStmt, LetStmt, Stmt, StmtKind,
+};
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
 
@@ -93,11 +95,15 @@ fn binding(parser: &mut Parser) -> Stmt {
 }
 
 /// `if cond { ... } [else (if ... | { ... })]`
+///
+/// The condition parses under the NO_STRUCT_LITERAL rule (§9.3): a bare
+/// `Ident {` never opens a struct literal here, so the `{` that follows is
+/// always the block.
 fn if_stmt(parser: &mut Parser) -> Stmt {
     let start = parser.span_here();
     parser.bump(); // `if`
 
-    let cond = expr::expr(parser);
+    let cond = parser.with_struct_lits_banned(|parser| expr::expr(parser));
     let then_block = block(parser);
 
     let else_block = if parser.eat_simple(&TokenKind::Else) {
@@ -164,6 +170,14 @@ fn expr_or_assign(parser: &mut Parser) -> Stmt {
     }
 
     let end = parser.expect_simple(&TokenKind::Semi);
+    // EBNF §6 (v0.0.3): `ExprStmt ::= CallExprStmt` — bare expression
+    // statements must be calls. `Invalid` stays silent: it already reported.
+    if !matches!(parsed.kind, ExprKind::Call(_) | ExprKind::Invalid) {
+        parser.diagnostics.push(error::custom(
+            "only function calls can appear as expression statements",
+            start,
+        ));
+    }
     Stmt {
         kind: StmtKind::Expr(parsed),
         span: Span::merge(start, end),
@@ -183,9 +197,32 @@ fn try_assign_op(parser: &mut Parser) -> Option<AssignOp> {
     Some(op)
 }
 
+/// Accepts any `Place` (EBNF §3): a bare identifier or a field path
+/// (`p.x`, `line.start.y`) rooted at an identifier. Everything else —
+/// literals, calls, parenthesized exprs, operators — is not assignable.
 fn place_from(expr: &Expr) -> Option<AssignTarget> {
     match &expr.kind {
         kai_ast::ExprKind::Ident(ident) => Some(AssignTarget::Named(ident.clone())),
+        kai_ast::ExprKind::FieldAccess(access) => {
+            let mut path = vec![access.field.clone()];
+            let mut cursor = access.base.as_ref();
+            loop {
+                match &cursor.kind {
+                    kai_ast::ExprKind::FieldAccess(inner) => {
+                        path.push(inner.field.clone());
+                        cursor = inner.base.as_ref();
+                    }
+                    kai_ast::ExprKind::Ident(root) => {
+                        path.reverse();
+                        return Some(AssignTarget::Field {
+                            root: root.clone(),
+                            path,
+                        });
+                    }
+                    _ => return None,
+                }
+            }
+        }
         _ => None,
     }
 }

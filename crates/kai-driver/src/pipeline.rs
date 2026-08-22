@@ -13,20 +13,44 @@ pub struct Failure {
 
 /// Full compile to textual LLVM IR (module verified).
 pub fn compile(source: &str) -> Result<String, Failure> {
-    let program = lower(source)?;
-    kai_codegen::compile_ir("kai_module", &program).map_err(|err| Failure {
-        phase: "codegen",
-        diagnostics: vec![internal(err)],
+    let source = source.to_string();
+    with_big_stack(move || {
+        let program = lower(&source)?;
+        kai_codegen::compile_ir("kai_module", &program).map_err(|err| Failure {
+            phase: "codegen",
+            diagnostics: vec![internal(err)],
+        })
     })
 }
 
 /// JIT-compile and execute `main`, returning its `int32` result.
 pub fn jit(source: &str) -> Result<i32, Failure> {
-    let program = lower(source)?;
-    kai_codegen::run_jit(&program).map_err(|err| Failure {
-        phase: "codegen",
-        diagnostics: vec![internal(err)],
+    let source = source.to_string();
+    with_big_stack(move || {
+        let program = lower(&source)?;
+        kai_codegen::run_jit(&program).map_err(|err| Failure {
+            phase: "codegen",
+            diagnostics: vec![internal(err)],
+        })
     })
+}
+
+/// Runs the pipeline on a dedicated large-stack thread. Deeply nested input
+/// recurses through the parser/typechecker before the depth budget trips, and
+/// debug builds burn thousands of bytes of stack per AST level — the default
+/// 2 MiB test-thread stack is not enough to reach the diagnostic (same reason
+/// rustc runs its own passes on a big stack).
+fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    const STACK: usize = 64 * 1024 * 1024;
+    match std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(f)
+        .expect("spawn compiler thread")
+        .join()
+    {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 fn lower(source: &str) -> Result<TypedProgram, Failure> {

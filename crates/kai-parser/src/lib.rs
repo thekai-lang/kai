@@ -15,13 +15,34 @@ use parser::Parser;
 /// Parses a full token stream into a `Program`. On any error the diagnostic
 /// list is returned instead of a (potentially misleading) tree.
 pub fn parse(tokens: &[kai_lexer::Token]) -> Result<Program, Vec<Diagnostic>> {
-    let mut parser = Parser::new(tokens);
-    let program = decl::program(&mut parser);
+    // Deeply nested input recurses until the expression budget trips, and
+    // debug builds burn kilobytes of native stack per AST level. The budget
+    // bounds *work*, not stack depth, so parsing always runs on a dedicated
+    // large-stack thread instead of trusting the caller's (rustc does the
+    // same for its own passes).
+    let owned = tokens.to_vec();
+    with_big_stack(move || {
+        let mut parser = Parser::new(&owned);
+        let program = decl::program(&mut parser);
 
-    if parser.diagnostics.is_empty() {
-        Ok(program)
-    } else {
-        Err(parser.diagnostics)
+        if parser.diagnostics.is_empty() {
+            Ok(program)
+        } else {
+            Err(parser.diagnostics)
+        }
+    })
+}
+
+/// Runs `f` on a 64 MiB-stack thread, re-raising any panic unchanged.
+pub(crate) fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    const STACK: usize = 64 * 1024 * 1024;
+    let handle = std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(f)
+        .expect("spawn parser thread");
+    match handle.join() {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
     }
 }
 
@@ -58,12 +79,161 @@ mod tests {
         assert!(err[0].message.contains("`;`"));
     }
 
+    // -- v0.0.3: parameters, types, calls, field access, struct literals ----
+
     #[test]
-    fn rejects_parameters_in_v001() {
-        let err = parse_src("fn f(x) -> int32 { return 0; }").unwrap_err();
-        assert!(err[0].message.contains("v0.0.3"));
+    fn parses_function_parameters() {
+        let src = "fn add(a: int32, mut b: int64) -> int64 { return b; }
+fn main() -> int32 { return 0; }";
+        let program = parse_src(src).unwrap();
+        let params = &program.fns[0].params;
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name.name, "a");
+        assert!(!params[0].mutable);
+        match &params[0].ty {
+            kai_ast::Ty::Named(t) => assert_eq!(t.name, "int32"),
+        }
+        assert_eq!(params[1].name.name, "b");
+        assert!(params[1].mutable, "`mut` marks a mutable parameter");
+        assert!(program.fns[1].params.is_empty());
     }
 
+    #[test]
+    fn parses_type_decl_with_fields() {
+        let src = "type Point = { x: int32; y: int32; }
+fn main() -> int32 { return 0; }";
+        let program = parse_src(src).unwrap();
+        assert_eq!(program.types.len(), 1);
+        let ty = &program.types[0];
+        assert_eq!(ty.name.name, "Point");
+        assert_eq!(ty.fields.len(), 2);
+        assert_eq!(ty.fields[0].name.name, "x");
+        assert_eq!(ty.fields[1].name.name, "y");
+    }
+
+    #[test]
+    fn parses_call_statement_and_args() {
+        let program = parse_src("fn main() -> unit { print(1, 2 + 3); return; }").unwrap();
+        match &program.fns[0].body.stmts[0].kind {
+            kai_ast::StmtKind::Expr(e) => match &e.kind {
+                kai_ast::ExprKind::Call(call) => {
+                    assert!(matches!(call.callee.kind, kai_ast::ExprKind::Ident(_)));
+                    assert_eq!(call.args.len(), 2);
+                }
+                other => panic!("expected call, got {other:?}"),
+            },
+            other => panic!("expected expr stmt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_field_access_chain() {
+        let program = parse_src("fn main() -> int32 { return line.start.x; }").unwrap();
+        match &program.fns[0].body.stmts[0].kind {
+            kai_ast::StmtKind::Return(Some(e)) => match &e.kind {
+                kai_ast::ExprKind::FieldAccess(outer) => {
+                    assert_eq!(outer.field.name, "x");
+                    match &outer.base.kind {
+                        kai_ast::ExprKind::FieldAccess(inner) => {
+                            assert_eq!(inner.field.name, "start");
+                        }
+                        other => panic!("expected nested access, got {other:?}"),
+                    }
+                }
+                other => panic!("expected field access, got {other:?}"),
+            },
+            other => panic!("expected return, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_struct_literal_and_field_place_assignment() {
+        let src = "fn main() -> unit {
+    var p = Point { x: 1, y: 2 };
+    p.x = 10;
+    p.y += 5;
+    return;
+}";
+        let program = parse_src(src).unwrap();
+        let stmts = &program.fns[0].body.stmts;
+        match &stmts[0].kind {
+            kai_ast::StmtKind::Let(l) => match &l.init.kind {
+                kai_ast::ExprKind::StructLit(slit) => {
+                    assert_eq!(slit.name.name, "Point");
+                    assert_eq!(slit.fields.len(), 2);
+                    assert_eq!(slit.fields[0].name.name, "x");
+                }
+                other => panic!("expected struct literal, got {other:?}"),
+            },
+            other => panic!("expected let, got {other:?}"),
+        }
+        match &stmts[1].kind {
+            kai_ast::StmtKind::Assign(a) => match &a.target {
+                kai_ast::AssignTarget::Field { root, path } => {
+                    assert_eq!(root.name, "p");
+                    assert_eq!(path.len(), 1);
+                    assert_eq!(path[0].name, "x");
+                }
+                other => panic!("expected field place, got {other:?}"),
+            },
+            other => panic!("expected assign, got {other:?}"),
+        }
+        assert!(matches!(
+            &stmts[2].kind,
+            kai_ast::StmtKind::Assign(a) if matches!(&a.target, kai_ast::AssignTarget::Field { .. })
+        ));
+    }
+
+    #[test]
+    fn if_condition_bans_bare_struct_literal() {
+        // NO_STRUCT_LITERAL (§9.3): `p == Point { ... }` inside an if reads
+        // as `p == Point` followed by a BLOCK — deterministic, never a
+        // struct literal.
+        let src = "fn main() -> bool {
+    if p == Point { return true; }
+    return false;
+}";
+        let program = parse_src(src).unwrap();
+        match &program.fns[0].body.stmts[0].kind {
+            kai_ast::StmtKind::If(if_stmt) => match &if_stmt.cond.kind {
+                kai_ast::ExprKind::Binary(b) => {
+                    assert_eq!(b.op, kai_ast::BinaryOp::Eq);
+                    assert!(
+                        matches!(&b.rhs.kind, kai_ast::ExprKind::Ident(i) if i.name == "Point")
+                    );
+                    assert_eq!(if_stmt.then_block.stmts.len(), 1);
+                }
+                other => panic!("expected comparison cond, got {other:?}"),
+            },
+            other => panic!("expected if, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parenthesized_struct_literal_allowed_in_condition() {
+        let src =
+            "fn main() -> bool { if (p == Point { x: 1, y: 2 }) { return true; } return false; }";
+        let program = parse_src(src).unwrap();
+        match &program.fns[0].body.stmts[0].kind {
+            kai_ast::StmtKind::If(if_stmt) => match &if_stmt.cond.kind {
+                kai_ast::ExprKind::Binary(b) => {
+                    assert!(matches!(&b.rhs.kind, kai_ast::ExprKind::StructLit(_)));
+                }
+                other => panic!("expected comparison cond, got {other:?}"),
+            },
+            other => panic!("expected if, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_call_expression_statements_are_rejected() {
+        let err = parse_src("fn main() -> unit { 1 + 1; return; }").unwrap_err();
+        assert!(
+            err[0]
+                .message
+                .contains("only function calls can appear as expression statements")
+        );
+    }
     #[test]
     fn accepts_bare_return_grammatically() {
         // Grammar allows `return;`; rejecting it in non-unit functions is
@@ -233,19 +403,22 @@ mod tests {
     #[test]
     fn budget_recovery_preserves_surrounding_statements() {
         // After skipping the over-deep group, later statements still parse
-        // (internal parser used here so the recovered tree can be inspected).
-        let mut src = String::from("fn main() -> int32 { return ");
-        src.push_str(&"(".repeat(1_000));
-        src.push('1');
-        src.push_str(&")".repeat(1_000));
-        src.push_str("; return 42; }");
+        // (internal parser used here so the recovered tree can be inspected;
+        // run on the shared big stack like `parse` itself).
+        with_big_stack(move || {
+            let mut src = String::from("fn main() -> int32 { return ");
+            src.push_str(&"(".repeat(1_000));
+            src.push('1');
+            src.push_str(&")".repeat(1_000));
+            src.push_str("; return 42; }");
 
-        let out = kai_lexer::lex(&src);
-        let mut p = parser::Parser::new(&out.tokens);
-        let program = decl::program(&mut p);
+            let out = kai_lexer::lex(&src);
+            let mut p = parser::Parser::new(&out.tokens);
+            let program = decl::program(&mut p);
 
-        assert_eq!(p.diagnostics.len(), 1);
-        assert!(p.diagnostics[0].message.contains("nested too deeply"));
-        assert_eq!(program.fns[0].body.stmts.len(), 2, "both returns survive");
+            assert_eq!(p.diagnostics.len(), 1);
+            assert!(p.diagnostics[0].message.contains("nested too deeply"));
+            assert_eq!(program.fns[0].body.stmts.len(), 2, "both returns survive");
+        })
     }
 }

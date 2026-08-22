@@ -90,3 +90,10 @@ pub fn mod_requires_integers(span: Span) -> Diagnostic {
 pub fn invalid_expression(span: Span) -> Diagnostic {
     Diagnostic::error("expression could not be parsed", span)
 }
+
+pub fn unsupported_expression(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        "calls, field access, and struct literals are not supported yet",
+        span,
+    )
+}

@@ -4,7 +4,10 @@
 
 use crate::error;
 use crate::parser::Parser;
-use kai_ast::{BinaryExpr, BinaryOp, Expr, ExprKind, FloatLit, IntLit, UnaryExpr, UnaryOp};
+use kai_ast::{
+    BinaryExpr, BinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr, FieldInit, FloatLit, IntLit,
+    StructLitExpr, UnaryExpr, UnaryOp,
+};
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
 
@@ -117,8 +120,54 @@ fn unary(parser: &mut Parser) -> Expr {
     operand
 }
 
+/// Postfix operations, parsed iteratively so chains like `line.start.x` or
+/// `f(1)(2)` never grow parser recursion (each element still nests the AST
+/// once, and argument lists funnel through `expr()` for budget accounting).
 fn postfix(parser: &mut Parser) -> Expr {
-    primary(parser)
+    let mut e = primary(parser);
+    loop {
+        match parser.peek().kind.clone() {
+            TokenKind::Dot => {
+                parser.bump(); // `.`
+                let field = parser.expect_ident("a field name");
+                let span = Span::merge(e.span, field.span);
+                e = Expr {
+                    span,
+                    kind: ExprKind::FieldAccess(FieldAccessExpr {
+                        base: Box::new(e),
+                        field,
+                    }),
+                };
+            }
+            TokenKind::LParen => {
+                parser.bump(); // `(`
+                let mut args = Vec::new();
+                if parser.peek().kind != TokenKind::RParen {
+                    loop {
+                        args.push(expr(parser));
+                        if !parser.eat_simple(&TokenKind::Comma) {
+                            break;
+                        }
+                        // Tolerate one trailing comma before `)`.
+                        if matches!(parser.peek().kind, TokenKind::RParen | TokenKind::Eof) {
+                            break;
+                        }
+                    }
+                }
+                let end = parser.expect_simple(&TokenKind::RParen);
+                let span = Span::merge(e.span, end);
+                e = Expr {
+                    span,
+                    kind: ExprKind::Call(CallExpr {
+                        callee: Box::new(e),
+                        args,
+                    }),
+                };
+            }
+            _ => break,
+        }
+    }
+    e
 }
 
 fn primary(parser: &mut Parser) -> Expr {
@@ -155,14 +204,27 @@ fn primary(parser: &mut Parser) -> Expr {
             span: token.span
         }),
         TokenKind::Ident(name) => {
-            leaf!(ExprKind::Ident(kai_ast::Ident {
-                name,
-                span: token.span
-            }))
+            // Consume the identifier first, then decide what follows it:
+            // `{` opens a struct literal (§9.2) unless we are inside an if
+            // condition — there the NO_STRUCT_LITERAL rule (§9.3) leaves the
+            // brace to the statement grammar as a block.
+            parser.bump();
+            if parser.peek().kind == TokenKind::LBrace && !parser.struct_lits_banned() {
+                return struct_lit(parser, name, token.span);
+            }
+            Expr {
+                kind: ExprKind::Ident(kai_ast::Ident {
+                    name,
+                    span: token.span,
+                }),
+                span: token.span,
+            }
         }
         TokenKind::LParen => {
             parser.bump(); // `(`
-            let inner = expr(parser);
+            // Parens lift the NO_STRUCT_LITERAL ban for their contents:
+            // `(Point { x: 1 } == p)` stays unambiguous.
+            let inner = parser.with_paren_escape(|parser| expr(parser));
             // A poisoned subtree means recovery already consumed (or
             // discarded) the group's tail; demanding a closer here would
             // only add cascade noise on top of the budget diagnostic.
@@ -191,5 +253,44 @@ fn primary(parser: &mut Parser) -> Expr {
                 span: token.span,
             }
         }
+    }
+}
+
+/// `Name { field: expr, ... }` — struct literal (§9.2). The identifier has
+/// already been consumed by the caller; all fields of the type must be given
+/// exactly once (checked in the type checker, not here).
+fn struct_lit(parser: &mut Parser, name: String, name_span: Span) -> Expr {
+    let ident = kai_ast::Ident {
+        name,
+        span: name_span,
+    };
+    parser.bump(); // `{`
+
+    let mut fields = Vec::new();
+    while !matches!(parser.peek().kind, TokenKind::RBrace | TokenKind::Eof) {
+        let field_name = parser.expect_ident("a field name");
+        parser.expect_simple(&TokenKind::Colon);
+        let value = expr(parser);
+        fields.push(FieldInit {
+            name: field_name,
+            value,
+        });
+
+        if !parser.eat_simple(&TokenKind::Comma) {
+            break;
+        }
+        // Tolerate one trailing comma before `}`.
+        if matches!(parser.peek().kind, TokenKind::RBrace | TokenKind::Eof) {
+            break;
+        }
+    }
+
+    let end = parser.expect_simple(&TokenKind::RBrace);
+    Expr {
+        span: Span::merge(name_span, end),
+        kind: ExprKind::StructLit(StructLitExpr {
+            name: ident,
+            fields,
+        }),
     }
 }

@@ -62,29 +62,35 @@ impl<'src> Lexer<'src> {
             b'{' => Some(self.token(TokenKind::LBrace, start)),
             b'}' => Some(self.token(TokenKind::RBrace, start)),
             b';' => Some(self.token(TokenKind::Semi, start)),
+            b',' => Some(self.token(TokenKind::Comma, start)),
             b':' => Some(self.token(TokenKind::Colon, start)),
             b'-' => Some(self.scan_minus(start)),
             b'0'..=b'9' => Some(self.scan_number(byte, start)),
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.scan_word(start),
             b'.' => {
-                // `.5` and friends: numbers must start with a digit. Consume
-                // the dot/digit run as one recovery region; one diagnostic.
-                loop {
-                    match self.cursor.peek() {
-                        Some(b'.') => {
-                            self.cursor.bump();
+                // `.5` and friends: numbers must start with a digit, so a dot
+                // directly followed by one is a malformed number (recovery
+                // region, one diagnostic). Otherwise it is field access.
+                if self.cursor.peek().is_some_and(|d| d.is_ascii_digit()) {
+                    loop {
+                        match self.cursor.peek() {
+                            Some(b'.') => {
+                                self.cursor.bump();
+                            }
+                            Some(d) if d.is_ascii_digit() => {
+                                self.cursor.bump();
+                            }
+                            _ => break,
                         }
-                        Some(d) if d.is_ascii_digit() => {
-                            self.cursor.bump();
-                        }
-                        _ => break,
                     }
+                    self.diagnostics.push(Diagnostic::error(
+                        "number literals must start with a digit",
+                        Span::new(start, self.cursor.pos()),
+                    ));
+                    None
+                } else {
+                    Some(self.token(TokenKind::Dot, start))
                 }
-                self.diagnostics.push(Diagnostic::error(
-                    "number literals must start with a digit",
-                    Span::new(start, self.cursor.pos()),
-                ));
-                None
             }
             _ => match operators::scan(&mut self.cursor, byte) {
                 Some(Ok(kind)) => Some(self.token(kind, start)),

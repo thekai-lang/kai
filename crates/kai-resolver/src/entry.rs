@@ -102,6 +102,7 @@ mod tests {
     fn accepts_valid_main() {
         let program = Program {
             fns: vec![decl("main", named("int32"))],
+            types: Vec::new(),
         };
         assert!(check_entry(&program).is_empty());
     }
@@ -110,6 +111,7 @@ mod tests {
     fn accepts_int_alias_for_main() {
         let program = Program {
             fns: vec![decl("main", named("int"))],
+            types: Vec::new(),
         };
         assert!(check_entry(&program).is_empty());
     }
@@ -118,6 +120,7 @@ mod tests {
     fn rejects_missing_main() {
         let program = Program {
             fns: vec![decl("foo", named("int32"))],
+            types: Vec::new(),
         };
         assert_eq!(
             check_entry(&program)[0].message,
@@ -129,6 +132,7 @@ mod tests {
     fn rejects_wrong_main_return_type() {
         let program = Program {
             fns: vec![decl("main", named("bool"))],
+            types: Vec::new(),
         };
         assert_eq!(check_entry(&program).len(), 1);
         assert!(check_entry(&program)[0].message.contains("`int32`"));
@@ -138,6 +142,7 @@ mod tests {
     fn rejects_duplicate_names() {
         let program = Program {
             fns: vec![decl("main", named("int32")), decl("main", named("int32"))],
+            types: Vec::new(),
         };
         assert_eq!(check_entry(&program).len(), 1);
     }

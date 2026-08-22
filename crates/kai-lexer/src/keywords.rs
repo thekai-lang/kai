@@ -13,6 +13,10 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         "else" => Some(TokenKind::Else),
         "true" => Some(TokenKind::True),
         "false" => Some(TokenKind::False),
+        // v0.0.3 keywords. `type` opens a struct declaration; `mut` marks a
+        // mutable parameter (§9.3).
+        "type" => Some(TokenKind::Type),
+        "mut" => Some(TokenKind::Mut),
         _ => None,
     }
 }

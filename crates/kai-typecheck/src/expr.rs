@@ -26,6 +26,14 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         ExprKind::Ident(ident) => ident_ref(checker, ident),
         ExprKind::Unary(unary) => unary_expr(checker, unary.op, &unary.operand),
         ExprKind::Binary(binary) => binary_expr(checker, binary, expected),
+        // Calls, field reads, and struct literals are parsed by v0.0.3 but
+        // their typing rules land with the resolver/type-table work later in
+        // the same version; until then they are rejected here so nothing
+        // half-typed reaches codegen.
+        ExprKind::Call(_) | ExprKind::FieldAccess(_) | ExprKind::StructLit(_) => {
+            checker.error(error::unsupported_expression(expr.span));
+            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
+        }
         // Poisoned parser-recovery node. The program already failed upstream;
         // this defensive diagnostic keeps the phase contract explicit.
         ExprKind::Invalid => {
