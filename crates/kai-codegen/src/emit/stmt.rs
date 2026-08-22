@@ -40,54 +40,37 @@ fn ret<'ctx>(ctx: &Ctx<'ctx>, frame: &Frame<'ctx>, value: Option<&kai_tast::Type
 
 fn let_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, binding: &TypedLet) {
     let value = expr::emit(ctx, frame, &binding.init);
-    let current: BasicBlock = ctx.builder.get_insert_block().expect("insert position");
-    let function = current.get_parent().expect("function");
+    let function = super::current_function(ctx);
 
-    let slot = alloca_in_entry(ctx, function, value.get_type(), &binding.name);
+    let slot = super::alloca_in_entry(ctx, function, value.get_type(), &binding.name);
     let _ = ctx.builder.build_store(slot, value);
     frame.bind(binding.local, slot);
 }
 
-/// Codegen invariant: every stack allocation is emitted at the top of the
-/// function's entry block. What LLVM later does with them (e.g. promotion to
-/// registers) is its own business.
-fn alloca_in_entry<'ctx>(
-    ctx: &Ctx<'ctx>,
-    function: inkwell::values::FunctionValue<'ctx>,
-    ty: inkwell::types::BasicTypeEnum<'ctx>,
-    name: &str,
-) -> inkwell::values::PointerValue<'ctx> {
-    let entry = function.get_first_basic_block().expect("entry block");
-    let builder = ctx.context.create_builder();
-    match entry.get_first_instruction() {
-        Some(first) => builder.position_before(&first),
-        None => builder.position_at_end(entry),
-    }
-    builder.build_alloca(ty, name).expect("alloca for local")
-}
-
 fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAssign) {
-    // Strict same-type rules guarantee value.ty == the target's type, so it
-    // doubles as the operand type for compound read-modify-write.
+    // Resolve the place: root slot, then getelementptr per field step.
+    let mut ptr = frame.slot(assign.root);
+    for step in &assign.path {
+        ptr = super::field_gep(ctx, step.struct_id, ptr, u32::from(step.field), "place");
+    }
+
     let value = expr::emit(ctx, frame, &assign.value);
 
+    // Strict same-type rules guarantee value.ty == the place's type, so it
+    // doubles as the operand type for compound read-modify-write.
     let value = match assign.op {
         Some(op) => {
-            let slot = frame.slot(assign.root);
             let pointee = types::to_llvm(ctx, assign.value.ty);
             let old = ctx
                 .builder
-                .build_load(pointee, slot, "old")
+                .build_load(pointee, ptr, "old")
                 .expect("load for compound assign");
             expr::apply_binary(ctx, op, old, value, assign.value.ty)
         }
         None => value,
     };
 
-    // Field-path stores land with full struct emission in the next phase;
-    // plain binding writes are the only shape exercised until then.
-    let slot = frame.slot(assign.root);
-    let _ = ctx.builder.build_store(slot, value);
+    let _ = ctx.builder.build_store(ptr, value);
 }
 
 fn if_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, if_: &TypedIf) {

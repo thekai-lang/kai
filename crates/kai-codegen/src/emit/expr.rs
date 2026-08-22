@@ -27,13 +27,115 @@ pub(crate) fn emit<'ctx>(
         // Poisoned recovery node; only reachable in programs that failed
         // upstream. `undef` keeps emission total without inventing behavior.
         TypedExprKind::Invalid => undef_of(ctx, expr.ty),
-        // v0.0.3 nodes. Emission lands in the next phase; for now they keep
-        // every match total with a scalar placeholder so struct-typed
-        // programs cannot ICE mid-transition.
-        TypedExprKind::Call { .. }
-        | TypedExprKind::FieldAccess { .. }
-        | TypedExprKind::StructLit { .. } => ctx.context.i32_type().get_undef().into(),
+        TypedExprKind::Call { func, args } => call(ctx, frame, *func, args),
+        TypedExprKind::FieldAccess {
+            base,
+            struct_id,
+            field,
+        } => field_read(ctx, frame, base, *struct_id, *field, expr.ty),
+        TypedExprKind::StructLit { struct_id, values } => {
+            struct_lit(ctx, frame, *struct_id, values)
+        }
     }
+}
+
+/// Direct call to a declared function. Arguments pass by value (§9.3); unit
+/// results have no LLVM value, so callers get an `undef` placeholder they
+/// always discard.
+fn call<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    func: kai_tast::FunctionId,
+    args: &[TypedExpr],
+) -> BasicValueEnum<'ctx> {
+    let function = ctx.functions[func.0 as usize];
+    let arg_values: Vec<BasicValueEnum<'ctx>> =
+        args.iter().map(|arg| emit(ctx, frame, arg)).collect();
+
+    let args_meta: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = arg_values
+        .into_iter()
+        .map(inkwell::values::BasicMetadataValueEnum::from)
+        .collect();
+    let site = ctx
+        .builder
+        .build_call(function, &args_meta, "call")
+        .expect("direct call");
+    match site.try_as_basic_value() {
+        inkwell::values::ValueKind::Basic(value) => value,
+        _ => ctx.context.i32_type().get_undef().into(),
+    }
+}
+
+/// Reads a field: GEP the base place by this access's index, then load.
+fn field_read<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    base: &TypedExpr,
+    struct_id: kai_tast::StructId,
+    field: u16,
+    ty: KaiType,
+) -> BasicValueEnum<'ctx> {
+    match place_ptr(ctx, frame, base) {
+        Some(base_ptr) => {
+            let ptr = super::field_gep(ctx, struct_id, base_ptr, u32::from(field), "field");
+            let pointee = crate::types::to_llvm(ctx, ty);
+            ctx.builder
+                .build_load(pointee, ptr, "field")
+                .expect("load from field")
+        }
+        None => undef_of(ctx, ty), // unreachable post-typecheck
+    }
+}
+
+/// Address of an lvalue-shaped expression. Struct-typed expressions are
+/// exactly the places; anything else has no address.
+pub(crate) fn place_ptr<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    expr: &TypedExpr,
+) -> Option<inkwell::values::PointerValue<'ctx>> {
+    match &expr.kind {
+        TypedExprKind::LocalRef(local) => Some(frame.slot(*local)),
+        TypedExprKind::FieldAccess {
+            base,
+            struct_id,
+            field,
+        } => {
+            let base_ptr = place_ptr(ctx, frame, base)?;
+            Some(super::field_gep(
+                ctx,
+                *struct_id,
+                base_ptr,
+                u32::from(*field),
+                "place",
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Materializes `Name { .. }`: an entry-block temporary filled field-by-field
+/// (declaration order — the type checker already reordered the values).
+fn struct_lit<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    struct_id: kai_tast::StructId,
+    values: &[TypedExpr],
+) -> BasicValueEnum<'ctx> {
+    let llvm_ty = ctx.structs[struct_id.0 as usize];
+    let function = super::current_function(ctx);
+    let tmp = super::alloca_in_entry(ctx, function, llvm_ty.into(), "tmp");
+
+    for (idx, value) in values.iter().enumerate() {
+        let v = emit(ctx, frame, value);
+        let field_ptr = super::field_gep(ctx, struct_id, tmp, idx as u32, "f");
+        let _ = ctx.builder.build_store(field_ptr, v);
+    }
+
+    let pointee = crate::types::to_llvm(ctx, KaiType::Struct(struct_id));
+    ctx.builder
+        .build_load(pointee, tmp, "lit")
+        .expect("load literal")
 }
 
 fn undef_of<'ctx>(ctx: &Ctx<'ctx>, ty: KaiType) -> BasicValueEnum<'ctx> {

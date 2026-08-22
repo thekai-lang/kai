@@ -10,7 +10,7 @@ use kai_ast::Program;
 use kai_tast::{FunctionId, KaiType, TypedBlock, TypedFnDecl, TypedProgram};
 
 pub(crate) fn program(checker: &mut Checker, program: &Program) -> TypedProgram {
-    build_struct_layouts(checker, program);
+    let structs = build_struct_layouts(checker, program);
     build_fn_signatures(checker, program);
 
     let fns = program
@@ -24,27 +24,47 @@ pub(crate) fn program(checker: &mut Checker, program: &Program) -> TypedProgram 
         })
         .collect();
 
-    TypedProgram { fns }
+    TypedProgram { structs, fns }
 }
 
 /// Resolves every struct's field types once, in declaration order, so
 /// `StructId` doubles as an index into the layout table. Cycles were
-/// rejected by the resolver; unknown field types error here.
-fn build_struct_layouts(checker: &mut Checker, program: &Program) {
-    for decl in &program.types {
-        let fields = decl
-            .fields
-            .iter()
-            .map(|field| crate::checker::FieldSlot {
-                name: field.name.name.clone(),
-                ty: ty::resolve(checker, &field.ty),
-            })
-            .collect();
-        checker.structs.push(crate::checker::StructLayout {
+/// rejected by the resolver; unknown field types error here. The resolved
+/// layouts travel with the TAST — codegen rebuilds them as LLVM types.
+fn build_struct_layouts(checker: &mut Checker, program: &Program) -> Vec<kai_tast::TypedStruct> {
+    let structs: Vec<kai_tast::TypedStruct> = program
+        .types
+        .iter()
+        .map(|decl| kai_tast::TypedStruct {
             name: decl.name.name.clone(),
-            fields,
-        });
-    }
+            fields: decl
+                .fields
+                .iter()
+                .map(|field| kai_tast::TypedStructField {
+                    name: field.name.name.clone(),
+                    ty: ty::resolve(checker, &field.ty),
+                })
+                .collect(),
+        })
+        .collect();
+
+    // Mirror into the checker's own lookup table for expression typing.
+    checker.structs = structs
+        .iter()
+        .map(|ts| crate::checker::StructLayout {
+            name: ts.name.clone(),
+            fields: ts
+                .fields
+                .iter()
+                .map(|f| crate::checker::FieldSlot {
+                    name: f.name.clone(),
+                    ty: f.ty,
+                })
+                .collect(),
+        })
+        .collect();
+
+    structs
 }
 
 /// Same pre-pass for function signatures: param/return types resolve against
