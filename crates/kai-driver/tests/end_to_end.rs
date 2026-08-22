@@ -311,3 +311,20 @@ fn main() -> int32 {
 }";
     assert_eq!(pipeline::jit(src).unwrap(), 1);
 }
+
+#[test]
+fn v004_string_api_rejects_use_bearing_source() {
+    // The in-memory API has no project root, so imports cannot resolve.
+    // Predictable user-facing situation -> diagnostic, never an internal
+    // error (§8).
+    let failure =
+        pipeline::compile("use math.extra;\nfn main() -> int32 { return 0; }").unwrap_err();
+    assert_eq!(failure.phase, "resolve");
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("modules require a file entry point"),
+        "got: {}",
+        failure.diagnostics[0].message
+    );
+}

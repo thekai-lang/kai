@@ -6,6 +6,11 @@ pub struct Diagnostic {
     pub message: String,
     pub span: Span,
     pub severity: Severity,
+    /// Source file the span indexes into (§8 constraint 6): `None` in
+    /// single-file phases (v0.0.1–v0.0.3); populated from v0.0.4 once one
+    /// compilation spans several files. Holds the path relative to the
+    /// project root as displayed to users.
+    pub file: Option<String>,
 }
 
 impl Diagnostic {
@@ -14,6 +19,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             severity: Severity::Error,
+            file: None,
         }
     }
 
@@ -22,7 +28,14 @@ impl Diagnostic {
             message: message.into(),
             span,
             severity: Severity::Warning,
+            file: None,
         }
+    }
+
+    /// Attaches the source file this diagnostic's span belongs to.
+    pub fn with_file(mut self, file: impl Into<String>) -> Self {
+        self.file = Some(file.into());
+        self
     }
 }
 

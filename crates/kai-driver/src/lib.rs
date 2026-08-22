@@ -2,5 +2,6 @@
 //! diagnostic reporting. `main.rs` is a thin shell over this.
 
 pub mod cli;
+pub mod modules;
 pub mod pipeline;
 pub mod report;

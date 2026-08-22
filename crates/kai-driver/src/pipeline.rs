@@ -63,6 +63,16 @@ fn lower(source: &str) -> Result<TypedProgram, Failure> {
 
     let ast = kai_parser::parse(&lexed.tokens).map_err(fail("parse"))?;
 
+    // The string API cannot resolve imports (they need a project root, i.e.
+    // a file entry point). A predictable user-facing situation reports as a
+    // diagnostic, never an internal error (§8).
+    if let Some(first) = ast.use_decls.first() {
+        return Err(fail("resolve")(vec![Diagnostic::error(
+            "modules require a file entry point; run kai build or kai run on an entry file",
+            first.span,
+        )]));
+    }
+
     let resolution = kai_resolver::analyze(&ast).map_err(fail("resolve"))?;
 
     kai_typecheck::check_with(&ast, &resolution).map_err(fail("typecheck"))
