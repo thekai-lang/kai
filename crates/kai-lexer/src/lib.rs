@@ -1,3 +1,9 @@
-pub fn lex() {
-    unimplemented!("kai-lexer: not implemented yet")
-}
+//! Tokenizer: source text -> tokens + lexical diagnostics.
+
+pub mod cursor;
+pub mod keywords;
+pub mod lexer;
+pub mod token;
+
+pub use lexer::{LexOutput, lex};
+pub use token::{Token, TokenKind};

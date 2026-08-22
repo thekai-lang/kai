@@ -1,39 +1,9 @@
-//! Diagnostic model: {message, span, severity}.
+//! Diagnostic model: {message, span, severity}. Facade only.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Severity {
-    Error,
-    Warning,
-    Note,
-}
+mod diagnostic;
+mod severity;
+mod span;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Diagnostic {
-    pub message: String,
-    pub span: Span,
-    pub severity: Severity,
-}
-
-impl Diagnostic {
-    pub fn error(message: impl Into<String>, span: Span) -> Self {
-        Self { message: message.into(), span, severity: Severity::Error }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_error_diagnostic() {
-        let d = Diagnostic::error("unexpected token", Span { start: 0, end: 3 });
-        assert_eq!(d.severity, Severity::Error);
-        assert_eq!(d.span.end, 3);
-    }
-}
+pub use diagnostic::Diagnostic;
+pub use severity::Severity;
+pub use span::{LineCol, SourceMap, Span};

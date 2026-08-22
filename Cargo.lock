@@ -57,6 +57,9 @@ dependencies = [
 [[package]]
 name = "kai-ast"
 version = "0.0.1"
+dependencies = [
+ "kai-diagnostics",
+]
 
 [[package]]
 name = "kai-codegen"
@@ -69,6 +72,20 @@ dependencies = [
 [[package]]
 name = "kai-diagnostics"
 version = "0.0.1"
+
+[[package]]
+name = "kai-driver"
+version = "0.0.1"
+dependencies = [
+ "kai-ast",
+ "kai-codegen",
+ "kai-diagnostics",
+ "kai-lexer",
+ "kai-parser",
+ "kai-resolver",
+ "kai-tast",
+ "kai-typecheck",
+]
 
 [[package]]
 name = "kai-lexer"
@@ -102,7 +119,10 @@ version = "0.0.1"
 name = "kai-typecheck"
 version = "0.0.1"
 dependencies = [
+ "kai-ast",
  "kai-diagnostics",
+ "kai-lexer",
+ "kai-parser",
  "kai-tast",
 ]
 

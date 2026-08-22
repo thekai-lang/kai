@@ -8,6 +8,7 @@ kai/
 │   ├── kai-tast/          # shape only, no logic — TERPISAH dari kai-ast
 │   ├── kai-typecheck/
 │   ├── kai-diagnostics/   # {message, span, severity} — ini duluan, bukan belakangan
-│   └── kai-codegen/       # cuma boleh depend ke kai-tast, TIDAK ke kai-ast
+│   ├── kai-codegen/       # cuma boleh depend ke kai-tast, TIDAK ke kai-ast
+│   └── kai-driver/        # binari CLI (`kai build` / `kai run`) + pipeline orchestration
 ├── tests/
   └── fixtures/

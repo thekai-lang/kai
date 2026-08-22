@@ -9,6 +9,7 @@ members = [
     "crates/kai-typecheck",
     "crates/kai-diagnostics",
     "crates/kai-codegen",
+    "crates/kai-driver",
 ]
 
 [workspace.package]
@@ -24,7 +25,7 @@ kai-tast = { path = "crates/kai-tast" }
 kai-typecheck = { path = "crates/kai-typecheck" }
 kai-diagnostics = { path = "crates/kai-diagnostics" }
 kai-codegen = { path = "crates/kai-codegen" }
-inkwell = { version = "0.10.0", features = ["llvm22-1"] }
+inkwell = { version = "0.10.0", features = ["llvm22-1", "target-x86"] }
 
 [profile.dev]
 debug = 1
