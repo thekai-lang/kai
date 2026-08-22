@@ -398,7 +398,7 @@ fn fib(n: int32) -> int32 { if n < 2 { return n; } else { return fib(n - 1) + fi
             check_src(immut)
                 .unwrap_err()
                 .iter()
-                .any(|d| d.message.contains("use `var`"))
+                .any(|d| d.message.contains("immutable"))
         );
 
         // ...and so is writing through an immutable param.

@@ -39,7 +39,7 @@ pub fn undeclared_variable(name: &str, span: Span) -> Diagnostic {
 
 pub fn assign_to_immutable(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
-        format!("cannot assign to `{name}`: declared with `let` (use `var` for mutable bindings)"),
+        format!("cannot assign to `{name}`: the binding is immutable"),
         span,
     )
 }
