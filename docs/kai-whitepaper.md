@@ -1,12 +1,14 @@
 # Kai
 ### A trust-aware programming language
 
-**Status:** Draft v0.5 — pre-implementation specification
+**Status:** Draft v0.7 — pre-implementation specification
 **Purpose:** Freeze scope before writing any compiler code. Nothing described here is authoritative until it appears in this document. Feature ideas that arise during implementation go into an `IDEAS.md` backlog, not into the compiler.
 
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
 
 **Changelog**
+- **v0.7** — `Diagnostic` shape gains `file` (§8 constraint 6), surfaced as a real gap during v0.0.4 implementation planning: `span` alone is ambiguous once a compilation can span multiple source files, and §10.1's panic format already implied a file-qualified location without the base shape carrying one. `file` is nullable/absent in the single-file phases (v0.0.1–v0.0.3) and populated from v0.0.4 onward. (Grammar doc, not whitepaper: `StructLit`'s head generalized from a bare `Ident` to `QualifiedName` — dotted, reusing `ModulePath`'s shape — so `math.Point { ... }` parses without a separate "qualified struct literal" node; confirmed no new AST node is needed for qualified calls either, since `math.add(...)` already composes from the existing `Call`/`FieldAccess` rules — the parser stays meaning-agnostic about module-vs-value, per open item #6, matching the parser/resolver boundary already enforced elsewhere in this project.)
+- **v0.6** — v0.0.4 scope locked: `public type` added alongside `public fn` (without it, structs couldn't cross module boundaries at all — a real gap, not a stylistic choice); project root for `use` resolution defined as the entry file's directory, not the invoking process's CWD, for deterministic resolution; stdlib (§3.7) formally deferred to v0.0.5 since every signature in it depends on `string`/arrays; noted that v0.0.4's own test suite needs no stdlib at all (user-defined modules suffice). §3.1's Hello World example annotated as the target shape, not literally achievable before v0.0.5 (it needs both modules and `string` at once).
 - **v0.5** — Inserted a new v0.0.5 ("Ownership runtime") into the roadmap between the module system (v0.0.4) and Optional/Result/closures — string, array literals + indexing, `for..in`, and actual retain/release enforcement (§9.4–9.9) all land together, since they're the first point any heap-bearing type exists. Everything previously numbered v0.0.5–v0.0.11 shifts to v0.0.6–v0.0.12; every cross-reference in this document is updated accordingly. Fixed §9.5's retain-rule enforcement claim, previously (incorrectly) attributed to v0.0.3 — v0.0.3 has zero heap-bearing types active (all structs are stack-only per §9.1), so retain literally cannot be exercised there; the claim now sits on the new v0.0.5. `mut` on a stack-type parameter is formalized as local-copy-permission only, with zero ABI difference from an unannotated parameter — one rule ("`mut` grants write access through the binding"), two consequences depending on whether the type is stack (invisible to caller) or heap (visible through the borrow, from v0.0.5 onward). §9.3's example fixed: no more bare `fn show(s: string) { ... }` (missing the mandatory `->`, and using a type with no version slot until this change) — replaced with a `Point`-based example matching v0.0.3's actual scope. v0.0.3's scope is now explicit about field read *and* write access (write gated by `mut`), and adds a compile-time cyclic-struct-definition check (DFS over the `TypeDecl` dependency graph, diagnostic reports the cycle path) — indirection/boxing to legitimately break such cycles is not yet designed and is called out as a known gap, not a silent omission. Discarding a non-`unit` call result is explicitly allowed without diagnostic in v0.0.3 (no correctness risk for scalars/structs); revisited once `Result` exists (new v0.0.6) where silently discarding it would violate §2.3.
 - **v0.4** — Absorbed core-language semantics that were decided during v0.0.1/v0.0.2 implementation but not yet recorded here, so the whitepaper stays the single source of truth rather than the compiler's own changelog competing with it: block scoping/shadowing rules, definite-return analysis, integer literal widening, and assignment-as-statement-not-expression (§3.2a, new). §3.6 now states explicitly, with no exceptions, that stdlib calls are always namespace-qualified (`io.println(...)`, never a bare `println`) — the v0.4.5 reference implementation's unqualified form is not carried forward.
 - **v0.3** — `kai debt` reframed explicitly as a *projection* of Trust state, not an independent fifth feature (Debt = unresolved Trust violations/degradation; Signal carries no debt). Reversibility formally split into two Trust subtypes in §5.0's table — Transactional (`state_after + inverse = state_before`) and Compensatable (`state_after + compensator ≈ acceptable_new_state`) — while `reversible` stays the single user-facing keyword. Added architectural principle: syntax lowers into one uniform `Trust<C>` IR; the effect checker and `kai debt` operate only on that IR, never on originating syntax (§5.0, §8 constraint 8). Added Decay taxonomy to Appendix A as a proposed, not-yet-adopted direction.
@@ -65,6 +67,8 @@ fn main() -> int32 {
     return 0;
 }
 ```
+
+**Version note:** this exact program isn't runnable until v0.0.5 — it needs both the module system (v0.0.4) and `string`/stdlib wiring (v0.0.5). It's shown here as the target shape of the language, not as a v0.0.1 milestone; v0.0.1's actual minimum is `fn main() -> int32 { return 0; }` (§7).
 
 ### 3.2 Types
 
@@ -155,13 +159,16 @@ fn main() -> int32 {
 }
 ```
 
-- `use a.b;` resolves to `a/b.kai` from project root.
+- `use a.b;` resolves to `a/b.kai` from the **project root**, defined as the directory containing the entry file passed to `kai build`/`kai run` — not the invoking process's working directory. This keeps resolution deterministic regardless of where the command happens to be run from; a future project manifest (not yet designed) may redefine root as its own location, but that's an open question for later, not a v0.0.4 concern.
 - Path segments `.`, `..`, `/`, `\` are rejected.
 - Circular imports are a diagnostic, not a silent stack overflow.
-- `public fn` is visible through the module alias; plain `fn` is module-private.
+- `public fn` and `public type` are visible through the module alias; plain `fn`/`type` stay module-private. Without `public type`, a struct could never cross a module boundary at all — a module could expose a constructor function but callers would have no way to name or read fields of the type it returns. Both keywords behave identically: `[ 'public' ] 'fn' ...` and `[ 'public' ] 'type' ...`.
 - Imports never inject into global scope — always namespace-qualified. **No exceptions, including stdlib.** `println` is always `io.println(...)`; there is no globally-injected builtin form. (This is a deliberate reversal of the v0.4.5 reference implementation, which called `println(msg)` unqualified — that form is not carried forward.)
+- **v0.0.4's own tests don't need the stdlib.** Module resolution, qualified calls, `public` visibility, and circular-import detection are all fully exercisable with user-defined modules alone (e.g. a local `support/math.kai` with `public fn add(a: int32, b: int32) -> int32`). The stdlib itself is deferred to v0.0.5 (§3.7) — implementing any of it now against types that don't exist yet would just be thrown-away work.
 
 ### 3.7 Standard library (built-in, no disk resolution)
+
+**Version note:** deferred to v0.0.5. Every stdlib signature here depends on `string` and/or arrays, neither of which exist before v0.0.5 (Ownership runtime, §7) — implementing this earlier would be discarded once those types land.
 
 | Import | Surface |
 |---|---|
@@ -403,7 +410,7 @@ Strict ordering. A version does not start until the previous one has a working, 
 | v0.0.1 | `fn main`, `return`, `int32` literal | Full lexer→parser→typecheck→TAST→codegen(LLVM) pipeline, as separate modules with the AST/TAST boundary enforced, on the smallest possible program |
 | v0.0.2 | `let`/`var`, primitives, arithmetic, `if/else` | `let` vs `var` mutability enforced (§9.3) |
 | v0.0.3 | `type` structs, struct literals, field read **and** field write (write gated by `mut`), function calls with params, `mut` parameters, cyclic-struct-definition rejection | Type checker does real signature/field matching; `Place` rule covers field access for assignment (grammar); `mut` on a stack-type parameter is local-copy-permission only, zero ABI difference, not observable by the caller (§9.3) — **no retain-rule claim here**, since v0.0.3 has zero heap-bearing types active; cyclic struct defs rejected via DFS over the `TypeDecl` graph with the cycle path in the diagnostic |
-| v0.0.4 | `use` / module system | Circular import detection tested |
+| v0.0.4 | `use` / module system, `public fn`/`public type` | Circular import detection tested; project root = entry-file directory (deterministic, not CWD); module resolution/qualified calls/visibility tested entirely via user-defined modules, no stdlib dependency |
 | v0.0.5 | **Ownership runtime** — `string`, array literals + indexing, `for..in`, retain/release enforcement | Ownership-transfer retain rule (§9.5) actually exercised and tested for `return`/struct-literal/array-literal, now that heap-bearing types (`string`, arrays) exist to trigger it; `for..in` borrows each element per iteration (§9.9) |
 | v0.0.6 | `Optional`, `Result`, closures | Generic/parametric typing works; discarding a `Result` becomes a diagnostic (§3.2a); discarding an `Optional` — policy decided in this version, not deferred further (Appendix A) |
 | v0.0.7 | `@local`, `@wallclock`, temporal flow analysis, cross-boundary rule | Compile error enforced when `@local` crosses a compiler-untraceable boundary (§5.1) |
@@ -433,7 +440,7 @@ Toolchain carried over from v0.4.5, kept deliberately: hand-written recursive-de
 
 5. Every phase has its own unit tests, independent of end-to-end tests. TAST fixtures are asserted directly (no LLVM execution needed) separately from codegen fixtures (LLVM IR / execution output). Golden fixture files (`tests/fixtures/*.kai` + `*.expected`) back every language feature.
 
-6. Diagnostics (`{ message, span, severity }`) are a first-class type from v0.0.1, not retrofitted.
+6. Diagnostics (`{ file, message, span, severity }`) are a first-class type from v0.0.1, not retrofitted. `file` is `Option<String>`/nullable in single-file phases (v0.0.1–v0.0.3, before modules exist) and populated from v0.0.4 onward once multiple files can be loaded into one compilation — this was surfaced as a real gap during v0.0.4 planning: `span` alone is ambiguous once more than one source file exists in the same diagnostic stream, and §10.1's panic format already implied a file-qualified location (`at src/orders.kai:42:9`) without the base `Diagnostic` shape actually carrying one.
 
 7. LLVM/inkwell codegen is written from v0.0.1 onward (not deferred to an interpreter-first phase) — but only ever against TAST, never against raw AST, per constraint 2. If a version's scope has no type checker yet (there shouldn't be one without typecheck existing first — see §7), codegen for that version does not exist yet either.
 
@@ -595,7 +602,7 @@ kai runtime panic: <message>
   at src/orders.kai:42:9
 ```
 
-The source location is mandatory. Kai's diagnostics (`{ message, span, severity }`) are first-class from v0.0.1 (§8, constraint 6); a panic without a location would be the one error path in the language that doesn't benefit from that investment.
+The source location is mandatory. Kai's diagnostics (`{ file, message, span, severity }`) are first-class from v0.0.1 (§8, constraint 6); a panic without a location would be the one error path in the language that doesn't benefit from that investment.
 
 ### 10.2 Current runtime panics
 

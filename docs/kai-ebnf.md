@@ -1,6 +1,6 @@
 # Kai — Core Language Grammar (EBNF)
 
-**Scope:** v0.0.1–v0.0.6 (whitepaper v0.5's roadmap: v0.0.5 is now the
+**Scope:** v0.0.1–v0.0.6 (whitepaper v0.7's roadmap: v0.0.5 is now the
 "Ownership runtime" slot — `string`, arrays, `for..in`, retain/release —
 inserted between modules (v0.0.4) and Optional/Result/closures (now v0.0.6,
 was v0.0.5). The trust-aware layer (`require`, `observe`, `@local`/
@@ -33,7 +33,7 @@ Letter       ::= 'a'..'z' | 'A'..'Z'
 Digit        ::= '0'..'9'
 
 Keyword      ::= 'fn' | 'let' | 'var' | 'type' | 'use' | 'return'
-               | 'if' | 'else' | 'for' | 'in'
+               | 'if' | 'else' | 'for' | 'in' | 'while'
                | 'true' | 'false'
                | 'public' | 'mut'
                | 'Some' | 'Result' | 'Optional'   (* Optional not yet used as keyword in examples — see open items *)
@@ -54,6 +54,7 @@ Interpolation ::= '${' Expr '}'
 (* Operators and punctuation *)
 Op           ::= '+' | '-' | '*' | '/' | '%'
                | '==' | '!=' | '<' | '>' | '<=' | '>='
+               | '&&' | '||' | '!'
                | '=' | '+=' | '-=' | '*=' | '/='
                | '??' | '->' | '.' | ',' | ':' | ';'
                | '(' | ')' | '{' | '}' | '[' | ']'
@@ -81,7 +82,11 @@ ModulePath   ::= Ident { '.' Ident }
 ## 3. Type declarations
 
 ```ebnf
-TypeDecl     ::= 'type' Ident '=' TypeBody
+TypeDecl     ::= [ 'public' ] 'type' Ident '=' TypeBody
+               (* `public type` added — without it, structs could never
+                  cross a module boundary at all (a caller could receive
+                  a value of the type but never name or read its fields).
+                  Same visibility rule as `public fn`, applied uniformly. *)
 TypeBody     ::= StructBody
                (* struct is the only TypeBody form shown so far — §3.3.
                   Type aliases like `type int = int32;` (§3.2) are a
@@ -222,7 +227,19 @@ UnaryExpr    ::= [ '-' | '!' ] PostfixExpr
                   an unrepresentable positive constant. *)
 
 PostfixExpr  ::= PrimaryExpr { PostfixOp }
-PostfixOp    ::= '.' Ident                   (* field access / module-qualified call, e.g. math.sqrt *)
+PostfixOp    ::= '.' Ident                   (* field access. Also produces the
+                    shape for module-qualified calls, e.g. math.sqrt(9.0) —
+                    parses as Call(FieldAccess(Ident("math"), "sqrt"), args)
+                    via ordinary composition below. No separate "qualified
+                    call" node exists or is needed: the parser only ever
+                    produces FieldAccess + Call, and the RESOLVER — not the
+                    parser — later decides whether a given FieldAccess base
+                    identifier names a module (§3.6) or an ordinary struct
+                    value, per open item #6. This is deliberate: keeping the
+                    parser meaning-agnostic here mirrors §8's TAST boundary
+                    discipline one layer up (typed input, mechanical
+                    consumer) — module-vs-value is exactly the kind of
+                    semantic distinction the parser must not encode. *)
                | '(' [ ArgList ] ')'          (* call *)
                | '[' Expr ']'                 (* array index *)
                | '.' 'unwrap_or' '(' Expr ')' (* Result unwrap — §3.4 *)
@@ -241,7 +258,19 @@ PrimaryExpr  ::= IntLit
 
 ArgList      ::= Expr { ',' Expr }
 
-StructLit    ::= Ident '{' [ FieldInitList ] '}'
+StructLit    ::= QualifiedName '{' [ FieldInitList ] '}'
+QualifiedName ::= Ident { '.' Ident }
+               (* Generalized from a bare Ident (earlier draft) to support
+                  `math.Point { x: 1, y: 2 }` — a module-qualified struct
+                  literal, needed once v0.0.4 modules exist. Reuses the same
+                  shape as ModulePath (§2) rather than introducing a
+                  parallel "QualifiedStructLit" node: it's the same concept
+                  (a dotted name) in both places, and — same reasoning as
+                  the PostfixOp note above — whether the qualifier names a
+                  module is still a resolver-phase question, not something
+                  this rule encodes. A bare Ident is just the len-1 case of
+                  QualifiedName, so no separate unqualified form is needed
+                  either. *)
 FieldInitList ::= FieldInit { ',' FieldInit }
 FieldInit    ::= Ident ':' Expr
 
@@ -281,7 +310,8 @@ own changelog.
 3. **Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime)** — previously unscheduled anywhere. `ForStmt`/`ArrayType`/`ArrayLit` in this grammar are still spec-only until v0.0.5 actually lands, but the "no version assigned" gap itself is resolved.
 4. **`ClosureLit` still uses `fn(...)` while `ClosureType` dropped it** (§3.5's stated change was type-only). Not yet implemented (closures are v0.0.6, not yet reached) — still open.
 5. ~~Assignable place — partially resolved.~~ **Now fully resolved for v0.0.3's scope.** Assignment is statement-only (confirmed by implementation), and `Place` now includes field access (`Place '.' Ident`) per the v0.0.3 field-read/field-write decision — see the `Place` rule above. Array-index alternative (`Place '[' Expr ']'`) remains open until arrays land at v0.0.5.
-6. **Module-qualified calls (`math.sqrt(9.0)`) and struct field access (`user.name`) share the same `.` postfix rule** — still open; modules (v0.0.4) and structs (v0.0.3) haven't both landed yet to test this against real code.
+6. **Module-qualified calls (`math.sqrt(9.0)`) and struct field access (`user.name`) share the same `.` postfix rule — resolved architecturally, not yet exercised by real code.** No separate AST node for "qualified call" — `math.sqrt(9.0)` parses as ordinary `Call(FieldAccess(Ident, Ident), args)` via the existing `PostfixExpr` composition (see `PostfixOp` note above); disambiguating whether the base identifier is a module or a value is a resolver-phase job. `StructLit`'s head was generalized to `QualifiedName` (dotted, §7 above) for the same reason, so `math.Point { ... }` parses without a parallel node either. This decision is recorded so a "QualifiedCall"/"QualifiedStructLit" special-case node doesn't get reintroduced later out of convenience — it would duplicate what composition already provides and push a semantic (module-vs-value) distinction into the parser, which contradicts the parser/resolver boundary this project has held everywhere else (§8's TAST discipline, the `Trust<C>` IR in §5.0/§8). Still needs real-code testing once modules (v0.0.4) and structs (v0.0.3) have both landed.
+   **Downstream consequence, worth being precise about:** the meaning-agnostic parse means `p.add(2, 3)` (a struct field called like a function) is syntactically identical to `math.add(2, 3)` — the parser genuinely cannot and should not tell them apart. But the two cases resolve through **different diagnostic paths, not one shared "direct-call" diagnostic**: if the base resolves to a module (via `use`), an unknown/private member is a **resolver-phase** diagnostic (commit 4's "unknown module member"/"private access"). If the base resolves to an ordinary value, there is no module-lookup step at all — it falls to **typecheck**, with two sub-cases: the named field doesn't exist on the value's type (the same "unknown field" diagnostic an ordinary read like `p.add` would already produce, call or not), or the field exists but its type isn't callable ("value of type X is not callable" — a genuinely new diagnostic case, only reachable once closures exist at v0.0.6, since before that **no struct field is ever callable, unconditionally** — every `p.<field>(...)` where `p` isn't a module resolves as invalid at v0.0.3–v0.0.5, just via whichever of the two typecheck sub-cases the field name happens to hit).
 7. **`Optional<T>` vs. postfix `T?`** — still open; Optional/Result are now v0.0.6 scope (shifted from v0.0.5), not yet implemented.
 8. ~~`println` called unqualified in v0.4.5 reference code contradicts §3.6's "always namespace-qualified" rule.~~ **Resolved: `io.println(...)` only, no exception.** The v0.4.5 sample predates the current whitepaper's strict qualification rule and is not carried forward — every stdlib call, including `println`, goes through its namespace with no globally-injected builtins. Now recorded in whitepaper §3.6.
 9. ~~Language-level semantics decided in the compiler but not yet written into the whitepaper.~~ **Resolved.** Block scoping/shadowing, definite-return analysis, and integer literal widening are now in whitepaper §3.2a.
