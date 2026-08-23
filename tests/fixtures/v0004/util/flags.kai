@@ -1,0 +1,15 @@
+// util.flags — public surface: pick.
+//
+// `describe` deliberately shares its name with the private helper in
+// math/geometry.kai: separate module namespaces must keep them distinct.
+
+fn describe() -> int32 {
+    return 7;
+}
+
+public fn pick(n: int32) -> int32 {
+    if n > 0 {
+        return describe();
+    }
+    return 0 - describe();
+}

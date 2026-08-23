@@ -453,3 +453,30 @@ fn string_api_still_refuses_use_decls() {
     assert_eq!(failure.phase, "resolve");
     assert!(failure.diagnostics[0].message.contains("file entry point"));
 }
+
+// -- v0.0.4 fixture: multi-module project ------------------------------------
+
+fn v0004_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/v0004/main.kai")
+}
+
+#[test]
+fn v004_file_pipeline_matches_golden_ir() {
+    let ir = pipeline::compile_file(&v0004_entry()).expect("compilation should succeed");
+
+    let golden = v0004_entry().with_file_name("main.expected.ll");
+    if !golden.exists() {
+        std::fs::write(&golden, &ir).unwrap();
+        panic!("golden file missing — wrote it, re-run the test to compare");
+    }
+
+    let expected = std::fs::read_to_string(&golden).unwrap();
+    assert_eq!(ir, expected, "generated IR diverged from golden file");
+}
+
+#[test]
+fn v004_jit_module_tree_returns_expected_value() {
+    // 6 + 8 + 7 + 10 across three modules (see main.kai).
+    assert_eq!(pipeline::jit_file(&v0004_entry()).unwrap(), 31);
+}

@@ -1,0 +1,19 @@
+// math.geometry — public surface: Point, double, tag.
+
+public type Point = {
+    x: int32;
+    y: int32;
+}
+
+public fn double(p: Point) -> Point {
+    return Point { x: p.x * 2, y: p.y * 2 };
+}
+
+// Private to this module; importers cannot reach `describe` directly.
+fn describe() -> int32 {
+    return 100;
+}
+
+public fn tag() -> int32 {
+    return describe() / 10;
+}

@@ -1,0 +1,23 @@
+use math.geometry;
+use util.flags;
+
+// v0.0.4: the first multi-module program.
+//
+// - `geometry.Point` is a PUBLIC struct built through its module alias;
+// - `flags.describe` and `geometry.describe` share a name but live in
+//   different modules — unqualified lookups never cross module lines, so
+//   each helper resolves inside its own file only;
+// - `geometry.tag` calls its own private `describe` internally.
+
+fn main() -> int32 {
+    let origin = geometry.Point { x: 3, y: 4 };
+    let doubled = geometry.double(origin);
+    let flag = flags.pick(doubled.x);
+
+    // doubled == (6, 8); pick(6) -> flags' private describe() == 7;
+    // geometry.tag() -> 10 via ITS private describe().
+    if doubled.x == 6 && doubled.y == 8 && flag == 7 && geometry.tag() == 10 {
+        return doubled.x + doubled.y + flag + geometry.tag();
+    }
+    return 0;
+}
