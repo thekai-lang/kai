@@ -69,7 +69,7 @@ fn build_struct_layouts(checker: &mut Checker, program: &Program) -> Vec<kai_tas
                 .iter()
                 .map(|f| crate::checker::FieldSlot {
                     name: f.name.clone(),
-                    ty: f.ty,
+                    ty: f.ty.clone(),
                 })
                 .collect(),
         })
@@ -140,9 +140,9 @@ fn type_file(checker: &Checker, idx: usize) -> String {
 fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> TypedFnDecl {
     let ret = ty::resolve(checker, &decl.ret);
     let params = bind_params(checker, decl);
-    let body = stmt::lower_block(checker, &decl.body, ret);
+    let body = stmt::lower_block(checker, &decl.body, &ret);
 
-    ensure_returns_on_all_paths(checker, decl, ret, &body);
+    ensure_returns_on_all_paths(checker, decl, &ret, &body);
 
     TypedFnDecl {
         id,
@@ -163,7 +163,7 @@ fn bind_params(checker: &mut Checker, decl: &kai_ast::FnDecl) -> Vec<kai_tast::T
             let param_ty = ty::resolve(checker, &param.ty);
             match checker
                 .locals
-                .declare(&param.name.name, param_ty, param.mutable)
+                .declare(&param.name.name, param_ty.clone(), param.mutable)
             {
                 crate::scope::DeclareOutcome::Fresh(info) => Some(kai_tast::TypedParam {
                     local: info.id,
@@ -196,13 +196,13 @@ fn definitely_returns(block: &TypedBlock) -> bool {
 fn ensure_returns_on_all_paths(
     checker: &mut Checker,
     decl: &kai_ast::FnDecl,
-    ret: KaiType,
+    ret: &KaiType,
     body: &TypedBlock,
 ) {
-    if ret == KaiType::Unit || definitely_returns(body) {
+    if *ret == KaiType::Unit || definitely_returns(body) {
         return;
     }
     let span = decl.span;
     let name = decl.name.name.clone();
-    checker.error(error::function_needs_return(&name, ret, span));
+    checker.error(error::function_needs_return(&name, ret.clone(), span));
 }

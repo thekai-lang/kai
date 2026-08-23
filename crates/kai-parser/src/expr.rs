@@ -5,8 +5,8 @@
 use crate::error;
 use crate::parser::Parser;
 use kai_ast::{
-    BinaryExpr, BinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr, FieldInit, FloatLit, IntLit,
-    StructLitExpr, UnaryExpr, UnaryOp,
+    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr, FieldInit,
+    FloatLit, IndexExpr, IntLit, StrLitExpr, StructLitExpr, UnaryExpr, UnaryOp,
 };
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
@@ -139,6 +139,22 @@ fn postfix(parser: &mut Parser) -> Expr {
                     }),
                 };
             }
+            TokenKind::LBracket => {
+                // `base[index]` — element read (v0.0.5). The index funnels
+                // through expr() for budget accounting like any nesting.
+                parser.bump(); // `[`
+                let index = expr(parser);
+                let rbracket = parser.expect_simple(&TokenKind::RBracket);
+                let span = Span::merge(e.span, rbracket);
+                e = Expr {
+                    span,
+                    kind: ExprKind::Index(IndexExpr {
+                        base: Box::new(e),
+                        index: Box::new(index),
+                        rbracket,
+                    }),
+                };
+            }
             TokenKind::LParen => {
                 parser.bump(); // `(`
                 let mut args = Vec::new();
@@ -182,6 +198,14 @@ fn primary(parser: &mut Parser) -> Expr {
                 span: token.span,
             }
         }};
+    }
+
+    if let TokenKind::StrLit(text) = token.kind.clone() {
+        parser.bump();
+        return Expr {
+            kind: ExprKind::StrLit(StrLitExpr { value: text }),
+            span: token.span,
+        };
     }
 
     match token.kind.clone() {
@@ -242,6 +266,28 @@ fn primary(parser: &mut Parser) -> Expr {
                 };
             }
             e
+        }
+        TokenKind::LBracket => {
+            // `[e0, e1, ..]` — array literal (v0.0.5). Empty `[]` is parsed
+            // fine; whether an element type exists is a typecheck question.
+            parser.bump(); // `[`
+            let mut elements = Vec::new();
+            if parser.peek().kind != TokenKind::RBracket {
+                loop {
+                    elements.push(expr(parser));
+                    if !parser.eat_simple(&TokenKind::Comma) {
+                        break;
+                    }
+                    if matches!(parser.peek().kind, TokenKind::RBracket | TokenKind::Eof) {
+                        break;
+                    }
+                }
+            }
+            let end = parser.expect_simple(&TokenKind::RBracket);
+            Expr {
+                span: Span::merge(token.span, end),
+                kind: ExprKind::ArrayLit(ArrayLitExpr { elements }),
+            }
         }
         TokenKind::LParen => {
             parser.bump(); // `(`

@@ -28,6 +28,16 @@ pub struct IfStmt {
     pub else_block: Option<Block>,
 }
 
+/// `for name in expr { ... }` — iterates an array, BORROWING each element
+/// per iteration (§9.9): the loop variable never owns, the array stays
+/// owner throughout and after the loop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForStmt {
+    pub binding: Ident,
+    pub iterable: Expr,
+    pub body: Block,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     /// `return;` carries `None` (unit return, usable from v0.0.2).
@@ -35,6 +45,7 @@ pub enum StmtKind {
     Let(LetStmt),
     Assign(AssignStmt),
     If(IfStmt),
+    For(ForStmt),
     /// Bare nested block: its own variable scope (§9.3 shadowing rules).
     Block(Block),
     Expr(Expr),

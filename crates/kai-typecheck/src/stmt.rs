@@ -14,7 +14,7 @@ use kai_tast::{
 pub(crate) fn lower_block(
     checker: &mut Checker,
     block: &AstBlock,
-    return_type: KaiType,
+    return_type: &KaiType,
 ) -> TypedBlock {
     checker.locals.push_scope();
     let stmts = block
@@ -26,7 +26,7 @@ pub(crate) fn lower_block(
     TypedBlock { stmts }
 }
 
-fn lower_stmt(checker: &mut Checker, stmt: &Stmt, return_type: KaiType) -> Option<TypedStmt> {
+fn lower_stmt(checker: &mut Checker, stmt: &Stmt, return_type: &KaiType) -> Option<TypedStmt> {
     match &stmt.kind {
         StmtKind::Return(value) => ret(checker, value.as_ref(), return_type, stmt.span),
         StmtKind::Let(b) => binding(checker, b.name.clone(), b.mutable, b.ty.as_ref(), &b.init),
@@ -34,26 +34,34 @@ fn lower_stmt(checker: &mut Checker, stmt: &Stmt, return_type: KaiType) -> Optio
         StmtKind::If(i) => if_stmt(checker, i, return_type),
         StmtKind::Block(b) => Some(TypedStmt::Block(lower_block(checker, b, return_type))),
         StmtKind::Expr(e) => Some(TypedStmt::Expr(expr::lower(checker, e, None))),
+        // for..in lowering lands with array typing (v0.0.5, next commit).
+        StmtKind::For(f) => {
+            checker.error(kai_diagnostics::Diagnostic::error(
+                "for..in iteration requires array support (not yet wired)",
+                f.binding.span,
+            ));
+            None
+        }
     }
 }
 
 fn ret(
     checker: &mut Checker,
     value: Option<&kai_ast::Expr>,
-    return_type: KaiType,
+    return_type: &KaiType,
     span: kai_diagnostics::Span,
 ) -> Option<TypedStmt> {
-    let value = value.map(|e| expr::lower(checker, e, Some(return_type)));
+    let value = value.map(|e| expr::lower(checker, e, Some(return_type.clone())));
 
     match &value {
         None => {
-            if return_type != KaiType::Unit {
-                checker.error(error::missing_return_value(return_type, span));
+            if *return_type != KaiType::Unit {
+                checker.error(error::missing_return_value(return_type.clone(), span));
             }
         }
-        Some(v) if v.ty != return_type => {
-            let found = v.ty;
-            checker.error(error::return_type_mismatch(return_type, found, span));
+        Some(v) if v.ty != *return_type => {
+            let found = v.ty.clone();
+            checker.error(error::return_type_mismatch(return_type.clone(), found, span));
         }
         Some(_) => {}
     }
@@ -70,15 +78,18 @@ fn binding(
     init: &kai_ast::Expr,
 ) -> Option<TypedStmt> {
     let annotated = annotation.map(|ty| ty::resolve(checker, ty));
-    let value = expr::lower(checker, init, annotated);
+    let value = expr::lower(checker, init, annotated.clone());
 
-    if let Some(expected) = annotated
-        && expected != value.ty
+    if let Some(expected) = &annotated
+        && *expected != value.ty
     {
-        let found = value.ty;
+        let found = value.ty.clone();
         let name_text = name.name.clone();
         checker.error(error::init_type_mismatch(
-            &name_text, expected, found, init.span,
+            &name_text,
+            expected.clone(),
+            found,
+            init.span,
         ));
     }
 
@@ -88,7 +99,8 @@ fn binding(
 
     let declared_name = name.name.clone();
     let span = name.span;
-    match checker.locals.declare(&declared_name, value.ty, mutable) {
+    let declared_ty = value.ty.clone();
+    match checker.locals.declare(&declared_name, declared_ty, mutable) {
         crate::scope::DeclareOutcome::Fresh(info) => Some(TypedStmt::Let(TypedLet {
             local: info.id,
             name: declared_name,
@@ -116,9 +128,9 @@ fn assign(
     // The ROOT binding gates the whole place (§9.3): `mut` on a stack-type
     // param is a purely local permission; immutability of the root rejects
     // writes through any field path too.
-    let (root_name, root_span, path_idents) = match target {
+    let (root_name, root_span, place_steps) = match target {
         kai_ast::AssignTarget::Named(name) => (name.name.clone(), name.span, Vec::new()),
-        kai_ast::AssignTarget::Field { root, path } => (root.name.clone(), root.span, path.clone()),
+        kai_ast::AssignTarget::Path { root, steps } => (root.name.clone(), root.span, steps.clone()),
     };
 
     let info = match checker.locals.lookup(&root_name) {
@@ -133,44 +145,54 @@ fn assign(
         checker.error(error::assign_to_immutable(&root_name, root_span));
     }
 
-    // Walk the field chain, resolving each segment against the layout table.
-    let mut cur_ty = info.ty;
+    // Walk the projection chain, resolving each segment against the layout
+    // table. Index projections land with array typing (v0.0.5, in progress).
+    let mut cur_ty = info.ty.clone();
     let mut steps: Vec<FieldStep> = Vec::new();
-    for seg in &path_idents {
-        cur_ty = match cur_ty {
-            KaiType::Struct(struct_id) => match checker.field_slot(struct_id, &seg.name) {
-                Some((index, slot)) => {
-                    steps.push(FieldStep {
-                        struct_id,
-                        field: index,
-                    });
-                    slot.ty
-                }
-                None => {
-                    let ty_name = checker.type_name(struct_id).to_string();
-                    let field = seg.name.clone();
-                    checker.error(error::no_such_field(&ty_name, &field, seg.span));
+    for step in &place_steps {
+        cur_ty = match step {
+            kai_ast::PlaceStep::Field(seg) => match cur_ty {
+                KaiType::Struct(struct_id) => match checker.field_slot(struct_id, &seg.name) {
+                    Some((index, slot)) => {
+                        steps.push(FieldStep {
+                            struct_id,
+                            field: index,
+                        });
+                        slot.ty.clone()
+                    }
+                    None => {
+                        let ty_name = checker.type_name(struct_id).to_string();
+                        let field = seg.name.clone();
+                        checker.error(error::no_such_field(&ty_name, &field, seg.span));
+                        return None;
+                    }
+                },
+                other => {
+                    checker.error(error::field_access_on_non_struct(other, seg.span));
                     return None;
                 }
             },
-            other => {
-                checker.error(error::field_access_on_non_struct(other, seg.span));
+            kai_ast::PlaceStep::Index { rbracket, .. } => {
+                checker.error(kai_diagnostics::Diagnostic::error(
+                    "indexed assignment requires array support (not yet wired)",
+                    *rbracket,
+                ));
                 return None;
             }
         };
     }
 
-    let typed_value = expr::lower(checker, value, Some(cur_ty));
+    let typed_value = expr::lower(checker, value, Some(cur_ty.clone()));
 
     // Compound ops are read-modify-write: validate like the binary operator.
     let compound = compound_op(op);
     match compound {
         Some(binop) => {
-            check_compound(checker, binop, cur_ty, &typed_value, value.span);
+            check_compound(checker, binop, &cur_ty, &typed_value, value.span);
         }
         None if typed_value.ty != cur_ty => {
             let span = value.span;
-            let found = typed_value.ty;
+            let found = typed_value.ty.clone();
             checker.error(kai_diagnostics::Diagnostic::error(
                 format!("cannot assign `{found}` to a place of type `{cur_ty}`"),
                 span,
@@ -190,13 +212,13 @@ fn assign(
 fn check_compound(
     checker: &mut Checker,
     op: BinaryOp,
-    target_ty: KaiType,
+    target_ty: &KaiType,
     value: &TypedExpr,
     span: kai_diagnostics::Span,
 ) {
     let ok = match op {
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-            target_ty == value.ty
+            *target_ty == value.ty
                 && target_ty.is_numeric()
                 && (op != BinaryOp::Mod || target_ty.is_integer())
         }
@@ -204,7 +226,7 @@ fn check_compound(
     };
     if !ok {
         let name = op.describe();
-        checker.error(error::binary_type_mismatch(name, target_ty, value.ty, span));
+        checker.error(error::binary_type_mismatch(name, target_ty.clone(), value.ty.clone(), span));
     }
 }
 
@@ -221,12 +243,12 @@ fn compound_op(op: AssignOp) -> Option<BinaryOp> {
 fn if_stmt(
     checker: &mut Checker,
     if_: &kai_ast::IfStmt,
-    return_type: KaiType,
+    return_type: &KaiType,
 ) -> Option<TypedStmt> {
     let cond = expr::lower(checker, &if_.cond, None);
     if cond.ty != KaiType::Bool {
         let span = if_.cond.span;
-        let found = cond.ty;
+        let found = cond.ty.clone();
         checker.error(error::condition_not_bool(found, span));
     }
 

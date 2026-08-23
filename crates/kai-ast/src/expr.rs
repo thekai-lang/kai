@@ -103,6 +103,30 @@ pub struct FieldInit {
     pub value: Expr,
 }
 
+/// `[e0, e1, ..]` — array literal (v0.0.5). An empty form needs a context
+/// type to fix its element type (§9.7); the type checker enforces that.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayLitExpr {
+    pub elements: Vec<Expr>,
+}
+
+/// `"text"` — string literal with escapes already DECODED by the lexer
+/// (v0.0.5, plain literals only; `${...}` is deferred grammar).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrLitExpr {
+    pub value: String,
+}
+
+/// `base[index]` — array element read (v0.0.5). A borrow: it never touches
+/// ownership (§9.9).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexExpr {
+    pub base: Box<Expr>,
+    pub index: Box<Expr>,
+    /// Closing bracket span, for diagnostics pointing at the projection.
+    pub rbracket: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     IntLit(IntLit),
@@ -117,6 +141,9 @@ pub enum ExprKind {
     Call(CallExpr),
     FieldAccess(FieldAccessExpr),
     StructLit(StructLitExpr),
+    ArrayLit(ArrayLitExpr),
+    Index(IndexExpr),
+    StrLit(StrLitExpr),
     /// Poisoned node produced only by parser error recovery (e.g. an
     /// expression nested past the recursion budget). Downstream phases treat
     /// it as an error marker, never as compilable code.

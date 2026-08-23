@@ -60,12 +60,12 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
     // doubles as the operand type for compound read-modify-write.
     let value = match assign.op {
         Some(op) => {
-            let pointee = types::to_llvm(ctx, assign.value.ty);
+            let pointee = types::to_llvm(ctx, &assign.value.ty);
             let old = ctx
                 .builder
                 .build_load(pointee, ptr, "old")
                 .expect("load for compound assign");
-            expr::apply_binary(ctx, op, old, value, assign.value.ty)
+            expr::apply_binary(ctx, op, old, value, &assign.value.ty)
         }
         None => value,
     };
@@ -120,7 +120,7 @@ fn branch_to<'ctx>(ctx: &Ctx<'ctx>, target: BasicBlock<'ctx>) {
 
 /// Emits a return for any block left unterminated by control flow (e.g. an
 /// `if/else` where both arms returned, followed by unreachable statements).
-pub(crate) fn fallback_return<'ctx>(ctx: &Ctx<'ctx>, ret: kai_tast::KaiType) {
+pub(crate) fn fallback_return<'ctx>(ctx: &Ctx<'ctx>, ret: &kai_tast::KaiType) {
     let current: BasicBlock = ctx.builder.get_insert_block().expect("insert position");
     if current.get_terminator().is_some() {
         return;

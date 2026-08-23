@@ -24,5 +24,7 @@ pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
                 }
             },
         },
+        // `T[]`: the element type resolves like any other reference.
+        Ty::Array(elem) => KaiType::Array(Box::new(resolve(checker, elem))),
     }
 }

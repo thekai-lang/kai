@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use kai_tast::{KaiType, LocalId};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LocalInfo {
     pub id: LocalId,
     pub ty: KaiType,
@@ -15,7 +15,7 @@ pub struct LocalInfo {
     pub mutable: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DeclareOutcome {
     /// Name was new in this scope.
     Fresh(LocalInfo),
@@ -53,7 +53,7 @@ impl Locals {
     /// bindings; duplicates resolve to the original id.
     pub fn declare(&mut self, name: &str, ty: KaiType, mutable: bool) -> DeclareOutcome {
         let current = self.scopes.last_mut().expect("scope stack never empty");
-        if let Some(existing) = current.get(name).copied() {
+        if let Some(existing) = current.get(name).cloned() {
             return DeclareOutcome::Duplicate(existing);
         }
 
@@ -63,7 +63,7 @@ impl Locals {
             mutable,
         };
         self.next_id += 1;
-        current.insert(name.to_owned(), info);
+        current.insert(name.to_owned(), info.clone());
         DeclareOutcome::Fresh(info)
     }
 

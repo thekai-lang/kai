@@ -4,14 +4,19 @@ use kai_tast::KaiType;
 
 /// Kai value type -> LLVM type. Every new value-carrying `KaiType` variant
 /// must be mapped here exactly once.
-pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: KaiType) -> BasicTypeEnum<'ctx> {
-    match ty {
+pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicTypeEnum<'ctx> {
+    match *ty {
         KaiType::Int32 => ctx.context.i32_type().into(),
         KaiType::Int64 => ctx.context.i64_type().into(),
         KaiType::Float64 => ctx.context.f64_type().into(),
         KaiType::Bool => ctx.context.bool_type().into(),
         KaiType::Unit => unreachable!("unit has no LLVM value representation"),
         KaiType::Struct(id) => ctx.structs[id.0 as usize].into(),
+        // v0.0.5: heap values are POINTERS to `{ rc, len, .. }` headers.
+        // Real header layouts land with the ownership runtime; until a
+        // program can carry these types (typecheck still rejects them),
+        // the pointer shape is all emission ever needs.
+        KaiType::String | KaiType::Array(_) => ctx.context.ptr_type(inkwell::AddressSpace::default()).into(),
     }
 }
 
@@ -19,7 +24,7 @@ pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: KaiType) -> BasicTypeEnum<'ctx>
 /// (§9.3 — callees see copies, so mutation stays local).
 pub(crate) fn fn_signature<'ctx>(
     ctx: &Ctx<'ctx>,
-    ret: KaiType,
+    ret: &KaiType,
     params: &[BasicTypeEnum<'ctx>],
 ) -> inkwell::types::FunctionType<'ctx> {
     let params_meta: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = params
@@ -36,7 +41,7 @@ pub(crate) fn fn_signature<'ctx>(
 /// return without a value.
 pub(crate) fn zero_of<'ctx>(
     ctx: &Ctx<'ctx>,
-    ty: KaiType,
+    ty: &KaiType,
 ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
     match ty {
         KaiType::Unit => None,

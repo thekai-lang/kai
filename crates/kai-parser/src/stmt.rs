@@ -1,11 +1,12 @@
-//! Statements: bindings, assignment, if/else, return, bare expressions.
+//! Statements: bindings, assignment, if/else, for..in, return, bare expressions.
 
 use crate::error;
 use crate::expr;
 use crate::parser::Parser;
 use crate::ty;
 use kai_ast::{
-    AssignOp, AssignStmt, AssignTarget, Block, Expr, ExprKind, IfStmt, LetStmt, Stmt, StmtKind,
+    AssignOp, AssignStmt, AssignTarget, Block, Expr, ExprKind, ForStmt, IfStmt, LetStmt,
+    PlaceStep, Stmt, StmtKind,
 };
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
@@ -34,6 +35,7 @@ fn stmt(parser: &mut Parser) -> Stmt {
         TokenKind::Return => ret(parser),
         TokenKind::Let | TokenKind::Var => binding(parser),
         TokenKind::If => if_stmt(parser),
+        TokenKind::For => for_stmt(parser),
         TokenKind::LBrace => bare_block(parser),
         _ => expr_or_assign(parser),
     }
@@ -136,6 +138,31 @@ fn if_stmt(parser: &mut Parser) -> Stmt {
     }
 }
 
+/// `for name in expr { ... }` (v0.0.5, §9.9): iterates an array, borrowing
+/// each element into `name` for one iteration.
+///
+/// The iterable parses under NO_STRUCT_LITERAL (§9.3) exactly like an `if`
+/// condition: in `for c in chars {`, that `{` is always the loop body.
+fn for_stmt(parser: &mut Parser) -> Stmt {
+    let start = parser.span_here();
+    parser.bump(); // `for`
+
+    let binding = parser.expect_ident("a loop variable name");
+    parser.expect_simple(&TokenKind::In);
+    let iterable = parser.with_struct_lits_banned(|parser| expr::expr(parser));
+    let body = block(parser);
+
+    let span = Span::merge(start, body.span);
+    Stmt {
+        span,
+        kind: StmtKind::For(ForStmt {
+            binding,
+            iterable,
+            body,
+        }),
+    }
+}
+
 /// Distinguishes assignment (`x = e;`) from a bare expression statement by
 /// parsing an expression and checking for a following assign-op.
 fn expr_or_assign(parser: &mut Parser) -> Stmt {
@@ -197,32 +224,38 @@ fn try_assign_op(parser: &mut Parser) -> Option<AssignOp> {
     Some(op)
 }
 
-/// Accepts any `Place` (EBNF §3): a bare identifier or a field path
-/// (`p.x`, `line.start.y`) rooted at an identifier. Everything else —
-/// literals, calls, parenthesized exprs, operators — is not assignable.
+/// Accepts any `Place` (EBNF §6, v0.0.5): a bare identifier or a path of
+/// field/index projections rooted at one identifier (`p.x`, `arr[0]`,
+/// `p.arr[i].y`). Everything else — literals, calls, parenthesized exprs,
+/// operators — is not assignable. The ROOT alone decides writability (§9.3):
+/// every projection inherits it uniformly.
 fn place_from(expr: &Expr) -> Option<AssignTarget> {
-    match &expr.kind {
-        kai_ast::ExprKind::Ident(ident) => Some(AssignTarget::Named(ident.clone())),
-        kai_ast::ExprKind::FieldAccess(access) => {
-            let mut path = vec![access.field.clone()];
-            let mut cursor = access.base.as_ref();
-            loop {
-                match &cursor.kind {
-                    kai_ast::ExprKind::FieldAccess(inner) => {
-                        path.push(inner.field.clone());
-                        cursor = inner.base.as_ref();
-                    }
-                    kai_ast::ExprKind::Ident(root) => {
-                        path.reverse();
-                        return Some(AssignTarget::Field {
-                            root: root.clone(),
-                            path,
-                        });
-                    }
-                    _ => return None,
+    let mut steps_rev = Vec::new();
+    let mut cursor = expr;
+    loop {
+        match &cursor.kind {
+            kai_ast::ExprKind::Ident(root) => {
+                if steps_rev.is_empty() {
+                    return Some(AssignTarget::Named(root.clone()));
                 }
+                steps_rev.reverse();
+                return Some(AssignTarget::Path {
+                    root: root.clone(),
+                    steps: steps_rev,
+                });
             }
+            kai_ast::ExprKind::FieldAccess(access) => {
+                steps_rev.push(PlaceStep::Field(access.field.clone()));
+                cursor = access.base.as_ref();
+            }
+            kai_ast::ExprKind::Index(indexed) => {
+                steps_rev.push(PlaceStep::Index {
+                    index: indexed.index.as_ref().clone(),
+                    rbracket: indexed.rbracket,
+                });
+                cursor = indexed.base.as_ref();
+            }
+            _ => return None,
         }
-        _ => None,
     }
 }

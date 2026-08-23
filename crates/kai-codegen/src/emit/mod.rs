@@ -17,9 +17,9 @@ pub(crate) fn program(ctx: &mut Ctx, program: &TypedProgram) {
         let param_tys: Vec<BasicTypeEnum> = decl
             .params
             .iter()
-            .map(|p| types::to_llvm(ctx, p.ty))
+            .map(|p| types::to_llvm(ctx, &p.ty))
             .collect();
-        let fn_type = types::fn_signature(ctx, decl.ret, &param_tys);
+        let fn_type = types::fn_signature(ctx, &decl.ret, &param_tys);
         // Module-qualified symbol: same-named functions in different modules
         // never collide inside one LLVM module. Entry-module names stay bare
         // (`main` must be linkable/JIT-callable).
@@ -54,7 +54,7 @@ fn declare_structs(ctx: &mut Ctx, structs: &[TypedStruct]) {
         let field_tys: Vec<BasicTypeEnum> = ts
             .fields
             .iter()
-            .map(|f| types::to_llvm(ctx, f.ty))
+            .map(|f| types::to_llvm(ctx, &f.ty))
             .collect();
         ctx.structs[idx].set_body(&field_tys, false);
     }
@@ -83,7 +83,7 @@ fn function_body<'ctx>(ctx: &Ctx<'ctx>, decl: &kai_tast::TypedFnDecl) {
         let arg = function
             .get_nth_param(idx as u32)
             .expect("parameter exists");
-        let slot = alloca_in_entry(ctx, function, types::to_llvm(ctx, param.ty), &param.name);
+        let slot = alloca_in_entry(ctx, function, types::to_llvm(ctx, &param.ty), &param.name);
         let _ = ctx.builder.build_store(slot, arg);
         frame.bind(param.local, slot);
     }
@@ -94,7 +94,7 @@ fn function_body<'ctx>(ctx: &Ctx<'ctx>, decl: &kai_tast::TypedFnDecl) {
 
     // Control flow can leave the last block unterminated (both `if` arms
     // returned); close it with a dead fallback return so the module verifies.
-    stmt::fallback_return(ctx, decl.ret);
+    stmt::fallback_return(ctx, &decl.ret);
 }
 
 /// Codegen invariant: every stack allocation is emitted at the top of the

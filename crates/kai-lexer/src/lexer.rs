@@ -64,6 +64,9 @@ impl<'src> Lexer<'src> {
             b';' => Some(self.token(TokenKind::Semi, start)),
             b',' => Some(self.token(TokenKind::Comma, start)),
             b':' => Some(self.token(TokenKind::Colon, start)),
+            b'[' => Some(self.token(TokenKind::LBracket, start)),
+            b']' => Some(self.token(TokenKind::RBracket, start)),
+            b'"' => self.scan_string(start),
             b'-' => Some(self.scan_minus(start)),
             b'0'..=b'9' => Some(self.scan_number(byte, start)),
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.scan_word(start),
@@ -113,6 +116,59 @@ impl<'src> Lexer<'src> {
                 }
             },
         }
+    }
+
+    /// String literal (v0.0.5): `"..."` with exactly five escape sequences
+    /// (`\n`, `\t`, `\r`, `\"`, `\\`; §9.7). Anything else after a
+    /// backslash is a lex error — never silent pass-through. `${` is plain
+    /// text until interpolation is actually designed; newlines may not
+    /// appear inside a literal (an unterminated string reports once).
+    fn scan_string(&mut self, start: usize) -> Option<Token> {
+        let mut content: Vec<u8> = Vec::new();
+        loop {
+            match self.cursor.bump() {
+                None | Some(b'\n') => {
+                    // EOF or a raw newline both mean the closing quote never
+                    // came. The span covers the whole recovery region.
+                    self.diagnostics.push(Diagnostic::error(
+                        "unterminated string literal",
+                        Span::new(start, self.cursor.pos()),
+                    ));
+                    return None;
+                }
+                Some(b'"') => break,
+                Some(b'\\') => match self.cursor.bump() {
+                    Some(b'n') => content.push(b'\n'),
+                    Some(b't') => content.push(b'\t'),
+                    Some(b'r') => content.push(b'\r'),
+                    Some(b'"') => content.push(b'"'),
+                    Some(b'\\') => content.push(b'\\'),
+                    Some(other) => {
+                        // Keep scanning so one bad escape doesn't cascade;
+                        // the offending character stays literally.
+                        content.push(other);
+                        self.diagnostics.push(Diagnostic::error(
+                            format!(
+                                "unknown escape sequence `\\{}` (expected one of n, t, r, quote, backslash)",
+                                other as char
+                            ),
+                            Span::new(self.cursor.pos() - 2, self.cursor.pos()),
+                        ));
+                    }
+                    None => {
+                        self.diagnostics.push(Diagnostic::error(
+                            "unterminated string literal",
+                            Span::new(start, self.cursor.pos()),
+                        ));
+                        return None;
+                    }
+                },
+                Some(byte) => content.push(byte),
+            }
+        }
+
+        let text = String::from_utf8_lossy(&content).into_owned();
+        Some(self.token(TokenKind::StrLit(text), start))
     }
 
     /// `-` is three tokens deep: `->`, `-=`, or plain minus.
@@ -458,5 +514,74 @@ mod tests {
         let out = lex("if a & b {}");
         assert_eq!(out.diagnostics.len(), 1);
         assert!(out.diagnostics[0].message.contains("&&"));
+    }
+}
+
+#[cfg(test)]
+mod v0005_tests {
+    use super::*;
+
+    fn kinds(src: &str) -> Vec<TokenKind> {
+        lex(src).tokens.into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn plain_string_literal() {
+        assert_eq!(
+            kinds(r#"  "hello world"  "#),
+            vec![TokenKind::StrLit("hello world".into()), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn escape_sequences_decode() {
+        assert_eq!(
+            kinds(r#""a\nb\tc\rd\"e\\f""#),
+            vec![
+                TokenKind::StrLit("a\nb\tc\rd\"e\\f".into()),
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_escape_is_lex_error_but_string_scans_on() {
+        let out = lex(r#""a\qb""#);
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("unknown escape sequence")));
+        // One token still produced: recovery keeps the offending char.
+        match &out.tokens[0].kind {
+            TokenKind::StrLit(text) => assert_eq!(text, "aqb"),
+            other => panic!("expected string token, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unterminated_string_reports_once() {
+        let out = lex(r#"let s = "oops"#);
+        assert_eq!(out.diagnostics.len(), 1);
+        assert!(out.diagnostics[0].message.contains("unterminated"));
+    }
+
+    #[test]
+    fn dollar_brace_is_plain_text() {
+        // Interpolation is deferred (§9.7): `${` is ordinary literal text.
+        let out = lex(r#""value: ${x}""#);
+        assert!(out.diagnostics.is_empty());
+        match &out.tokens[0].kind {
+            TokenKind::StrLit(text) => assert_eq!(text, "value: ${x}"),
+            other => panic!("expected string token, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn brackets_and_for_in_keywords() {
+        let ks = kinds("for x in arr [1, 2]");
+        assert!(matches!(ks[0], TokenKind::For));
+        assert_eq!(ks[2], TokenKind::In);
+        assert!(matches!(ks[4], TokenKind::LBracket));
+        assert!(ks.last().is_some_and(|k| matches!(k, TokenKind::Eof)));
     }
 }

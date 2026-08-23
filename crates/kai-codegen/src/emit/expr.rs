@@ -12,27 +12,28 @@ pub(crate) fn emit<'ctx>(
     frame: &Frame<'ctx>,
     expr: &TypedExpr,
 ) -> BasicValueEnum<'ctx> {
+    let ty = expr.ty.clone();
     match &expr.kind {
-        TypedExprKind::IntLit(value) => int_const(ctx, *value, expr.ty).into(),
+        TypedExprKind::IntLit(value) => int_const(ctx, *value, &ty).into(),
         TypedExprKind::FloatLit(value) => ctx.context.f64_type().const_float(*value).into(),
         TypedExprKind::BoolLit(value) => ctx
             .context
             .bool_type()
             .const_int(*value as u64, false)
             .into(),
-        TypedExprKind::LocalRef(local) => load_local(ctx, frame, *local, expr.ty),
-        TypedExprKind::Neg(inner) => neg(ctx, frame, inner, expr.ty),
+        TypedExprKind::LocalRef(local) => load_local(ctx, frame, *local, &ty),
+        TypedExprKind::Neg(inner) => neg(ctx, frame, inner, &ty),
         TypedExprKind::Not(inner) => not(ctx, frame, inner),
         TypedExprKind::Binary { op, lhs, rhs } => binary(ctx, frame, *op, lhs, rhs),
         // Poisoned recovery node; only reachable in programs that failed
         // upstream. `undef` keeps emission total without inventing behavior.
-        TypedExprKind::Invalid => undef_of(ctx, expr.ty),
+        TypedExprKind::Invalid => undef_of(ctx, &ty),
         TypedExprKind::Call { func, args } => call(ctx, frame, *func, args),
         TypedExprKind::FieldAccess {
             base,
             struct_id,
             field,
-        } => field_read(ctx, frame, base, *struct_id, *field, expr.ty),
+        } => field_read(ctx, frame, base, *struct_id, *field, &ty),
         TypedExprKind::StructLit { struct_id, values } => {
             struct_lit(ctx, frame, *struct_id, values)
         }
@@ -73,7 +74,7 @@ fn field_read<'ctx>(
     base: &TypedExpr,
     struct_id: kai_tast::StructId,
     field: u16,
-    ty: KaiType,
+    ty: &KaiType,
 ) -> BasicValueEnum<'ctx> {
     match place_ptr(ctx, frame, base) {
         Some(base_ptr) => {
@@ -132,13 +133,13 @@ fn struct_lit<'ctx>(
         let _ = ctx.builder.build_store(field_ptr, v);
     }
 
-    let pointee = crate::types::to_llvm(ctx, KaiType::Struct(struct_id));
+    let pointee = crate::types::to_llvm(ctx, &KaiType::Struct(struct_id));
     ctx.builder
         .build_load(pointee, tmp, "lit")
         .expect("load literal")
 }
 
-fn undef_of<'ctx>(ctx: &Ctx<'ctx>, ty: KaiType) -> BasicValueEnum<'ctx> {
+fn undef_of<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicValueEnum<'ctx> {
     match crate::types::to_llvm(ctx, ty) {
         inkwell::types::BasicTypeEnum::IntType(int_ty) => int_ty.get_undef().into(),
         inkwell::types::BasicTypeEnum::FloatType(float_ty) => float_ty.get_undef().into(),
@@ -146,8 +147,8 @@ fn undef_of<'ctx>(ctx: &Ctx<'ctx>, ty: KaiType) -> BasicValueEnum<'ctx> {
     }
 }
 
-fn int_const<'ctx>(ctx: &Ctx<'ctx>, value: i64, ty: KaiType) -> IntValue<'ctx> {
-    let int_ty = match ty {
+fn int_const<'ctx>(ctx: &Ctx<'ctx>, value: i64, ty: &KaiType) -> IntValue<'ctx> {
+    let int_ty = match *ty {
         KaiType::Int64 => ctx.context.i64_type(),
         _ => ctx.context.i32_type(),
     };
@@ -159,7 +160,7 @@ fn load_local<'ctx>(
     ctx: &Ctx<'ctx>,
     frame: &Frame<'ctx>,
     local: kai_tast::LocalId,
-    ty: KaiType,
+    ty: &KaiType,
 ) -> BasicValueEnum<'ctx> {
     let slot = frame.slot(local);
     let pointee = crate::types::to_llvm(ctx, ty);
@@ -172,10 +173,10 @@ fn neg<'ctx>(
     ctx: &Ctx<'ctx>,
     frame: &Frame<'ctx>,
     operand: &TypedExpr,
-    result_ty: KaiType,
+    result_ty: &KaiType,
 ) -> BasicValueEnum<'ctx> {
     let value = emit(ctx, frame, operand);
-    if result_ty == KaiType::Float64 {
+    if *result_ty == KaiType::Float64 {
         let as_float = value.into_float_value();
         ctx.builder
             .build_float_neg(as_float, "neg")
@@ -206,7 +207,7 @@ pub(crate) fn apply_binary<'ctx>(
     op: BinaryOp,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
-    operand_ty: KaiType,
+    operand_ty: &KaiType,
 ) -> BasicValueEnum<'ctx> {
     match operand_ty {
         KaiType::Float64 => float_arith(ctx, op, lhs.into_float_value(), rhs.into_float_value()),
@@ -309,7 +310,7 @@ fn binary<'ctx>(
         _ => {
             let l = emit(ctx, frame, lhs);
             let r = emit(ctx, frame, rhs);
-            apply_binary(ctx, op, l, r, lhs.ty)
+            apply_binary(ctx, op, l, r, &lhs.ty)
         }
     }
 }

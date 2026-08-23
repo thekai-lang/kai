@@ -21,6 +21,9 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         // fn/type as visible through the importing module's alias (§3.6).
         "use" => Some(TokenKind::Use),
         "public" => Some(TokenKind::Public),
+        // v0.0.5 keywords. `for`/`in` open the array iteration loop (§9.9).
+        "for" => Some(TokenKind::For),
+        "in" => Some(TokenKind::In),
         _ => None,
     }
 }

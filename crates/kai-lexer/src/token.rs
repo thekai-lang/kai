@@ -14,9 +14,13 @@ pub enum TokenKind {
     Mut,
     Use,
     Public,
+    For,
+    In,
     Ident(String),
     IntLit(u64),
     FloatLit(f64),
+    /// Decoded string content (escapes already applied by the lexer).
+    StrLit(String),
     // Arithmetic / assignment
     Plus,
     Minus,
@@ -49,6 +53,8 @@ pub enum TokenKind {
     RBrace,
     Semi,
     Colon,
+    LBracket,
+    RBracket,
     Eof,
 }
 
@@ -78,10 +84,13 @@ impl TokenKind {
             TokenKind::Mut => "`mut`".into(),
             TokenKind::Use => "`use`".into(),
             TokenKind::Public => "`public`".into(),
+            TokenKind::For => "`for`".into(),
+            TokenKind::In => "`in`".into(),
             TokenKind::True | TokenKind::False => "boolean literal".into(),
             TokenKind::Ident(name) => format!("identifier `{name}`"),
             TokenKind::IntLit(value) => format!("integer literal `{value}`"),
             TokenKind::FloatLit(value) => format!("float literal `{value}`"),
+            TokenKind::StrLit(_) => "string literal".into(),
             TokenKind::Plus => "`+`".into(),
             TokenKind::Minus => "`-`".into(),
             TokenKind::Star => "`*`".into(),
@@ -110,6 +119,8 @@ impl TokenKind {
             TokenKind::RBrace => "`}`".into(),
             TokenKind::Semi => "`;`".into(),
             TokenKind::Colon => "`:`".into(),
+            TokenKind::LBracket => "`[`".into(),
+            TokenKind::RBracket => "`]`".into(),
             TokenKind::Eof => "end of file".into(),
         }
     }

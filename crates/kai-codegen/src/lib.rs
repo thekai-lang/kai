@@ -464,7 +464,7 @@ mod v0004_tests {
         let mut decl = tests::fn_decl(
             id,
             name,
-            ret,
+            ret.clone(),
             vec![TypedStmt::Return(Some(TypedExpr::new(
                 TypedExprKind::IntLit(value),
                 ret,

@@ -264,6 +264,9 @@ pub(crate) fn detect_cycles(
                 .iter()
                 .filter_map(|field| match &field.ty {
                     Ty::Named(ident) => table.get(&ident.name).copied(),
+                    // Array fields are pointers to heap headers (§9.1):
+                    // they never close a value-layout cycle.
+                    Ty::Array(_) => None,
                 })
                 .collect()
         }
