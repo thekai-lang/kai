@@ -4,6 +4,7 @@
 use kai_driver::pipeline;
 use std::path::PathBuf;
 
+
 fn fixture(rel: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures")
@@ -327,4 +328,128 @@ fn v004_string_api_rejects_use_bearing_source() {
         "got: {}",
         failure.diagnostics[0].message
     );
+}
+
+// -- v0.0.4: file entry points and module trees ------------------------------
+
+use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+fn temp_project(tag: &str) -> PathBuf {
+    static N: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "kai-e2e-{}-{}-{}",
+        tag,
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+fn write(root: &Path, rel: &str, text: &str) -> PathBuf {
+    let path = root.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn file_pipeline_compiles_and_jits_a_module_tree() {
+    let root = temp_project("tree");
+    let entry = write(
+        &root,
+        "main.kai",
+        "use math.ops;\nfn main() -> int32 { return ops.three(); }",
+    );
+    write(
+        &root,
+        "math/ops.kai",
+        "public fn three() -> int32 { return 3; }",
+    );
+
+    assert_eq!(pipeline::jit_file(&entry).unwrap(), 3);
+
+    let ir = pipeline::compile_file(&entry).unwrap();
+    assert!(ir.contains("@math.ops.three"), "ir:\n{ir}");
+}
+
+#[test]
+fn file_pipeline_type_errors_name_the_imported_file() {
+    let root = temp_project("typeerr");
+    let entry = write(
+        &root,
+        "main.kai",
+        "use math.ops;\nfn main() -> int32 { return ops.three(); }",
+    );
+    write(&root, "math/ops.kai", "public fn three() -> bool { return true; }");
+
+    // Entry expects int32 from main; the MODULE body's own mismatch (bool ret
+    // is fine for a helper) must surface via three()'s use in main.
+    let failure = pipeline::jit_file(&entry).unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(
+        failure
+            .sources
+            .iter()
+            .any(|(name, src)| name == "math/ops.kai" && src.contains("public fn three"))
+    );
+    assert!(
+        failure.diagnostics[0].message.len() > 0,
+        "diagnostics are present"
+    );
+}
+
+#[test]
+fn file_pipeline_reports_missing_module_from_loader() {
+    let root = temp_project("ghostmod");
+    let entry = write(
+        &root,
+        "main.kai",
+        "use ghost.thing;\nfn main() -> int32 { return 0; }",
+    );
+
+    let failure = pipeline::compile_file(&entry).unwrap_err();
+    assert_eq!(failure.phase, "resolve");
+    assert_eq!(
+        failure.diagnostics[0].message,
+        "cannot find module `ghost.thing`"
+    );
+    assert_eq!(failure.diagnostics[0].file.as_deref(), Some("main.kai"));
+}
+
+#[test]
+fn file_pipeline_rejects_private_access_across_modules() {
+    let root = temp_project("private");
+    let entry = write(
+        &root,
+        "main.kai",
+        "use util.core;\nfn main() -> int32 { return core.secret(); }",
+    );
+    write(
+        &root,
+        "util/core.kai",
+        "fn secret() -> int32 { return 42; }",
+    );
+
+    let failure = pipeline::jit_file(&entry).unwrap_err();
+    assert_eq!(failure.phase, "typecheck");
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message == "function `core.secret` is not public"),
+        "{:?}",
+        failure.diagnostics
+    );
+}
+
+#[test]
+fn string_api_still_refuses_use_decls() {
+    let failure = pipeline::compile(
+        "use util.core;\nfn main() -> int32 { return 0; }",
+    )
+    .unwrap_err();
+    assert_eq!(failure.phase, "resolve");
+    assert!(failure.diagnostics[0].message.contains("file entry point"));
 }

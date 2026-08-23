@@ -22,16 +22,30 @@ pub struct LoadedModule {
     pub program: Program,
 }
 
+/// Load failure plus every file the loader touched (display path -> source),
+/// so diagnostics from ANY visited module can render a caret snippet.
+#[derive(Debug)]
+pub struct LoadFailure {
+    pub diagnostics: Vec<Diagnostic>,
+    pub sources: Vec<(String, String)>,
+}
+
 /// Loads the entry module plus every transitively imported one, in DFS
 /// pre-order (entry first). Lex/parse failures are attributed to their own
 /// file via `Diagnostic::file`.
-pub fn load(entry: &Path) -> Result<Vec<LoadedModule>, Vec<Diagnostic>> {
-    let source = std::fs::read_to_string(entry).map_err(|err| {
-        vec![Diagnostic::error(
-            format!("cannot read entry file `{}`: {err}", entry.display()),
-            Span::new(0, 0),
-        )]
-    })?;
+pub fn load(entry: &Path) -> Result<Vec<LoadedModule>, LoadFailure> {
+    let source = match std::fs::read_to_string(entry) {
+        Ok(source) => source,
+        Err(err) => {
+            return Err(LoadFailure {
+                diagnostics: vec![Diagnostic::error(
+                    format!("cannot read entry file `{}`: {err}", entry.display()),
+                    Span::new(0, 0),
+                )],
+                sources: Vec::new(),
+            })
+        }
+    };
 
     let root = entry.parent().unwrap_or_else(|| Path::new("."));
     // The entry lives directly under the root by definition, so its display
@@ -44,10 +58,15 @@ pub fn load(entry: &Path) -> Result<Vec<LoadedModule>, Vec<Diagnostic>> {
         finished: HashSet::new(),
         on_stack: HashMap::new(), // name -> position in the visit chain
         chain: Vec::new(),
+        sources: Vec::new(),
     };
 
-    ctx.load_module("", entry_display, source)?;
-    Ok(ctx.loaded)
+    ctx.load_module("", entry_display, source)
+        .map(|()| ctx.loaded)
+        .map_err(|diagnostics| LoadFailure {
+            diagnostics,
+            sources: std::mem::take(&mut ctx.sources),
+        })
 }
 
 struct Loader {
@@ -60,6 +79,9 @@ struct Loader {
     on_stack: HashMap<String, usize>,
     /// Names on the current DFS path, for cycle-chain rendering.
     chain: Vec<String>,
+    /// (display path, source) for EVERY file entered — recorded before any
+    /// parse can fail, so error rendering always finds its snippet.
+    sources: Vec<(String, String)>,
 }
 
 impl Loader {
@@ -69,6 +91,7 @@ impl Loader {
         file: String,
         source: String,
     ) -> Result<(), Vec<Diagnostic>> {
+        self.sources.push((file.clone(), source.clone()));
         let program = parse_source(&source, &file)?;
         let uses = program.use_decls.clone();
 
@@ -260,11 +283,14 @@ mod tests {
         );
 
         let err = load(&entry).unwrap_err();
-        let msg = &err[0].message;
+        let msg = &err.diagnostics[0].message;
         assert!(msg.contains("cyclic import"), "got: {msg}");
         assert!(msg.contains("mod.a"), "chain names the cycle: {msg}");
         // The diagnostic points at the importing file's use statement.
-        assert_eq!(err[0].file.as_deref(), Some("mod/b.kai"));
+        assert_eq!(
+            err.diagnostics[0].file.as_deref(),
+            Some("mod/b.kai")
+        );
     }
 
     #[test]
@@ -277,9 +303,18 @@ mod tests {
         );
 
         let err = load(&entry).unwrap_err();
-        assert_eq!(err[0].message, "cannot find module `ghost.thing`");
-        assert_eq!(err[0].file.as_deref(), Some("main.kai"));
-        assert!(err[0].span.end > 0, "span covers the use declaration");
+        assert_eq!(
+            err.diagnostics[0].message,
+            "cannot find module `ghost.thing`"
+        );
+        assert_eq!(err.diagnostics[0].file.as_deref(), Some("main.kai"));
+        assert!(
+            err.diagnostics[0].span.end > 0,
+            "span covers the use declaration"
+        );
+        // Failure carries the entry source so reports can render carets.
+        assert_eq!(err.sources.len(), 1);
+        assert_eq!(err.sources[0].0, "main.kai");
     }
 
     #[test]
@@ -293,7 +328,12 @@ mod tests {
         write(&root, "bad/mod.kai", "public fn f( -> int32 { return 1; }");
 
         let err = load(&entry).unwrap_err();
-        assert!(!err.is_empty());
-        assert!(err.iter().all(|d| d.file.as_deref() == Some("bad/mod.kai")));
+        assert!(!err.diagnostics.is_empty());
+        assert!(err
+            .diagnostics
+            .iter()
+            .all(|d| d.file.as_deref() == Some("bad/mod.kai")));
+        // Both files were entered and are available for rendering.
+        assert_eq!(err.sources.len(), 2);
     }
 }

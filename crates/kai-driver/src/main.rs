@@ -1,4 +1,5 @@
-use kai_driver::{cli, pipeline, report::render};
+use kai_driver::{cli, pipeline, report::render_multi};
+use std::path::Path;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -23,11 +24,7 @@ fn main() -> ExitCode {
 }
 
 fn build(input: &str, output: Option<&str>) -> ExitCode {
-    let Some(source) = read_source(input) else {
-        return ExitCode::FAILURE;
-    };
-
-    match pipeline::compile(&source) {
+    match pipeline::compile_file(Path::new(input)) {
         Ok(ir) => {
             let out_path = output
                 .map(str::to_owned)
@@ -43,33 +40,22 @@ fn build(input: &str, output: Option<&str>) -> ExitCode {
                 }
             }
         }
-        Err(failure) => report_failure(&failure, input, &source),
+        Err(failure) => report_failure(&failure),
     }
 }
 
 fn run(input: &str) -> ExitCode {
-    let Some(source) = read_source(input) else {
-        return ExitCode::FAILURE;
-    };
-
-    match pipeline::jit(&source) {
+    match pipeline::jit_file(Path::new(input)) {
         Ok(code) => ExitCode::from(code as u8),
-        Err(failure) => report_failure(&failure, input, &source),
+        Err(failure) => report_failure(&failure),
     }
 }
 
-fn read_source(path: &str) -> Option<String> {
-    match std::fs::read_to_string(path) {
-        Ok(source) => Some(source),
-        Err(err) => {
-            eprintln!("error: cannot read {path}: {err}");
-            None
-        }
-    }
-}
-
-fn report_failure(failure: &pipeline::Failure, source_name: &str, source: &str) -> ExitCode {
-    eprint!("{}", render(&failure.diagnostics, source_name, source));
+fn report_failure(failure: &pipeline::Failure) -> ExitCode {
+    eprint!(
+        "{}",
+        render_multi(&failure.diagnostics, &failure.sources)
+    );
     eprintln!("compilation failed at the `{}` phase", failure.phase);
     ExitCode::FAILURE
 }

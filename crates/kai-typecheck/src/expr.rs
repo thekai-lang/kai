@@ -31,7 +31,7 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         ExprKind::Binary(binary) => binary_expr(checker, binary, expected),
         ExprKind::Call(call) => call_expr(checker, call, expr.span),
         ExprKind::FieldAccess(access) => field_access(checker, access),
-        ExprKind::StructLit(lit) => struct_lit(checker, lit),
+        ExprKind::StructLit(lit) => struct_lit(checker, lit, expr.span),
         // Poisoned parser-recovery node. The program already failed upstream;
         // this defensive diagnostic keeps the phase contract explicit.
         ExprKind::Invalid => {
@@ -295,18 +295,25 @@ fn lhs_placeholder_ty(lhs: KaiType) -> KaiType {
 
 // -- v0.0.3: calls, field access, struct literals ---------------------------
 
-/// Only direct calls to declared functions exist (§9.3). Functions and types
-/// share names freely — namespaces are separate — so a struct name is NOT a
-/// valid callee.
+/// Only two callee shapes exist (§9.3): a plain name resolved inside the
+/// current module, or `alias.member` naming a PUBLIC function of an imported
+/// module. Functions and types share names freely — namespaces are separate
+/// — so a struct name is NOT a valid callee.
 fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
     let func_id = match &call.callee.kind {
-        ExprKind::Ident(ident) => match checker.resolution.fns.get(&ident.name) {
+        ExprKind::Ident(ident) => match checker.local_fns().get(&ident.name) {
             Some(&idx) => FunctionId(idx as u32),
             None => {
                 checker.error(error::unknown_function(&ident.name, ident.span));
                 return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
             }
         },
+        ExprKind::FieldAccess(access) => {
+            match qualified_callee(checker, access) {
+                Some(id) => id,
+                None => return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32),
+            }
+        }
         _ => {
             checker.error(error::indirect_call(span));
             return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
@@ -345,6 +352,41 @@ fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
     )
 }
 
+/// `alias.member(...)`: the head must name an import of the current module;
+/// the member must be a PUBLIC function of the target module. Anything else
+/// is not a module call — the base is then treated as an ordinary value
+/// (two-branch rule, §9.3): field access lowers normally and calling its
+/// result is rejected.
+fn qualified_callee(checker: &mut Checker, access: &FieldAccessExpr) -> Option<FunctionId> {
+    let alias = match &access.base.kind {
+        ExprKind::Ident(ident) => ident,
+        _ => {
+            checker.error(error::indirect_call(access.base.span));
+            return None;
+        }
+    };
+
+    let Some(&target) = checker.imports().get(&alias.name) else {
+        // Not an import alias: ordinary value semantics. Lower the field
+        // access for its diagnostics, then reject the call itself.
+        let _ = field_access(checker, access);
+        checker.error(error::indirect_call(access.base.span));
+        return None;
+    };
+
+    let path = format!("{}.{}", alias.name, access.field.name);
+    let Some(&idx) = checker.resolution.module_fns[target].get(&access.field.name)
+    else {
+        checker.error(error::unknown_qualified_function(&path, access.field.span));
+        return None;
+    };
+    if !checker.resolution.fn_is_public[idx] {
+        checker.error(error::private_function(&path, access.field.span));
+        return None;
+    }
+    Some(FunctionId(idx as u32))
+}
+
 /// `base.field`. The base must be a declared struct; the result type is the
 /// field's type. Reads COPY out of the place (§9.3).
 fn field_access(checker: &mut Checker, access: &FieldAccessExpr) -> TypedExpr {
@@ -378,16 +420,50 @@ fn field_access(checker: &mut Checker, access: &FieldAccessExpr) -> TypedExpr {
 
 /// `Name { f: e, .. }` — every field exactly once, in any source order; the
 /// lowered values are reordered into declaration order (the ABI layout).
-fn struct_lit(checker: &mut Checker, lit: &StructLitExpr) -> TypedExpr {
-    // Transitional: only the len-1 (unqualified) form resolves. Module-
-    // qualified heads gain real resolution with v0.0.4's multi-module
-    // resolver; until then the last segment is looked up locally.
-    let type_name = lit.path.last().expect("non-empty literal head");
-    let struct_id = match checker.resolution.types.get(&type_name.name) {
-        Some(&idx) => StructId(idx as u32),
-        None => {
-            checker.error(error::unknown_type(&type_name.name, type_name.span));
-            return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+/// The head is either an unqualified name (own module) or
+/// `alias.Name` naming a PUBLIC struct of an imported module.
+fn struct_lit(checker: &mut Checker, lit: &StructLitExpr, lit_span: Span) -> TypedExpr {
+    let segments = lit.path.len();
+    let struct_id = if segments == 1 {
+        // Unqualified: own module only.
+        let type_name = &lit.path[0];
+        match checker.local_types().get(&type_name.name) {
+            Some(&idx) => StructId(idx as u32),
+            None => {
+                checker.error(error::unknown_type(&type_name.name, type_name.span));
+                return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+            }
+        }
+    } else {
+        // Qualified head: first segment must be an import alias.
+        let alias = &lit.path[0];
+        let member = lit.path.last().expect("non-empty literal head");
+        let path = format!(
+            "{}.{}",
+            alias.name,
+            lit.path[1..]
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>()
+                .join(".")
+        );
+        match checker.imports().get(&alias.name) {
+            Some(&target) => {
+                let Some(&idx) = checker.resolution.module_types[target].get(&member.name)
+                else {
+                    checker.error(error::unknown_qualified_type(&path, member.span));
+                    return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+                };
+                if !checker.resolution.type_is_public[idx] {
+                    checker.error(error::private_type(&path, member.span));
+                    return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+                }
+                StructId(idx as u32)
+            }
+            None => {
+                checker.error(error::unknown_module(&alias.name, alias.span));
+                return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+            }
         }
     };
     let ty_name = checker.type_name(struct_id).to_string();
@@ -438,11 +514,7 @@ fn struct_lit(checker: &mut Checker, lit: &StructLitExpr) -> TypedExpr {
                 let field = checker.structs[struct_id.0 as usize].fields[slot_index]
                     .name
                     .clone();
-                checker.error(error::missing_field_in_lit(
-                    &field,
-                    &ty_name,
-                    type_name.span,
-                ));
+                checker.error(error::missing_field_in_lit(&field, &ty_name, lit_span));
                 values.push(TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32));
             }
         }

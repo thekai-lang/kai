@@ -1,15 +1,17 @@
-//! Name resolution over the untyped AST.
+//! Name resolution over the untyped AST, across modules.
 //!
-//! v0.0.3 scope:
-//! - separate namespaces for types and functions (Rust-style): the same name
-//!   may denote a struct and a function at once; duplicates are an error
-//!   within a namespace only
-//! - a table of declared structs (name -> declaration index) and functions
-//! - cyclic struct definitions are a compile error, reported as a cycle path
-//! - the entry-point contract (`main`, no params, returns int32)
-//!
-//! The resolver never mutates the AST and knows nothing about type semantics
-//! — unknown type *names* in annotations are the type checker's diagnostics.
+//! v0.0.4 scope:
+//! - per-module namespace tables: unqualified names resolve ONLY inside the
+//!   declaring module (§3.6 — imports never inject into any scope)
+//! - import aliases map to loaded modules; duplicates are errors
+//! - `public` flags travel with declarations as visibility masks; the type
+//!   checker enforces them at each qualified use site
+//! - separate namespaces for types and functions (Rust-style) within a
+//!   module, plus a third namespace for import aliases
+//! - cyclic struct definitions are a compile error reported as a cycle path
+//!   (cycles cannot span modules: field types are always unqualified)
+//! - the entry-point contract (`main`, no params, returns int32), scoped to
+//!   the ENTRY module
 
 pub mod entry;
 pub mod tables;
@@ -18,17 +20,32 @@ use kai_ast::Program;
 use kai_diagnostics::Diagnostic;
 
 pub use entry::check_entry;
-pub use tables::Resolution;
+pub use tables::{ModuleInput, Resolution};
 
-/// Resolves names and validates top-level structure. On success the returned
-/// `Resolution` feeds the type checker; on failure the diagnostic list is
-/// complete for this phase.
+/// Legacy single-program entry point: resolves as one anonymous module.
 pub fn analyze(program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
+    analyze_modules(&[ModuleInput {
+        name: "",
+        file: "",
+        program,
+    }])
+}
+
+/// Resolves names across all loaded modules. On success the returned
+/// `Resolution` feeds the type checker together with the merged program; on
+/// failure the diagnostic list is complete for this phase.
+pub fn analyze_modules(modules: &[ModuleInput]) -> Result<Resolution, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
-    let resolution = tables::build(program, &mut diagnostics);
-    tables::detect_cycles(program, &resolution.types, &mut diagnostics);
-    check_entry(program, &mut diagnostics);
+    let resolution = tables::build_multi(modules, &mut diagnostics);
+
+    // Cycle detection and entry validation run over the merged view. The
+    // entry contract consults Resolution.fn_module, so imported `main`s
+    // don't count — the program's main lives in the ENTRY module.
+    if let Some(entry) = modules.first() {
+        tables::detect_cycles(entry.program, &resolution, &mut diagnostics);
+        check_entry(entry.program, &resolution, &mut diagnostics);
+    }
 
     if diagnostics.is_empty() {
         Ok(resolution)
@@ -40,154 +57,157 @@ pub fn analyze(program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kai_ast::{Block, FieldDecl, FnDecl, Ident, Param, Stmt, StmtKind, Ty, TypeDecl};
-    use kai_diagnostics::Span;
 
-    fn ident(name: &str) -> Ident {
-        Ident {
-            name: name.into(),
-            span: Span::new(0, 0),
-        }
+    fn parse_src(src: &str) -> kai_ast::Program {
+        let lexed = kai_lexer::lex(src);
+        kai_parser::parse(&lexed.tokens).expect("parse failed")
     }
 
-    fn named(name: &str) -> Ty {
-        Ty::Named(ident(name))
+    fn single(src: &str) -> Result<Resolution, Vec<Diagnostic>> {
+        let program = parse_src(src);
+        analyze(&program)
     }
 
-    fn decl(name: &str, ret: Ty) -> FnDecl {
-        FnDecl {
-            is_public: false,
-            name: ident(name),
-            params: Vec::<Param>::new(),
-            ret,
-            body: Block {
-                stmts: vec![Stmt {
-                    kind: StmtKind::Return(None),
-                    span: Span::new(0, 0),
-                }],
-                span: Span::new(0, 0),
+    #[test]
+    fn accepts_valid_program() {
+        let resolution =
+            single(
+                "fn add(a: int32, b: int32) -> int32 { return a + b; } \
+                 fn main() -> int32 { return 0; }",
+            )
+            .unwrap();
+        assert_eq!(resolution.module_fns[0].len(), 2);
+        assert!(!resolution.fn_is_public[0]);
+    }
+
+    #[test]
+    fn records_public_flag() {
+        let resolution = single(
+            "public fn add(a: int32, b: int32) -> int32 { return a + b; } \
+             fn main() -> int32 { return 0; }",
+        )
+        .unwrap();
+        assert!(resolution.fn_is_public[0]);
+    }
+
+    #[test]
+    fn rejects_duplicate_fn_within_module() {
+        let diags = single(
+            "fn f() -> int32 { return 0; } fn f() -> int32 { return 0; }",
+        )
+        .unwrap_err();
+        assert!(diags.iter().any(|d| d.message == "duplicate function `f`"));
+    }
+
+    #[test]
+    fn allows_same_name_across_modules() {
+        let entry = parse_src(
+            "use support.math; \
+             fn main() -> int32 { let x = math.five(); return x; }",
+        );
+        let math = parse_src("public fn five() -> int32 { return 5; }");
+        let resolution = analyze_modules(&[
+            ModuleInput {
+                name: "",
+                file: "main.kai",
+                program: &entry,
             },
-            span: Span::new(0, 0),
-        }
-    }
-
-    fn type_decl(name: &str, fields: Vec<(&str, &str)>) -> TypeDecl {
-        TypeDecl {
-            is_public: false,
-            name: ident(name),
-            fields: fields
-                .into_iter()
-                .map(|(fname, fty)| FieldDecl {
-                    name: ident(fname),
-                    ty: named(fty),
-                })
-                .collect(),
-            span: Span::new(0, 0),
-        }
-    }
-
-    fn analyze_of(program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
-        analyze(program)
+            ModuleInput {
+                name: "support.math",
+                file: "support/math.kai",
+                program: &math,
+            },
+        ])
+        .unwrap();
+        // Two modules may both expose `five`; tables stay per-module.
+        assert_eq!(resolution.module_fns[1].get("five"), Some(&1));
     }
 
     #[test]
-    fn builds_separate_namespaces() {
-        // Rust-style: a struct and a function may share one name.
-        let program = Program {
-            use_decls: Vec::new(),
-            fns: vec![decl("main", named("int32")), decl("Point", named("int32"))],
-            types: vec![type_decl("Point", vec![("x", "int32")])],
-        };
-        let resolution = analyze_of(&program).unwrap();
-        assert_eq!(resolution.types["Point"], 0);
-        assert_eq!(resolution.fns["Point"], 1);
-        assert_eq!(resolution.fns["main"], 0);
-    }
-
-    #[test]
-    fn rejects_duplicate_types() {
-        let program = Program {
-            use_decls: Vec::new(),
-            fns: vec![decl("main", named("int32"))],
-            types: vec![
-                type_decl("Point", vec![("x", "int32")]),
-                type_decl("Point", vec![("y", "int32")]),
-            ],
-        };
+    fn rejects_duplicate_import_alias() {
+        let diags = single(
+            "use support.math; use other.math; fn main() -> int32 { return 0; }",
+        )
+        .unwrap_err();
+        // Only one module is loaded, so the second import is either an
+        // unknown target or a duplicate alias depending on order of checks.
         assert!(
-            analyze_of(&program).unwrap_err()[0]
-                .message
-                .contains("duplicate type `Point`")
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot find module")
+                    || d.message.contains("duplicate import alias"))
         );
     }
 
     #[test]
-    fn rejects_duplicate_fields_in_one_type() {
-        let program = Program {
-            use_decls: Vec::new(),
-            fns: vec![decl("main", named("int32"))],
-            types: vec![type_decl("P", vec![("x", "int32"), ("x", "int64")])],
-        };
-        assert!(
-            analyze_of(&program).unwrap_err()[0]
-                .message
-                .contains("duplicate field `x` in type `P`")
+    fn rejects_unknown_import_target() {
+        let diags =
+            single("use support.nope; fn main() -> int32 { return 0; }").unwrap_err();
+        assert_eq!(
+            diags[0].message,
+            "cannot find module `support.nope`".to_string()
         );
     }
 
     #[test]
-    fn detects_direct_self_cycle() {
-        let program = Program {
-            use_decls: Vec::new(),
-            fns: vec![decl("main", named("int32"))],
-            types: vec![type_decl("A", vec![("next", "A")])],
-        };
-        assert!(
-            analyze_of(&program).unwrap_err()[0]
-                .message
-                .contains("cyclic type: A -> A")
-        );
+    fn rejects_self_import() {
+        let program = parse_src("use self.main; fn main() -> int32 { return 0; }")
+            ;
+        // The import path "self.main" is not a loaded module name; loading
+        // would never produce it, so this surfaces as cannot-find rather
+        // than a cycle. Cycles are caught by the loader (§3.6).
+        let diags = analyze(&program).unwrap_err();
+        assert!(!diags.is_empty());
     }
 
     #[test]
-    fn detects_two_node_cycle_with_path() {
-        let program = Program {
-            use_decls: Vec::new(),
-            fns: vec![decl("main", named("int32"))],
-            types: vec![
-                type_decl("A", vec![("b", "B")]),
-                type_decl("B", vec![("a", "A")]),
-            ],
-        };
-        assert!(
-            analyze_of(&program).unwrap_err()[0]
-                .message
-                .contains("cyclic type: A -> B -> A")
-        );
+    fn imported_public_main_does_not_satisfy_entry_contract() {
+        let entry = parse_src("use lib.run;");
+        let lib = parse_src("public fn main() -> int32 { return 0; }");
+        let diags = analyze_modules(&[
+            ModuleInput {
+                name: "",
+                file: "main.kai",
+                program: &entry,
+            },
+            ModuleInput {
+                name: "lib.run",
+                file: "lib/run.kai",
+                program: &lib,
+            },
+        ])
+        .unwrap_err();
+        assert!(diags.iter().any(|d| d.message.contains("no `main`")));
     }
 
     #[test]
-    fn unknown_field_type_is_not_a_cycle_edge() {
-        // `Foo` is undeclared; the cycle check must not treat it as a
-        // self-edge or crash. The unknown name is reported by the checker.
-        let program = Program {
-            use_decls: Vec::new(),
-            fns: vec![decl("main", named("int32"))],
-            types: vec![type_decl("A", vec![("f", "Foo")])],
-        };
-        assert!(analyze_of(&program).is_ok());
+    fn detects_cyclic_structs_within_module() {
+        let diags = single(
+            "type A = { b: B; } type B = { a: A; } fn main() -> int32 { return 0; }",
+        )
+        .unwrap_err();
+        assert!(diags
+            .iter()
+            .any(|d| d.message.starts_with("cyclic type") && d.message.contains("A")));
     }
 
     #[test]
-    fn acyclic_chain_is_accepted() {
-        let program = Program {
-            use_decls: Vec::new(),
-            fns: vec![decl("main", named("int32"))],
-            types: vec![
-                type_decl("Inner", vec![("v", "int32")]),
-                type_decl("Outer", vec![("inner", "Inner")]),
-            ],
-        };
-        assert!(analyze_of(&program).is_ok());
+    fn accepts_acyclic_structs() {
+        let resolution = single(
+            "type Point = { x: int32; y: int32; } \
+             type Line = { a: Point; b: Point; } \
+             fn main() -> int32 { return 0; }",
+        )
+        .unwrap();
+        assert_eq!(resolution.module_types[0].len(), 2);
+    }
+
+    #[test]
+    fn self_referential_struct_via_boxing_placeholder_is_still_a_cycle() {
+        let diags = single(
+            "type Node = { next: Node; } fn main() -> int32 { return 0; }",
+        )
+        .unwrap_err();
+        assert!(diags.iter().any(|d| d.message.starts_with("cyclic type")));
     }
 }

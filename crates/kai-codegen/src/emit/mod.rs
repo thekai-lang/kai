@@ -20,7 +20,11 @@ pub(crate) fn program(ctx: &mut Ctx, program: &TypedProgram) {
             .map(|p| types::to_llvm(ctx, p.ty))
             .collect();
         let fn_type = types::fn_signature(ctx, decl.ret, &param_tys);
-        let function = ctx.module.add_function(&decl.name, fn_type, None);
+        // Module-qualified symbol: same-named functions in different modules
+        // never collide inside one LLVM module. Entry-module names stay bare
+        // (`main` must be linkable/JIT-callable).
+        let symbol = qualified_name(&decl.module, &decl.name);
+        let function = ctx.module.add_function(&symbol, fn_type, None);
         for (idx, param) in decl.params.iter().enumerate() {
             let idx = idx as u32;
             function
@@ -38,12 +42,12 @@ pub(crate) fn program(ctx: &mut Ctx, program: &TypedProgram) {
     }
 }
 
-/// `%Name = type { f0, f1, .. }`. Opaque structs are created for ALL
-/// declarations first so field types may reference any struct regardless of
-/// declaration order (cycles are already a compile error).
+/// `%module.Name = type { .. }` — qualified like fn symbols so same-named
+/// structs in different modules stay distinct.
 fn declare_structs(ctx: &mut Ctx, structs: &[TypedStruct]) {
     for ts in structs {
-        let llvm_ty = ctx.context.opaque_struct_type(&ts.name);
+        let name = qualified_name(&ts.module, &ts.name);
+        let llvm_ty = ctx.context.opaque_struct_type(&name);
         ctx.structs.push(llvm_ty);
     }
     for (idx, ts) in structs.iter().enumerate() {
@@ -53,6 +57,16 @@ fn declare_structs(ctx: &mut Ctx, structs: &[TypedStruct]) {
             .map(|f| types::to_llvm(ctx, f.ty))
             .collect();
         ctx.structs[idx].set_body(&field_tys, false);
+    }
+}
+
+/// `""` (entry module) keeps the bare name; everything else is prefixed
+/// `module.name`.
+fn qualified_name(module: &str, name: &str) -> String {
+    if module.is_empty() {
+        name.to_string()
+    } else {
+        format!("{module}.{name}")
     }
 }
 

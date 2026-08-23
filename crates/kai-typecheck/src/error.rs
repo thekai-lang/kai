@@ -164,3 +164,25 @@ pub fn missing_field_in_lit(field: &str, ty_name: &str, span: Span) -> Diagnosti
         span,
     )
 }
+
+// -- v0.0.4: qualified (module) references -----------------------------------
+
+pub fn unknown_module(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("unknown module `{name}`"), span)
+}
+
+pub fn unknown_qualified_function(path: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("unknown function `{path}`"), span)
+}
+
+pub fn private_function(path: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("function `{path}` is not public"), span)
+}
+
+pub fn unknown_qualified_type(path: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("unknown type `{path}`"), span)
+}
+
+pub fn private_type(path: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("type `{path}` is not public"), span)
+}

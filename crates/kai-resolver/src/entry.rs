@@ -1,18 +1,35 @@
-//! Entry-point contract: exactly one `main`, no parameters, returns int32.
-//! (Duplicate top-level names live in `tables` — one check per namespace.)
+//! Entry-point contract: exactly one `main`, no parameters, returns int32,
+//! living in the ENTRY module (module 0). An imported public `main` does not
+//! make a program runnable. (Duplicate top-level names live in `tables`.)
 
 use kai_ast::{Program, Ty};
 use kai_diagnostics::{Diagnostic, Span};
 
-pub fn check_entry(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
-    check_main(program, diagnostics);
+use crate::tables::Resolution;
+
+pub fn check_entry(
+    program: &Program,
+    resolution: &Resolution,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    check_main(program, resolution, diagnostics);
 }
 
-fn check_main(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
+fn check_main(
+    program: &Program,
+    resolution: &Resolution,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let mains: Vec<&kai_ast::FnDecl> = program
         .fns
         .iter()
-        .filter(|decl| decl.name.name == "main")
+        .enumerate()
+        // Ownership filter: only the entry module can provide `main`.
+        .filter(|(idx, decl)| {
+            decl.name.name == "main"
+                && resolution.fn_module.get(*idx).copied() == Some(0)
+        })
+        .map(|(_, decl)| decl)
         .collect();
 
     match mains.as_slice() {
@@ -80,7 +97,8 @@ mod tests {
 
     fn diags_of(program: &Program) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        check_entry(program, &mut diagnostics);
+        let resolution = crate::tables::build_single(program, &mut Vec::new());
+        check_entry(program, &resolution, &mut diagnostics);
         diagnostics
     }
 

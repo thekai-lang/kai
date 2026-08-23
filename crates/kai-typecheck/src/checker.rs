@@ -35,12 +35,19 @@ pub(crate) struct FnInfo {
 pub(crate) struct Checker {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) locals: Locals,
-    /// Name tables from resolution (struct/fn name -> declaration index).
+    /// Name tables from resolution: per-module tables hold GLOBAL indices
+    /// into the merged program; imports map aliases to module indices.
     pub(crate) resolution: Resolution,
-    /// Layouts indexed by `StructId` (= declaration index).
+    /// Layouts indexed by `StructId` (= global declaration index).
     pub(crate) structs: Vec<StructLayout>,
-    /// Signatures indexed by `FunctionId` (= declaration index).
+    /// Signatures indexed by `FunctionId` (= global declaration index).
     pub(crate) fns: Vec<FnInfo>,
+    /// Module currently being lowered: unqualified lookups resolve ONLY
+    /// against this module's own tables (§3.6 — imports never leak names).
+    pub(crate) current_module: usize,
+    /// Display file of the declaration being lowered, stamped onto every
+    /// diagnostic so multi-file programs attribute errors correctly (§8.6).
+    pub(crate) cur_file: String,
 }
 
 impl Checker {
@@ -51,16 +58,36 @@ impl Checker {
             resolution: resolution.clone(),
             structs: Vec::new(),
             fns: Vec::new(),
+            current_module: 0,
+            cur_file: String::new(),
         }
+    }
+
+    /// Types visible WITHOUT qualification from the module being lowered.
+    pub(crate) fn local_types(&self) -> &std::collections::HashMap<String, usize> {
+        &self.resolution.module_types[self.current_module]
+    }
+
+    /// Functions visible WITHOUT qualification from the module being lowered.
+    pub(crate) fn local_fns(&self) -> &std::collections::HashMap<String, usize> {
+        &self.resolution.module_fns[self.current_module]
+    }
+
+    /// Import table of the module being lowered: alias -> module index.
+    pub(crate) fn imports(&self) -> &std::collections::HashMap<String, usize> {
+        &self.resolution.imports[self.current_module]
+    }
+
+    pub fn error(&mut self, mut diagnostic: Diagnostic) {
+        if !self.cur_file.is_empty() {
+            diagnostic = diagnostic.with_file(self.cur_file.clone());
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     /// Signature clone is small (a few scalars); keeps borrow rules simple.
     pub(crate) fn fn_signature(&self, id: kai_tast::FunctionId) -> FnInfo {
         self.fns[id.0 as usize].clone()
-    }
-
-    pub fn error(&mut self, diagnostic: Diagnostic) {
-        self.diagnostics.push(diagnostic);
     }
 
     pub fn failed(&self) -> bool {

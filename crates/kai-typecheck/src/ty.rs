@@ -15,7 +15,7 @@ pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
             "float64" | "float" => KaiType::Float64,
             "bool" => KaiType::Bool,
             "unit" => KaiType::Unit,
-            other => match checker.resolution.types.get(other) {
+            other => match checker.local_types().get(other) {
                 Some(&idx) => KaiType::Struct(StructId(idx as u32)),
                 None => {
                     let span = ident.span;

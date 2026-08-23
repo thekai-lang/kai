@@ -6,3 +6,8 @@ edition.workspace = true
 [dependencies]
 kai-ast = { workspace = true }
 kai-diagnostics = { workspace = true }
+
+[dev-dependencies]
+kai-parser = { path = "../kai-parser" }
+kai-lexer = { path = "../kai-lexer" }
+kai-diagnostics = { path = "../kai-diagnostics" }

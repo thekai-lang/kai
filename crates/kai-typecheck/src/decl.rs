@@ -18,8 +18,12 @@ pub(crate) fn program(checker: &mut Checker, program: &Program) -> TypedProgram 
         .iter()
         .enumerate()
         .map(|(id, decl)| {
-            // Each function starts from a clean local-variable slate.
+            // Each function starts from a clean local-variable slate and a
+            // fresh module context (drives unqualified lookups AND the file
+            // stamped onto diagnostics).
             checker.locals = Locals::new();
+            checker.current_module = owner_module(checker, id);
+            checker.cur_file = owner_file(checker, id);
             fn_decl(checker, decl, FunctionId(id as u32))
         })
         .collect();
@@ -35,16 +39,23 @@ fn build_struct_layouts(checker: &mut Checker, program: &Program) -> Vec<kai_tas
     let structs: Vec<kai_tast::TypedStruct> = program
         .types
         .iter()
-        .map(|decl| kai_tast::TypedStruct {
-            name: decl.name.name.clone(),
-            fields: decl
-                .fields
-                .iter()
-                .map(|field| kai_tast::TypedStructField {
-                    name: field.name.name.clone(),
-                    ty: ty::resolve(checker, &field.ty),
-                })
-                .collect(),
+        .enumerate()
+        .map(|(idx, decl)| {
+            // Field types resolve through the OWNING module's table.
+            checker.current_module = type_owner(checker, idx);
+            checker.cur_file = type_file(checker, idx);
+            kai_tast::TypedStruct {
+                name: decl.name.name.clone(),
+                module: module_path(checker, checker.current_module),
+                fields: decl
+                    .fields
+                    .iter()
+                    .map(|field| kai_tast::TypedStructField {
+                        name: field.name.name.clone(),
+                        ty: ty::resolve(checker, &field.ty),
+                    })
+                    .collect(),
+            }
         })
         .collect();
 
@@ -68,9 +79,11 @@ fn build_struct_layouts(checker: &mut Checker, program: &Program) -> Vec<kai_tas
 }
 
 /// Same pre-pass for function signatures: param/return types resolve against
-/// the now-complete struct table.
+/// the now-complete struct table, through each function's OWN module.
 fn build_fn_signatures(checker: &mut Checker, program: &Program) {
-    for decl in &program.fns {
+    for (idx, decl) in program.fns.iter().enumerate() {
+        checker.current_module = owner_module(checker, idx);
+        checker.cur_file = owner_file(checker, idx);
         let param_tys = decl
             .params
             .iter()
@@ -85,6 +98,45 @@ fn build_fn_signatures(checker: &mut Checker, program: &Program) {
     }
 }
 
+/// Dotted module path (`""` = entry) — travels with TAST decls so codegen
+/// can qualify symbol names without consulting resolution.
+fn module_path(checker: &Checker, idx: usize) -> String {
+    checker.resolution.module_names[idx].clone()
+}
+
+// Legacy callers (`check` without a resolution) pass an empty Resolution:
+// every declaration then belongs to the anonymous entry module.
+fn owner_module(checker: &Checker, idx: usize) -> usize {
+    checker.resolution.fn_module.get(idx).copied().unwrap_or(0)
+}
+
+fn owner_file(checker: &Checker, idx: usize) -> String {
+    checker
+        .resolution
+        .fn_file
+        .get(idx)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn type_owner(checker: &Checker, idx: usize) -> usize {
+    checker
+        .resolution
+        .type_module
+        .get(idx)
+        .copied()
+        .unwrap_or(0)
+}
+
+fn type_file(checker: &Checker, idx: usize) -> String {
+    checker
+        .resolution
+        .type_file
+        .get(idx)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> TypedFnDecl {
     let ret = ty::resolve(checker, &decl.ret);
     let params = bind_params(checker, decl);
@@ -95,6 +147,7 @@ fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> Typ
     TypedFnDecl {
         id,
         name: decl.name.name.clone(),
+        module: module_path(checker, checker.current_module),
         params,
         ret,
         body,

@@ -19,6 +19,9 @@ impl TypedProgram {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedStruct {
     pub name: String,
+    /// Owning module's dotted path (`""` = entry); qualifies the LLVM named-
+    /// struct type the same way fn symbols are qualified.
+    pub module: String,
     pub fields: Vec<TypedStructField>,
 }
 

@@ -16,8 +16,13 @@ pub struct TypedParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedFnDecl {
     pub id: FunctionId,
-    /// Kept as the LLVM symbol name; all internal references use `id`.
+    /// Kept as the LLVM symbol name (entry module); all internal references
+    /// use `id`.
     pub name: String,
+    /// Owning module's dotted path (`""` = entry). Codegen prefixes it onto
+    /// the symbol name, so same-named functions in different modules never
+    /// collide in one LLVM module.
+    pub module: String,
     pub params: Vec<TypedParam>,
     pub ret: KaiType,
     pub body: TypedBlock,
