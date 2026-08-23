@@ -144,6 +144,13 @@ pub unsafe extern "C" fn kai_release(value: *mut KaiHeapHeader) {
     }
     // SAFETY: non-null, valid header per the contract.
     let hdr = unsafe { &mut *value };
+    if hdr.rc <= 0 {
+        // Invariant breach (compiler bug, not user error): report and stop
+        // hard instead of corrupting the heap. Distinct from §10 panics —
+        // this never stems from source-level mistakes.
+        eprintln!("kai runtime error: refcount underflow (double release)");
+        std::process::abort();
+    }
     hdr.rc -= 1;
     if hdr.rc > 0 {
         return;

@@ -1,8 +1,8 @@
 //! Ownership resolution (§9): the explicit IR-producing phase between
 //! typecheck and codegen. Every retain/release/move decision is materialized
 //! as a TAST node here — `TypedExprKind::Retain`, `TypedStmt::ReleaseLocal`,
-//! `TypedAssign::release_old`, `TypedFor::iterable_owned` — so codegen reads
-//! mechanically and never infers ownership itself (§8, constraint 2).
+//! `TypedAssign::release_old` — so codegen reads mechanically and never
+//! infers ownership itself (§8, constraint 2).
 //!
 //! The model (§9.4–9.9):
 //! - Locals (`let`/`var`) OWN their slot contents; parameters BORROW.
@@ -17,19 +17,123 @@
 //!   replacement is prepared (§9.4 ordering, E4).
 //! - Scope exit releases locals innermost-first, reverse declaration order;
 //!   return paths release every enclosing frame before leaving.
-//! - `for..in` iterables that are owned temporaries transfer into the loop;
-//!   borrowed iterables stay put. The loop variable never owns (E7).
+//! - Owned temporaries in BORROW positions (call arguments, comparison and
+//!   projection operands, discarded statement values) are materialized into
+//!   hidden `$tmp` locals so scope machinery releases them; without this
+//!   they would leak. `&&`/`||` subtrees are exempt — hoisting would defeat
+//!   short-circuiting.
+//! - `for..in` over an owned temporary binds it to a hidden `$iter` local in
+//!   the loop's scope frame: released at loop exit AND on returns from the
+//!   body (the old flag-based path could leak on early return). The loop
+//!   variable never owns (E7).
 
 use kai_tast::{
-    KaiType, LocalId, TypedAssign, TypedBlock, TypedExpr, TypedExprKind, TypedFnDecl, TypedFor,
-    TypedProgram, TypedStmt,
+    BinaryOp, KaiType, LocalId, TypedAssign, TypedBlock, TypedExpr, TypedExprKind, TypedFnDecl,
+    TypedFor, TypedProgram, TypedStmt,
 };
 
 /// Runs the pass over a typechecked program, annotating it in place.
 pub fn resolve(program: &mut TypedProgram) {
     let heap = HeapBearing::new(&program.structs);
+    let mut fresh = FreshIds::seeded_beyond(program);
     for fns in &mut program.fns {
-        resolve_fn(&heap, fns);
+        resolve_fn(&heap, fns, &mut fresh);
+    }
+}
+
+/// Allocates local ids beyond everything present in the source tree, used
+/// for hidden locals introduced by this pass (hoisted temporaries, owned
+/// `for` iterables).
+struct FreshIds {
+    next: u32,
+}
+
+impl FreshIds {
+    fn seeded_beyond(program: &kai_tast::TypedProgram) -> Self {
+        let mut max = 0;
+        for decl in &program.fns {
+            for p in &decl.params {
+                max = max.max(p.local.0);
+            }
+            seed_stmts(&decl.body.stmts, &mut max);
+        }
+        Self { next: max + 1 }
+    }
+
+    fn alloc(&mut self) -> LocalId {
+        let id = LocalId(self.next);
+        self.next += 1;
+        id
+    }
+}
+
+fn seed_stmts(stmts: &[TypedStmt], max: &mut u32) {
+    for s in stmts {
+        match s {
+            TypedStmt::Let(b) => {
+                *max = (*max).max(b.local.0);
+                seed_expr(&b.init, max);
+            }
+            TypedStmt::Assign(a) => {
+                *max = (*max).max(a.root.0);
+                for step in &a.path {
+                    if let kai_tast::TypedPlaceStep::Index(idx) = step {
+                        seed_expr(idx, max);
+                    }
+                }
+                seed_expr(&a.value, max);
+            }
+            TypedStmt::If(i) => {
+                seed_expr(&i.cond, max);
+                seed_stmts(&i.then_block.stmts, max);
+                if let Some(b) = &i.else_block {
+                    seed_stmts(&b.stmts, max);
+                }
+            }
+            TypedStmt::For(f) => {
+                *max = (*max).max(f.binding_local.0);
+                seed_expr(&f.iterable, max);
+                seed_stmts(&f.body.stmts, max);
+            }
+            TypedStmt::Block(b) => seed_stmts(&b.stmts, max),
+            TypedStmt::Expr(e) | TypedStmt::Return(Some(e)) => seed_expr(e, max),
+            TypedStmt::Return(None)
+            | TypedStmt::ReleaseLocal { .. }
+            | TypedStmt::ReturnCleanup { .. } => {}
+        }
+    }
+}
+
+fn seed_expr(expr: &TypedExpr, max: &mut u32) {
+    match &expr.kind {
+        TypedExprKind::LocalRef(id) => *max = (*max).max(id.0),
+        TypedExprKind::Neg(inner) | TypedExprKind::Not(inner) | TypedExprKind::Retain(inner) => {
+            seed_expr(inner, max)
+        }
+        TypedExprKind::Binary { lhs, rhs, .. } => {
+            seed_expr(lhs, max);
+            seed_expr(rhs, max);
+        }
+        TypedExprKind::FieldAccess { base, .. } => seed_expr(base, max),
+        TypedExprKind::Index { base, index } => {
+            seed_expr(base, max);
+            seed_expr(index, max);
+        }
+        TypedExprKind::StructLit { values, .. } | TypedExprKind::ArrayLit { elements: values } => {
+            for v in values {
+                seed_expr(v, max);
+            }
+        }
+        TypedExprKind::Call { args, .. } => {
+            for a in args {
+                seed_expr(a, max);
+            }
+        }
+        TypedExprKind::IntLit(_)
+        | TypedExprKind::FloatLit(_)
+        | TypedExprKind::BoolLit(_)
+        | TypedExprKind::StrLit { .. }
+        | TypedExprKind::Invalid => {}
     }
 }
 
@@ -106,7 +210,7 @@ fn wrap_retain_if_borrowed(heap: &HeapBearing, e: &mut TypedExpr) {
     }
 }
 
-fn resolve_fn(heap: &HeapBearing, decl: &mut TypedFnDecl) {
+fn resolve_fn(heap: &HeapBearing, decl: &mut TypedFnDecl, fresh: &mut FreshIds) {
     // Frame 0: parameters — they borrow, so they are never registered for
     // release (the callee does not release what it does not own, §9.3).
     let mut scopes = Scopes::default();
@@ -115,7 +219,7 @@ fn resolve_fn(heap: &HeapBearing, decl: &mut TypedFnDecl) {
         scopes.declare(param.local, param.ty.clone(), false);
     }
     let body = std::mem::replace(&mut decl.body, TypedBlock { stmts: Vec::new() });
-    decl.body = walk_block(heap, body, &mut scopes);
+    decl.body = walk_block(heap, body, &mut scopes, fresh);
 }
 
 #[derive(Default)]
@@ -162,7 +266,12 @@ fn push_frame_releases(frame: &[(LocalId, KaiType)], out: &mut Vec<TypedStmt>) {
     }
 }
 
-fn walk_block(heap: &HeapBearing, mut block: TypedBlock, scopes: &mut Scopes) -> TypedBlock {
+fn walk_block(
+    heap: &HeapBearing,
+    mut block: TypedBlock,
+    scopes: &mut Scopes,
+    fresh: &mut FreshIds,
+) -> TypedBlock {
     scopes.push();
     let mut out = Vec::with_capacity(block.stmts.len());
     for stmt in std::mem::take(&mut block.stmts) {
@@ -172,7 +281,7 @@ fn walk_block(heap: &HeapBearing, mut block: TypedBlock, scopes: &mut Scopes) ->
             // borrows; the §9.5 retain on the value keeps heap content
             // alive past the releases). One node carries both.
             ret @ TypedStmt::Return(_) => {
-                let ret = finish_return(heap, ret, scopes);
+                let ret = finish_return(heap, ret);
                 let TypedStmt::Return(value) = ret else {
                     unreachable!("finish_return returns a Return");
                 };
@@ -186,7 +295,7 @@ fn walk_block(heap: &HeapBearing, mut block: TypedBlock, scopes: &mut Scopes) ->
                 break;
             }
             TypedStmt::ReturnCleanup { .. } => unreachable!("pass-generated node"),
-            other => out.extend(walk_stmt(heap, other, scopes)),
+            other => out.extend(walk_stmt(heap, other, scopes, fresh)),
         }
     }
     // Normal block end: this frame's locals, reverse declaration order.
@@ -201,7 +310,7 @@ fn walk_block(heap: &HeapBearing, mut block: TypedBlock, scopes: &mut Scopes) ->
     block
 }
 
-fn finish_return(heap: &HeapBearing, ret: TypedStmt, _scopes: &Scopes) -> TypedStmt {
+fn finish_return(heap: &HeapBearing, ret: TypedStmt) -> TypedStmt {
     let TypedStmt::Return(value) = ret else {
         unreachable!("finish_return on non-return")
     };
@@ -219,9 +328,19 @@ fn finish_return(heap: &HeapBearing, ret: TypedStmt, _scopes: &Scopes) -> TypedS
     TypedStmt::Return(value)
 }
 
-fn walk_stmt(heap: &HeapBearing, stmt: TypedStmt, scopes: &mut Scopes) -> Vec<TypedStmt> {
+fn walk_stmt(
+    heap: &HeapBearing,
+    stmt: TypedStmt,
+    scopes: &mut Scopes,
+    fresh: &mut FreshIds,
+) -> Vec<TypedStmt> {
     match stmt {
         TypedStmt::Let(mut binding) => {
+            // Borrow-position temporaries inside the initializer are
+            // materialized first (in evaluation order); the root itself is
+            // a transfer into the owning slot.
+            let mut out = Vec::new();
+            hoist_borrow_temps(heap, &mut binding.init, fresh, scopes, &mut out, true);
             walk_expr(heap, &mut binding.init);
             // Owning slot: co-own borrowed sources (§9.4/§9.5 row 3).
             wrap_retain_if_borrowed(heap, &mut binding.init);
@@ -230,29 +349,122 @@ fn walk_stmt(heap: &HeapBearing, stmt: TypedStmt, scopes: &mut Scopes) -> Vec<Ty
                 binding.init.ty.clone(),
                 heap.is(&binding.init.ty),
             );
-            vec![TypedStmt::Let(binding)]
+            out.push(TypedStmt::Let(binding));
+            out
         }
-        TypedStmt::Assign(assign) => vec![TypedStmt::Assign(walk_assign(heap, assign))],
-        TypedStmt::If(if_) => {
-            let mut if_ = if_;
+        TypedStmt::Assign(mut assign) => {
+            let mut out = Vec::new();
+            // Place steps emit before the value at codegen; hoist their
+            // index temporaries in that same order.
+            for step in assign.path.iter_mut() {
+                if let kai_tast::TypedPlaceStep::Index(idx) = step {
+                    hoist_borrow_temps(heap, idx, fresh, scopes, &mut out, false);
+                }
+            }
+            hoist_borrow_temps(heap, &mut assign.value, fresh, scopes, &mut out, true);
+            out.push(TypedStmt::Assign(walk_assign(heap, assign)));
+            out
+        }
+        TypedStmt::If(mut if_) => {
+            let mut out = Vec::new();
+            hoist_borrow_temps(heap, &mut if_.cond, fresh, scopes, &mut out, false);
             walk_expr(heap, &mut if_.cond);
-            if_.then_block = walk_block(heap, if_.then_block, scopes);
-            if_.else_block = if_
-                .else_block
-                .map(|b| walk_block(heap, b, scopes));
-            vec![TypedStmt::If(if_)]
+            if_.then_block = walk_block(heap, if_.then_block, scopes, fresh);
+            if_.else_block =
+                if_.else_block.map(|b| walk_block(heap, b, scopes, fresh));
+            out.push(TypedStmt::If(if_));
+            out
         }
-        TypedStmt::For(f) => vec![TypedStmt::For(walk_for(heap, f, scopes))],
-        TypedStmt::Block(block) => vec![TypedStmt::Block(walk_block(heap, block, scopes))],
+        TypedStmt::For(f) => {
+            let (f, pre, end_releases) = walk_for(heap, f, scopes, fresh);
+            let mut out = pre;
+            out.push(TypedStmt::For(f));
+            push_frame_releases(&end_releases, &mut out);
+            out
+        }
+        TypedStmt::Block(block) => {
+            vec![TypedStmt::Block(walk_block(heap, block, scopes, fresh))]
+        }
         TypedStmt::Expr(mut e) => {
+            let mut out = Vec::new();
+            if heap.is(&e.ty) && is_owned_temp(&e) {
+                // A heap value computed and thrown away: bind it to a
+                // hidden local so scope exit releases it (the statement has
+                // no other consumer).
+                hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
+                return out;
+            }
+            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
             walk_expr(heap, &mut e);
-            vec![TypedStmt::Expr(e)]
+            out.push(TypedStmt::Expr(e));
+            out
         }
         // Handled by the caller (return needs surrounding-scope context).
         TypedStmt::Return(_) => unreachable!("returns handled by walk_block"),
         TypedStmt::ReleaseLocal { .. } | TypedStmt::ReturnCleanup { .. } => {
             unreachable!("nodes are pass-generated")
         }
+    }
+}
+
+/// Materializes owned temporaries sitting in BORROW positions into hidden
+/// locals declared in the current scope; the ordinary scope machinery then
+/// releases them at block exit and on early returns. Without this, values
+/// like a string literal passed to a function leak — nobody owns them after
+/// the consuming statement ends.
+///
+/// `root_is_transfer` marks positions whose top node MOVES instead of
+/// borrowing (initializer/assignment RHS roots): there the root stays put
+/// and only nested borrow positions are rewritten.
+///
+/// Skipped deliberately:
+/// - `&&`/`||` subtrees — hoisting would evaluate the rhs temp even when
+///   short-circuited; needs real materialization nodes (v0.0.6).
+/// - Struct/array literal members — those are OWNING slots already handled
+///   by the retain wrappers.
+fn hoist_borrow_temps(
+    heap: &HeapBearing,
+    expr: &mut TypedExpr,
+    fresh: &mut FreshIds,
+    scopes: &mut Scopes,
+    out: &mut Vec<TypedStmt>,
+    root_is_transfer: bool,
+) {
+    if !root_is_transfer && heap.is(&expr.ty) && is_owned_temp(expr) {
+        let local = fresh.alloc();
+        let ty = expr.ty.clone();
+        let init =
+            std::mem::replace(expr, TypedExpr::new(TypedExprKind::LocalRef(local), ty.clone()));
+        scopes.declare(local, ty, true);
+        out.push(TypedStmt::Let(kai_tast::TypedLet {
+            local,
+            name: "$tmp".into(),
+            init,
+        }));
+        return;
+    }
+    match &mut expr.kind {
+        // Guarded by control flow: leave untouched (see doc comment).
+        TypedExprKind::Binary { op: BinaryOp::And | BinaryOp::Or, .. } => {}
+        TypedExprKind::Binary { lhs, rhs, .. } => {
+            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, rhs, fresh, scopes, out, false);
+        }
+        TypedExprKind::Call { args, .. } => {
+            for a in args.iter_mut() {
+                hoist_borrow_temps(heap, a, fresh, scopes, out, false);
+            }
+        }
+        TypedExprKind::Index { base, index } => {
+            hoist_borrow_temps(heap, base, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, index, fresh, scopes, out, false);
+        }
+        TypedExprKind::FieldAccess { base, .. } => {
+            hoist_borrow_temps(heap, base, fresh, scopes, out, false)
+        }
+        // Scalar contexts and pre-wrapped nodes hold nothing to hoist;
+        // literals' members are owning slots.
+        _ => {}
     }
 }
 
@@ -270,13 +482,43 @@ fn walk_assign(heap: &HeapBearing, mut assign: TypedAssign) -> TypedAssign {
     assign
 }
 
-fn walk_for(heap: &HeapBearing, mut f: TypedFor, scopes: &mut Scopes) -> TypedFor {
+/// Rewrites one `for..in`. An OWNED temporary iterable is materialized into
+/// a hidden local declared in the loop's own scope frame: normal completion
+/// releases it at `for.end` (the frame pops after the body), and a `return`
+/// inside the body releases it through the cleanup chain (B3 fix). The old
+/// `iterable_owned` flag path is retired — ownership now rides the same
+/// machinery as every local.
+///
+/// Returns (rewritten loop, statements before it, releases for after it).
+fn walk_for(
+    heap: &HeapBearing,
+    mut f: TypedFor,
+    scopes: &mut Scopes,
+    fresh: &mut FreshIds,
+) -> (TypedFor, Vec<TypedStmt>, Vec<(LocalId, KaiType)>) {
+    scopes.push();
+    let mut pre = Vec::new();
     walk_expr(heap, &mut f.iterable);
-    // Owned temporaries transfer into the loop machinery and are released at
-    // loop end; borrowed iterables remain owned where they were (§9.9).
-    f.iterable_owned = is_owned_temp(&f.iterable);
-    f.body = walk_block(heap, f.body, scopes);
-    f
+    if is_owned_temp(&f.iterable) && heap.is(&f.iterable.ty) {
+        let local = fresh.alloc();
+        let ty = f.iterable.ty.clone();
+        let init = std::mem::replace(
+            &mut f.iterable,
+            TypedExpr::new(TypedExprKind::LocalRef(local), ty.clone()),
+        );
+        scopes.declare(local, ty, true);
+        pre.push(TypedStmt::Let(kai_tast::TypedLet {
+            local,
+            name: "$iter".into(),
+            init,
+        }));
+    }
+    // The hidden local (or the original owner, for borrowed iterables)
+    // carries the release duty; the flag has no further job.
+    f.iterable_owned = false;
+    f.body = walk_block(heap, f.body, scopes, fresh);
+    let frame = scopes.pop();
+    (f, pre, frame)
 }
 
 fn walk_expr(heap: &HeapBearing, expr: &mut TypedExpr) {
@@ -710,14 +952,105 @@ mod tests {
         let body = block(vec![TypedStmt::For(f), ret(None)]);
         let program = TypedProgram { structs: vec![], fns: vec![fn_decl(body, vec![], KaiType::Unit)] };
         let out = run(program);
-        let TypedStmt::For(f) = &out.fns[0].body.stmts[0] else { panic!() };
-        assert!(f.iterable_owned);
-        // Loop binding never owns: no ReleaseLocal for LocalId(10).
-        assert!(out.fns[0]
-            .body
-            .stmts
+        // The temp is bound to a hidden local before the loop; the loop now
+        // iterates the LOCAL and the flag path is retired.
+        assert!(matches!(
+            &out.fns[0].body.stmts[0],
+            TypedStmt::Let(b) if b.name == "$iter"
+        ));
+        let TypedStmt::For(f) = &out.fns[0].body.stmts[1] else { panic!() };
+        assert!(!f.iterable_owned);
+        let iter_local = match &f.iterable.kind {
+            TypedExprKind::LocalRef(id) => *id,
+            other => panic!("iterable not materialized: {other:?}"),
+        };
+        // Normal completion: the loop frame pops right after the For —
+        // the hidden owner is released there; the loop binding never owns.
+        let stmts = &out.fns[0].body.stmts;
+        assert!(matches!(
+            stmts.get(2),
+            Some(TypedStmt::ReleaseLocal { local, .. }) if *local == iter_local
+        ));
+        assert!(stmts
             .iter()
             .all(|s| !matches!(s, TypedStmt::ReleaseLocal { local: LocalId(10), .. })));
+    }
+
+    #[test]
+    fn return_inside_loop_releases_owned_iterable() {
+        // B3: `for x in [1] { return; }` used to skip the loop-end release.
+        let iter = TypedExpr::new(
+            TypedExprKind::ArrayLit {
+                elements: vec![int_lit(1)],
+            },
+            KaiType::Array(Box::new(KaiType::Int32)),
+        );
+        let f = TypedFor {
+            binding_local: LocalId(10),
+            binding_name: "v".into(),
+            iterable: iter,
+            body: block(vec![ret(None)]),
+            iterable_owned: false,
+        };
+        let body = block(vec![TypedStmt::For(f)]);
+        let program = TypedProgram { structs: vec![], fns: vec![fn_decl(body, vec![], KaiType::Unit)] };
+        let out = run(program);
+        // The return inside the body must carry the hidden iterable's
+        // release alongside the (empty) body frame.
+        let mut found_iter_release = false;
+        for s in &out.fns[0].body.stmts {
+            if let TypedStmt::For(f) = s {
+                for inner in &f.body.stmts {
+                    if let TypedStmt::ReturnCleanup { releases, .. } = inner {
+                        found_iter_release =
+                            releases.iter().any(|(_, ty)| matches!(ty, KaiType::Array(_)));
+                    }
+                }
+            }
+        }
+        assert!(found_iter_release, "return skips iterable release:\n{out:#?}");
+    }
+
+    #[test]
+    fn discarded_heap_temp_is_bound_and_released() {
+        // B1: `make();` as a statement must not leak the returned string.
+        let call = TypedExpr::new(
+            TypedExprKind::Call { func: kai_tast::FunctionId(0), args: vec![] },
+            KaiType::String,
+        );
+        let body = block(vec![TypedStmt::Expr(call), ret(None)]);
+        let program = TypedProgram { structs: vec![], fns: vec![fn_decl(body, vec![], KaiType::Unit)] };
+        let out = run(program);
+        assert!(matches!(
+            &out.fns[0].body.stmts[0],
+            TypedStmt::Let(b) if b.name == "$tmp" && b.init.ty == KaiType::String
+        ));
+        // The following `return` carries the hidden local's release.
+        assert!(matches!(
+            out.fns[0].body.stmts.last(),
+            Some(TypedStmt::ReturnCleanup { releases, .. }) if !releases.is_empty()
+        ));
+    }
+
+    #[test]
+    fn call_arg_temp_is_materialized_in_order() {
+        // B1: greet("x") — the literal moves into a hidden local BEFORE the
+        // call, the argument becomes a plain borrow of that local.
+        let greet = TypedExpr::new(
+            TypedExprKind::Call {
+                func: kai_tast::FunctionId(1),
+                args: vec![str_lit("x")],
+            },
+            KaiType::Unit,
+        );
+        let body = block(vec![TypedStmt::Expr(greet), ret(None)]);
+        let program = TypedProgram { structs: vec![], fns: vec![fn_decl(body, vec![], KaiType::Unit)] };
+        let out = run(program);
+        let TypedStmt::Let(hidden) = &out.fns[0].body.stmts[0] else { panic!("no hoist:\n{out:#?}") };
+        assert_eq!(hidden.name, "$tmp");
+        let TypedStmt::Expr(e) = &out.fns[0].body.stmts[1] else { panic!() };
+        let TypedExprKind::Call { args, .. } = &e.kind else { panic!() };
+        assert!(matches!(args[0].kind, TypedExprKind::LocalRef(_)));
     }
 
     #[test]
