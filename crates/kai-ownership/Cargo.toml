@@ -1,0 +1,7 @@
+[package]
+name = "kai-ownership"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kai-tast = { path = "../kai-tast" }

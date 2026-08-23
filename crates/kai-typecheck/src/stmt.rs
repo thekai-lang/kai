@@ -211,6 +211,8 @@ fn assign(
         path: steps,
         op: compound,
         value: typed_value,
+        // Ownership markers land in the ownership pass (phase after this).
+        release_old: false,
     }))
 }
 
@@ -303,6 +305,8 @@ fn for_stmt(checker: &mut Checker, f: &kai_ast::ForStmt) -> Option<TypedStmt> {
                 binding_name: declared_name,
                 iterable,
                 body,
+                // Filled by the ownership pass once it runs.
+                iterable_owned: false,
             }))
         }
         crate::scope::DeclareOutcome::Duplicate(_) => {

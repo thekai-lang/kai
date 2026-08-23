@@ -1,4 +1,5 @@
 use crate::expr::{BinaryOp, TypedExpr};
+use crate::ty::KaiType;
 use crate::symbol::{LocalId, StructId};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +17,19 @@ pub enum TypedStmt {
     /// Bare nested block; exists purely for scoping semantics.
     Block(TypedBlock),
     Expr(TypedExpr),
+    /// Ownership marker (§9.4): the local's heap-bearing value leaves scope
+    /// here — codegen emits a release of its current content. Inserted by
+    /// the ownership pass at scope ends and on return paths; locals are
+    /// released innermost-first.
+    ReleaseLocal { local: LocalId, ty: KaiType },
+    /// A return whose function exit must release live locals — evaluated
+    /// value FIRST, then every release, then control leaves (§9.4 ordering:
+    /// the return expression may still read locals it borrows).
+    ReturnCleanup {
+        value: Option<TypedExpr>,
+        /// Innermost-first, reverse declaration order (pass-generated).
+        releases: Vec<(LocalId, KaiType)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,23 +62,33 @@ pub enum TypedPlaceStep {
 /// (`x += e` lowers to load, add, store). The write goes to `root`, or —
 /// when `path` is non-empty — through the field chain starting at `root`.
 /// Mutability was enforced upstream against the ROOT binding (§9.3).
+///
+/// `release_old` marks an owning destination slot (§9.4): codegen must load
+/// the old value, prepare the replacement, RELEASE the old value, then
+/// store — never release before the RHS exists.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedAssign {
     pub root: LocalId,
     pub path: Vec<TypedPlaceStep>,
     pub op: Option<BinaryOp>,
     pub value: TypedExpr,
+    pub release_old: bool,
 }
 
 /// `for name in array { body }`. `binding_local` is declared ONCE per loop
 /// (immutable, element-typed) and re-stored each iteration — the loop
 /// variable borrows, it never owns (§9.9).
+///
+/// `iterable_owned` marks an owned temporary iterable (a call result or
+/// literal — not a borrowed binding): the loop takes ownership and releases
+/// the array at `for.end`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedFor {
     pub binding_local: LocalId,
     pub binding_name: String,
     pub iterable: TypedExpr,
     pub body: TypedBlock,
+    pub iterable_owned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

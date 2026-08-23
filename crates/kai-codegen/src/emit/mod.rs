@@ -2,6 +2,7 @@
 //! then bodies (pass 2) so out-of-order and recursive calls resolve.
 
 pub(crate) mod expr;
+pub(crate) mod ownership;
 pub(crate) mod stmt;
 
 use crate::context::Ctx;
@@ -48,7 +49,12 @@ fn declare_structs(ctx: &mut Ctx, structs: &[TypedStruct]) {
     for ts in structs {
         let name = qualified_name(&ts.module, &ts.name);
         let llvm_ty = ctx.context.opaque_struct_type(&name);
+        let idx = ctx.structs.len() as u32;
         ctx.structs.push(llvm_ty);
+        // Kai-side field types ride along for ownership helper generation.
+        let field_kais: Vec<kai_tast::KaiType> =
+            ts.fields.iter().map(|f| f.ty.clone()).collect();
+        ctx.declare_struct_fields(idx, field_kais);
     }
     for (idx, ts) in structs.iter().enumerate() {
         let field_tys: Vec<BasicTypeEnum> = ts

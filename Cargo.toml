@@ -7,6 +7,7 @@ members = [
     "crates/kai-resolver",
     "crates/kai-tast",
     "crates/kai-typecheck",
+    "crates/kai-ownership",
     "crates/kai-diagnostics",
     "crates/kai-codegen",
     "crates/kai-driver",
@@ -20,6 +21,7 @@ edition = "2024"
 kai-lexer = { path = "crates/kai-lexer" }
 kai-ast = { path = "crates/kai-ast" }
 kai-parser = { path = "crates/kai-parser" }
+kai-ownership = { path = "crates/kai-ownership" }
 kai-resolver = { path = "crates/kai-resolver" }
 kai-tast = { path = "crates/kai-tast" }
 kai-typecheck = { path = "crates/kai-typecheck" }

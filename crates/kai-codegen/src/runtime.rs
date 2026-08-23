@@ -4,37 +4,43 @@
 //! resolves them by name at link time, so JIT programs call them like any
 //! imported function. AOT output (`compile_ir`) carries declarations only.
 //!
-//! Layouts (§9.1): every heap value is a POINTER to a fixed header. The
-//! refcount field is reserved NOW so phase D (ownership) never changes the
-//! ABI — until retain/release land it stays 0.
+//! Layouts (§9.1): every heap value is a POINTER to one uniform header.
+//! Strings and arrays share the shape so a single generic retain/release
+//! works for both; `nbytes` records the payload allocation size so release
+//! can dealloc with the exact layout it alloc'd (Rust requires the match),
+//! and `dtor` lets arrays of heap-bearing elements release their contents
+//! exactly once — when the LAST owner drops the header (§9.9: the array
+//! owns its elements).
 //!
 //! ```text
-//! KaiString        { i64 rc, i64 len, i8* data }
-//! KaiArray.<elem>  { i64 rc, i64 len, <elem>* elems }
+//! KaiHeap { i64 rc, i64 len, i64 nbytes, ptr payload, ptr dtor }
 //! ```
+//!
+//! Refcounts start at 1 (the creator owns); retain bumps, release drops,
+//! zero frees. Element destructors run inside that free path only, so
+//! co-owned arrays never double-release elements.
 
 use crate::context::Ctx;
 use inkwell::types::StructType;
 use inkwell::values::FunctionValue;
 
-/// Header shared by every string value. `data` holds exactly `len` bytes;
-/// NUL-termination is NOT guaranteed — lengths are authoritative.
+/// The one heap header. `payload` is the byte blob for strings or the
+/// untyped element storage for arrays (callers GEP with static types).
 #[repr(C)]
-pub struct KaiStringHeader {
+pub struct KaiHeapHeader {
     pub rc: i64,
+    /// Authoritative element count (arrays) / byte count (strings).
     pub len: i64,
-    pub data: *mut u8,
+    /// Exact size of the `payload` allocation, for matching dealloc.
+    pub nbytes: i64,
+    pub payload: *mut u8,
+    /// Array-of-heap-elements destructor; NULL for scalars and strings.
+    pub dtor: Option<ElemDtor>,
 }
 
-/// Header shared by every array value regardless of element type; element
-/// size rides at the call site because the header never dereferences elems.
-#[repr(C)]
-pub struct KaiArrayHeader {
-    pub rc: i64,
-    pub len: i64,
-    /// Untyped storage: callers GEP with the static element type.
-    pub elems: *mut u8,
-}
+/// Releases every element of an array about to die. Generated per element
+/// type by codegen; receives the array header.
+pub type ElemDtor = unsafe extern "C" fn(*mut KaiHeapHeader);
 
 fn alloc_bytes(byte_len: usize) -> *mut u8 {
     if byte_len == 0 {
@@ -55,24 +61,32 @@ fn alloc_bytes(byte_len: usize) -> *mut u8 {
 /// # Safety
 /// `data` must be readable for `len` bytes unless `len <= 0`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kai_string_new(data: *const u8, len: i64) -> *mut KaiStringHeader {
+pub unsafe extern "C" fn kai_string_new(data: *const u8, len: i64) -> *mut KaiHeapHeader {
     let byte_len = usize::try_from(len).unwrap_or(0);
     let buf = alloc_bytes(byte_len);
     if byte_len > 0 {
         debug_assert!(!data.is_null());
         unsafe { std::ptr::copy_nonoverlapping(data, buf, byte_len) };
     }
-    Box::into_raw(Box::new(KaiStringHeader {
-        rc: 0,
+    Box::into_raw(Box::new(KaiHeapHeader {
+        rc: 1,
         len,
-        data: buf,
+        nbytes: byte_len as i64,
+        payload: buf,
+        dtor: None,
     }))
 }
 
 /// `[..]` -> owned header + zero-initialized element storage. Zero-init so
 /// an element slot is never observed uninitialized even on buggy paths.
+///
+/// `dtor` may be null (scalar elements): nothing per-element to release.
 #[unsafe(no_mangle)]
-pub extern "C" fn kai_array_new(len: i64, elem_size: i64) -> *mut KaiArrayHeader {
+pub extern "C" fn kai_array_new(
+    len: i64,
+    elem_size: i64,
+    dtor: Option<ElemDtor>,
+) -> *mut KaiHeapHeader {
     let byte_len = usize::try_from(len).unwrap_or(0).saturating_mul(
         usize::try_from(elem_size).unwrap_or(0),
     );
@@ -81,11 +95,62 @@ pub extern "C" fn kai_array_new(len: i64, elem_size: i64) -> *mut KaiArrayHeader
         // SAFETY: `elems` covers exactly `byte_len` writable bytes.
         unsafe { std::ptr::write_bytes(elems, 0, byte_len) };
     }
-    Box::into_raw(Box::new(KaiArrayHeader {
-        rc: 0,
+    Box::into_raw(Box::new(KaiHeapHeader {
+        rc: 1,
         len,
-        elems,
+        nbytes: byte_len as i64,
+        payload: elems,
+        dtor,
     }))
+}
+
+/// Co-ownership: the caller becomes another owner of `value`.
+///
+/// # Safety
+/// `value` must be a valid heap header or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kai_retain(value: *mut KaiHeapHeader) {
+    if value.is_null() {
+        return;
+    }
+    // SAFETY: non-null, valid header per the contract.
+    unsafe { (*value).rc += 1 };
+}
+
+/// Relinquishes one ownership claim. At the last release the payload and
+/// header are freed; array element destructors run exactly here, once.
+///
+/// # Safety
+/// `value` must be a valid heap header or null, and the caller must own a
+/// reference (every release site corresponds to one retain/move).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kai_release(value: *mut KaiHeapHeader) {
+    if value.is_null() {
+        return;
+    }
+    // SAFETY: non-null, valid header per the contract.
+    let hdr = unsafe { &mut *value };
+    hdr.rc -= 1;
+    if hdr.rc > 0 {
+        return;
+    }
+    if let Some(dtor) = hdr.dtor {
+        // SAFETY: generated dtors accept exactly this header shape.
+        unsafe { dtor(value) };
+    }
+    let n = hdr.nbytes;
+    if n > 0 {
+        // SAFETY: allocated in alloc_bytes with align 1 and this exact
+        // size, recorded in `nbytes` at creation.
+        unsafe {
+            std::alloc::dealloc(
+                hdr.payload,
+                std::alloc::Layout::from_size_align_unchecked(n as usize, 1),
+            )
+        };
+    }
+    // SAFETY: created by Box::into_raw in *_new.
+    unsafe { drop(Box::from_raw(value)) };
 }
 
 /// String equality compares CONTENT (§9.7): two independently built strings
@@ -98,18 +163,19 @@ pub extern "C" fn kai_array_new(len: i64, elem_size: i64) -> *mut KaiArrayHeader
 /// # Safety
 /// Both arguments must be valid Kai string headers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kai_string_eq(a: *const KaiStringHeader, b: *const KaiStringHeader) -> u8 {
+pub unsafe extern "C" fn kai_string_eq(a: *const KaiHeapHeader, b: *const KaiHeapHeader) -> u8 {
     let (a, b) = unsafe { (&*a, &*b) };
     if a.len != b.len {
         return 0;
     }
     let byte_len = usize::try_from(a.len).unwrap_or(0);
-    if byte_len == 0 || a.data == b.data {
+    if byte_len == 0 || a.payload == b.payload {
         return 1;
     }
     // SAFETY: both payloads hold at least `byte_len` readable bytes.
     let same = unsafe {
-        std::slice::from_raw_parts(a.data, byte_len) == std::slice::from_raw_parts(b.data, byte_len)
+        std::slice::from_raw_parts(a.payload, byte_len)
+            == std::slice::from_raw_parts(b.payload, byte_len)
     };
     u8::from(same)
 }
@@ -120,14 +186,19 @@ pub unsafe extern "C" fn kai_string_eq(a: *const KaiStringHeader, b: *const KaiS
 /// strings travel opaque; the ownership phase (retain/release, data access)
 /// GEPs through this shape.
 #[allow(dead_code)]
+pub(crate) fn heap_header_shape<'ctx>(ctx: &Ctx<'ctx>) -> [inkwell::types::BasicTypeEnum<'ctx>; 5] {
+    let i64_ty = ctx.context.i64_type().into();
+    let ptr = ctx.context.ptr_type(Default::default()).into();
+    [i64_ty, i64_ty, i64_ty, ptr, ptr]
+}
+
+#[allow(dead_code)]
 pub(crate) fn string_header_ty<'ctx>(ctx: &Ctx<'ctx>) -> StructType<'ctx> {
     if let Some(existing) = ctx.module.get_struct_type("KaiString") {
         return existing;
     }
     let ty = ctx.context.opaque_struct_type("KaiString");
-    let i64_ty = ctx.context.i64_type().into();
-    let data_ptr = ctx.context.ptr_type(Default::default()).into();
-    ty.set_body(&[i64_ty, i64_ty, data_ptr], false);
+    ty.set_body(&heap_header_shape(ctx), false);
     ty
 }
 
@@ -139,10 +210,7 @@ pub(crate) fn array_header_ty<'ctx>(ctx: &Ctx<'ctx>, elem_name: &str) -> StructT
         return existing;
     }
     let ty = ctx.context.opaque_struct_type(&name);
-    let i64_ty = ctx.context.i64_type().into();
-    // Opaque pointer era: every elems field is `ptr`, whatever T is.
-    let elems_ptr = ctx.context.ptr_type(Default::default()).into();
-    ty.set_body(&[i64_ty, i64_ty, elems_ptr], false);
+    ty.set_body(&heap_header_shape(ctx), false);
     ty
 }
 
@@ -160,12 +228,31 @@ pub(crate) fn string_new_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
     get_or_declare(ctx, "kai_string_new", llvm)
 }
 
-/// `kai_array_new(i64 len, i64 elem_size) -> %KaiArray.<elem>*`
+/// `kai_array_new(i64 len, i64 elem_size, ptr dtor) -> %KaiArray.<elem>*`
 pub(crate) fn array_new_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     let ptr = ctx.context.ptr_type(Default::default());
-    let llvm = ptr.fn_type(&[i64_ty.into(), i64_ty.into()], false);
+    let llvm = ptr.fn_type(&[i64_ty.into(), i64_ty.into(), ptr.into()], false);
     get_or_declare(ctx, "kai_array_new", llvm)
+}
+
+/// `kai_retain(ptr)` / `kai_release(ptr)` — void over an opaque header.
+pub(crate) fn retain_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr = ctx.context.ptr_type(Default::default());
+    get_or_declare(
+        ctx,
+        "kai_retain",
+        ctx.context.void_type().fn_type(&[ptr.into()], false),
+    )
+}
+
+pub(crate) fn release_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr = ctx.context.ptr_type(Default::default());
+    get_or_declare(
+        ctx,
+        "kai_release",
+        ctx.context.void_type().fn_type(&[ptr.into()], false),
+    )
 }
 
 /// `kai_string_eq(i8* hdr_a, i8* hdr_b) -> i8` (0/1). Opaque pointer
@@ -183,8 +270,10 @@ pub(crate) fn string_eq_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
 /// (LLVM symbol, host address) pairs wired into the JIT via global mapping.
 /// Taking these addresses also keeps the functions alive in the linked
 /// binary; the linker may otherwise strip unreferenced `#[no_mangle]` fns.
-pub(crate) const INTRINSICS: [(&str, *const ()); 3] = [
+pub(crate) const INTRINSICS: [(&str, *const ()); 5] = [
     ("kai_string_new", kai_string_new as *const ()),
     ("kai_array_new", kai_array_new as *const ()),
     ("kai_string_eq", kai_string_eq as *const ()),
+    ("kai_retain", kai_retain as *const ()),
+    ("kai_release", kai_release as *const ()),
 ];

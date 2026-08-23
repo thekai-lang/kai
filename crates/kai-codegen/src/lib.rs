@@ -343,6 +343,7 @@ mod v0003_tests {
                         })],
                         op: Some(kai_tast::BinaryOp::Add),
                         value: TypedExpr::new(TypedExprKind::IntLit(5), KaiType::Int32),
+                        release_old: false,
                     }),
                     TypedStmt::Return(None),
                 ],

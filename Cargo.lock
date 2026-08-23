@@ -81,6 +81,7 @@ dependencies = [
  "kai-codegen",
  "kai-diagnostics",
  "kai-lexer",
+ "kai-ownership",
  "kai-parser",
  "kai-resolver",
  "kai-tast",
@@ -92,6 +93,13 @@ name = "kai-lexer"
 version = "0.0.4"
 dependencies = [
  "kai-diagnostics",
+]
+
+[[package]]
+name = "kai-ownership"
+version = "0.0.4"
+dependencies = [
+ "kai-tast",
 ]
 
 [[package]]

@@ -24,6 +24,24 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
             let _ = expr::emit(ctx, frame, e);
         }
         TypedStmt::For(f) => for_stmt(ctx, frame, f),
+        // Ownership marker from the pass: the local's heap content leaves
+        // scope here (§9.4). The slot points at storage of `ty`.
+        TypedStmt::ReleaseLocal { local, ty } => {
+            let slot = frame.slot(*local);
+            crate::emit::ownership::emit_release_slot(ctx, ty, slot);
+        }
+        TypedStmt::ReturnCleanup { value, releases } => {
+            // Value first: it may read locals that are about to be
+            // released (the §9.5 retain already protected heap content).
+            let value = value.as_ref().map(|e| expr::emit(ctx, frame, e));
+            for (local, ty) in releases.iter() {
+                let slot = frame.slot(*local);
+                crate::emit::ownership::emit_release_slot(ctx, ty, slot);
+            }
+            let _ = ctx
+                .builder
+                .build_return(value.as_ref().map(|v| v as &dyn inkwell::values::BasicValue<'_>));
+        }
     }
 }
 
@@ -122,6 +140,15 @@ fn for_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, f: &TypedFor) {
     }
 
     ctx.builder.position_at_end(end_bb);
+    // Owned temporary iterables transfer into the loop machinery (§9.9):
+    // release the header now that iteration is done. Borrowed iterables
+    // stay owned by their source binding — nothing to do.
+    if f.iterable_owned {
+        crate::emit::ownership::release_header_value(
+            ctx,
+            inkwell::values::BasicValueEnum::PointerValue(header),
+        );
+    }
 }
 
 fn ret<'ctx>(ctx: &Ctx<'ctx>, frame: &Frame<'ctx>, value: Option<&kai_tast::TypedExpr>) {
@@ -180,23 +207,30 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
         };
     }
 
+    // Prepare the replacement FIRST — the RHS may alias the destination
+    // (`arr[0] = arr[0]`), so nothing at the destination may be released
+    // before the new value fully exists (§9.4 ordering).
     let value = expr::emit(ctx, frame, &assign.value);
 
-    // Strict same-type rules guarantee value.ty == the place's type, so it
-    // doubles as the operand type for compound read-modify-write.
-    let value = match assign.op {
+    match assign.op {
         Some(op) => {
+            // Compound ops exist only on numeric slots in v0.0.5; no
+            // ownership event, straight read-modify-write.
             let pointee = types::to_llvm(ctx, &assign.value.ty);
             let old = ctx
                 .builder
                 .build_load(pointee, ptr, "old")
                 .expect("load for compound assign");
-            expr::apply_binary(ctx, op, old, value, &assign.value.ty)
+            let combined = expr::apply_binary(ctx, op, old, value, &assign.value.ty);
+            let _ = ctx.builder.build_store(ptr, combined);
         }
-        None => value,
-    };
-
-    let _ = ctx.builder.build_store(ptr, value);
+        None => {
+            if assign.release_old {
+                crate::emit::ownership::emit_release_slot(ctx, &assign.value.ty, ptr);
+            }
+            let _ = ctx.builder.build_store(ptr, value);
+        }
+    }
 }
 
 fn if_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, if_: &TypedIf) {

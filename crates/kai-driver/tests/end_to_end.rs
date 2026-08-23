@@ -480,3 +480,147 @@ fn v004_jit_module_tree_returns_expected_value() {
     // 6 + 8 + 7 + 10 across three modules (see main.kai).
     assert_eq!(pipeline::jit_file(&v0004_entry()).unwrap(), 31);
 }
+
+// -- v0.0.5 phase D: ownership runtime behavior --------------------------------
+// These run real retain/release paths; a double-free or use-after-free
+// segfaults the test process, which is the assertion.
+
+#[test]
+fn ownership_self_aliased_element_replacement_is_safe() {
+    // §9.4: arr[0] = arr[0] must prepare the RHS (retain) before releasing
+    // the old element — never read freed memory.
+    let src = r#"
+fn main() -> int32 {
+    var arr = ["aa", "bb"];
+    arr[0] = arr[0];
+    var total = 0;
+    if arr[0] == "aa" { total += 10; }
+    if arr[1] == "bb" { total += 5; }
+    return total;
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 15);
+}
+
+#[test]
+fn ownership_returned_param_stays_valid() {
+    // §9.5 id(): returning a borrowed parameter retains it; both the
+    // original and the returned co-owner stay valid and compare equal.
+    let src = r#"
+fn id(s: string) -> string {
+    return s;
+}
+fn main() -> int32 {
+    let name = "kai";
+    let out = id(name);
+    var total = 0;
+    if out == name { total += 7; }
+    if out == "kai" { total += 3; }
+    return total;
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 10);
+}
+
+#[test]
+fn ownership_for_over_owned_temp_and_borrowed_binding() {
+    // §9.9: iteration over a call result transfers into the loop (released
+    // at for.end); iteration over a binding borrows. Both stay correct.
+    let src = r#"
+fn make() -> int32[] {
+    return [9, 8, 7];
+}
+fn sum(a: int32[]) -> int32 {
+    var t = 0;
+    for v in a { t += v; }
+    return t;
+}
+fn main() -> int32 {
+    var total = 0;
+    for v in make() { total += v; }
+    let kept = make();
+    total += sum(kept);
+    return total + kept[0];
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 57);
+}
+
+#[test]
+fn ownership_string_array_elements_survive_copies() {
+    // Array-of-strings destructor path: copy via co-ownership, replace one
+    // element, verify contents through both aliases.
+    let src = r#"
+fn main() -> int32 {
+    var words = ["one", "two"];
+    let alias = words;
+    words[1] = "TWO";
+    var total = 0;
+    if alias[0] == "one" { total += 1; }
+    if words[0] == "one" { total += 2; }
+    if words[1] == "TWO" { total += 4; }
+    if alias[1] == "TWO" { total += 8; }
+    return total;
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 15);
+}
+
+#[test]
+fn ownership_struct_string_field_per_field_semantics() {
+    // E1: heap-bearing structs copy per field. Binding `named.name` retains
+    // the string independently of the struct.
+    let src = r#"
+type User = { name: string; age: int32; }
+fn main() -> int32 {
+    var u = User { name: "ada", age: 36 };
+    let nick = u.name;
+    u.name = "grace";
+    var total = 0;
+    if nick == "ada" { total += 1; }
+    if u.name == "grace" { total += 2; }
+    if u.age == 36 { total += 4; }
+    return total;
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 7);
+}
+
+#[test]
+fn ownership_loop_scoped_strings_release_each_iteration() {
+    // The loop variable borrows; the array owns its elements. Replacing an
+    // element mid-iteration releases only the replaced slot.
+    let src = r#"
+fn main() -> int32 {
+    var words = ["x", "y", "z"];
+    var count = 0;
+    for w in words {
+        if w != "" { count += 1; }
+        words[count - 1] = w;
+    }
+    return count * 10 + 3;
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 33);
+}
+
+#[test]
+fn ownership_struct_copy_is_per_field() {
+    // E1/§9.5: copying a heap-bearing struct memcpy's the aggregate and
+    // retains each heap field — scalars stay independent copies, the
+    // string becomes co-owned.
+    let src = r#"
+type User = { name: string; age: int32; }
+fn main() -> int32 {
+    var u = User { name: "ada", age: 36 };
+    let copy = u;
+    u.age = 50;
+    var total = 0;
+    if copy.name == "ada" { total += 1; }
+    if copy.age == 36 { total += 2; }
+    if u.age == 50 { total += 4; }
+    return total;
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 7);
+}

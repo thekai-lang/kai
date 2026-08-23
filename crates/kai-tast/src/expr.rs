@@ -99,6 +99,11 @@ pub enum TypedExprKind {
         func: crate::symbol::FunctionId,
         args: Vec<TypedExpr>,
     },
+    /// Ownership marker (§9.5): the inner value is BORROWED (a param, local,
+    /// field access, or array element) and is entering an owning slot —
+    /// codegen emits a retain and forwards the pointer unchanged. Inserted
+    /// only by the ownership pass; never constructed by the type checker.
+    Retain(Box<TypedExpr>),
 }
 
 impl TypedExpr {

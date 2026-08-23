@@ -12,6 +12,7 @@ kai-ast = { workspace = true }
 kai-codegen = { workspace = true }
 kai-diagnostics = { workspace = true }
 kai-lexer = { workspace = true }
+kai-ownership = { workspace = true }
 kai-parser = { workspace = true }
 kai-resolver = { workspace = true }
 kai-tast = { workspace = true }

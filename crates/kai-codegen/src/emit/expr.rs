@@ -58,6 +58,23 @@ pub(crate) fn emit<'ctx>(
             array_lit(ctx, frame, elements, &elem)
         }
         TypedExprKind::Index { base, index } => index_read(ctx, frame, base, index, &ty),
+        // Ownership marker from the ownership pass (§9.5): the inner value
+        // is borrowed and entering an owning slot. Headers get one refcount
+        // op; heap-bearing structs get per-field retains at their source
+        // place, then a bitwise copy flows onward.
+        TypedExprKind::Retain(inner) => match &expr.ty {
+            KaiType::String | KaiType::Array(_) => {
+                let value = emit(ctx, frame, inner);
+                crate::emit::ownership::retain_header(ctx, value);
+                value
+            }
+            KaiType::Struct(_) => {
+                let place = place_ptr(ctx, frame, inner)
+                    .expect("retained struct source is always a place");
+                crate::emit::ownership::retain_struct_copy(ctx, &expr.ty, place)
+            }
+            other => unreachable!("retain of non-heap type {other:?}"),
+        },
     }
 }
 
@@ -119,10 +136,17 @@ fn array_lit<'ctx>(
     let elem_size_v = elem_llvm
         .size_of()
         .expect("array elements are sized types");
+    // Arrays own their elements (§9.9): when the last owner releases the
+    // header, this destructor releases every element exactly once.
+    let null_ptr = ctx.context.ptr_type(Default::default()).const_zero();
+    let dtor = crate::emit::ownership::ensure_elem_dtor(ctx, elem_ty)
+        .map_or(null_ptr.into(), |f| {
+            f.as_global_value().as_pointer_value().into()
+        });
     let header = call_value(
         ctx,
         ctx.builder
-            .build_call(new_fn, &[len.into(), elem_size_v.into()], "arr")
+            .build_call(new_fn, &[len.into(), elem_size_v.into(), dtor], "arr")
             .expect("kai_array_new call"),
     )
     .into_pointer_value();
@@ -171,11 +195,11 @@ pub(crate) fn elems_storage_of<'ctx>(
         .build_pointer_cast(header, ctx.context.ptr_type(Default::default()), "arr.hdr")
         .expect("hdr cast");
     let elems_ptr_ty = header_ty
-        .get_field_type_at_index(2)
+        .get_field_type_at_index(3)
         .expect("header has elems field");
     let field_slot = ctx
         .builder
-        .build_struct_gep(header_ty, typed, 2, "arr.elems.p")
+        .build_struct_gep(header_ty, typed, 3, "arr.elems.p")
         .expect("header gep");
     ctx.builder
         .build_load(elems_ptr_ty, field_slot, "arr.elems")
@@ -282,6 +306,21 @@ pub(crate) fn place_ptr<'ctx>(
                 u32::from(*field),
                 "place",
             ))
+        }
+        TypedExprKind::Index { base, index } => {
+            // The INDEX node's type is the ELEMENT type (§9.9).
+            let elem_llvm = crate::types::to_llvm(ctx, &expr.ty);
+            let header = match emit(ctx, frame, base) {
+                BasicValueEnum::PointerValue(p) => p,
+                _ => unreachable!("array base is always a header pointer"),
+            };
+            let elems = elems_storage_of(ctx, header, elem_llvm);
+            let idx64 = widen_index(ctx, emit(ctx, frame, index).into_int_value());
+            Some(unsafe {
+                ctx.builder
+                    .build_in_bounds_gep(elem_llvm, elems, &[idx64], "place.elem")
+                    .expect("element gep")
+            })
         }
         _ => None,
     }
