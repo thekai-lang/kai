@@ -8,14 +8,47 @@ pub(crate) mod module;
 pub(crate) mod runtime;
 pub(crate) mod types;
 
-use context::Ctx;
+use context::{Ctx, SourceInfo};
 use kai_tast::TypedProgram;
+use std::collections::HashMap;
 use std::sync::OnceLock;
+
+/// One module's source, keyed for panic locations (§10.1): dotted module
+/// name (`""` = entry), the display path reported in messages, and the
+/// text spans resolve against. Programs compiled without sources simply
+/// pass an empty slice — every location degrades to `<unknown>:0:0`.
+pub struct SourceUnit {
+    pub module: String,
+    pub file: String,
+    pub text: String,
+}
+
+fn source_map(sources: &[SourceUnit]) -> HashMap<String, SourceInfo> {
+    sources
+        .iter()
+        .map(|unit| {
+            (
+                unit.module.clone(),
+                SourceInfo::new(&unit.file, &unit.text),
+            )
+        })
+        .collect()
+}
 
 /// Compiles a typed program to textual LLVM IR, verifying the module first.
 pub fn compile_ir(module_name: &str, program: &TypedProgram) -> Result<String, String> {
+    compile_ir_with_sources(module_name, program, &[])
+}
+
+/// [`compile_ir`] with per-module sources attached, so runtime checks can
+/// bake real `file:line:col` panic sites (§10.1).
+pub fn compile_ir_with_sources(
+    module_name: &str,
+    program: &TypedProgram,
+    sources: &[SourceUnit],
+) -> Result<String, String> {
     let context = inkwell::context::Context::create();
-    let mut ctx = Ctx::new(&context, module_name);
+    let mut ctx = Ctx::new(&context, module_name, source_map(sources));
 
     emit::program(&mut ctx, program);
     module::verify(&ctx)?;
@@ -24,10 +57,19 @@ pub fn compile_ir(module_name: &str, program: &TypedProgram) -> Result<String, S
 
 /// JIT-compiles and runs `main`, returning its `int32` result.
 pub fn run_jit(program: &TypedProgram) -> Result<i32, String> {
+    run_jit_with_sources(program, &[])
+}
+
+/// [`run_jit`] with per-module sources attached (see
+/// [`compile_ir_with_sources`]).
+pub fn run_jit_with_sources(
+    program: &TypedProgram,
+    sources: &[SourceUnit],
+) -> Result<i32, String> {
     initialize_native()?;
 
     let context = inkwell::context::Context::create();
-    let mut ctx = Ctx::new(&context, "kai_jit");
+    let mut ctx = Ctx::new(&context, "kai_jit", source_map(sources));
     emit::program(&mut ctx, program);
     module::verify(&ctx)?;
 

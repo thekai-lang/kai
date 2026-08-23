@@ -66,6 +66,7 @@ name = "kai-codegen"
 version = "0.0.5"
 dependencies = [
  "inkwell",
+ "kai-diagnostics",
  "kai-tast",
 ]
 
@@ -124,6 +125,9 @@ dependencies = [
 [[package]]
 name = "kai-tast"
 version = "0.0.5"
+dependencies = [
+ "kai-diagnostics",
+]
 
 [[package]]
 name = "kai-typecheck"

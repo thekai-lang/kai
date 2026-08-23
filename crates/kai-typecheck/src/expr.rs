@@ -15,7 +15,7 @@ use kai_tast::{BinaryOp, FunctionId, KaiType, StructId, TypedExpr, TypedExprKind
 /// Lower an AST expression to TAST. `expected` is a width hint for integer
 /// literals; it never enables implicit conversions.
 pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType>) -> TypedExpr {
-    match &expr.kind {
+    let mut typed = match &expr.kind {
         ExprKind::IntLit(lit) => {
             let span = lit.span;
             int_lit(checker, lit.value, expected.as_ref(), span)
@@ -47,7 +47,11 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
             checker.error(error::invalid_expression(span));
             poisoned()
         }
-    }
+    };
+    // Every node carries its whole-expression span; runtime panic sites
+    // (§10.1) resolve it to `file:line:col` at emission time.
+    typed.span = expr.span;
+    typed
 }
 
 fn int_lit(checker: &mut Checker, value: u64, expected: Option<&KaiType>, span: Span) -> TypedExpr {

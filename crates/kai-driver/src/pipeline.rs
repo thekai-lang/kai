@@ -12,6 +12,7 @@
 use std::path::Path;
 
 use kai_ast::Program;
+use kai_codegen::SourceUnit;
 use kai_diagnostics::Diagnostic;
 use kai_resolver::ModuleInput;
 use kai_tast::TypedProgram;
@@ -31,7 +32,8 @@ pub fn compile(source: &str) -> Result<String, Failure> {
     let source = source.to_string();
     with_big_stack(move || {
         let program = lower(&source)?;
-        kai_codegen::compile_ir("kai_module", &program).map_err(internal_failure)
+        kai_codegen::compile_ir_with_sources("kai_module", &program, &anon_sources(&source))
+            .map_err(internal_failure)
     })
 }
 
@@ -40,7 +42,8 @@ pub fn jit(source: &str) -> Result<i32, Failure> {
     let source = source.to_string();
     with_big_stack(move || {
         let program = lower(&source)?;
-        kai_codegen::run_jit(&program).map_err(internal_failure)
+        kai_codegen::run_jit_with_sources(&program, &anon_sources(&source))
+            .map_err(internal_failure)
     })
 }
 
@@ -50,7 +53,8 @@ pub fn compile_file(entry: &Path) -> Result<String, Failure> {
     with_big_stack(move || {
         let modules = load_modules(&entry)?;
         let program = lower_modules(&modules)?;
-        kai_codegen::compile_ir("kai_module", &program).map_err(internal_failure)
+        kai_codegen::compile_ir_with_sources("kai_module", &program, &module_sources(&modules))
+            .map_err(internal_failure)
     })
 }
 
@@ -60,8 +64,29 @@ pub fn jit_file(entry: &Path) -> Result<i32, Failure> {
     with_big_stack(move || {
         let modules = load_modules(&entry)?;
         let program = lower_modules(&modules)?;
-        kai_codegen::run_jit(&program).map_err(internal_failure)
+        kai_codegen::run_jit_with_sources(&program, &module_sources(&modules))
+            .map_err(internal_failure)
     })
+}
+
+/// The string API's single anonymous module (`""`), reported as `<stdin>`.
+fn anon_sources(source: &str) -> Vec<SourceUnit> {
+    vec![SourceUnit {
+        module: String::new(),
+        file: "<stdin>".to_string(),
+        text: source.to_string(),
+    }]
+}
+
+fn module_sources(modules: &[crate::modules::LoadedModule]) -> Vec<SourceUnit> {
+    modules
+        .iter()
+        .map(|m| SourceUnit {
+            module: m.name.clone(),
+            file: m.file.clone(),
+            text: m.source.clone(),
+        })
+        .collect()
 }
 
 // Deeply nested input recurses through every phase before a budget trips,

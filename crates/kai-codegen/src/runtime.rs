@@ -180,6 +180,46 @@ pub unsafe extern "C" fn kai_string_eq(a: *const KaiHeapHeader, b: *const KaiHea
     u8::from(same)
 }
 
+/// §10.1: report a runtime violation in the mandated format and exit with
+/// code 101. `msg` is length-delimited (baked globals carry no NUL);
+/// `file` is a NUL-terminated module-file global the compiler emits beside
+/// each call site. Never returns.
+///
+/// # Safety
+/// `msg` must be readable for `msg_len` bytes; `file` must be a valid
+/// C string — both are compiler-generated globals.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kai_panic(
+    msg: *const u8,
+    msg_len: i64,
+    file: *const u8,
+    line: i64,
+    col: i64,
+) {
+    use std::io::Write;
+
+    let len = usize::try_from(msg_len).unwrap_or(0);
+    let msg = if msg.is_null() || len == 0 {
+        &[][..]
+    } else {
+        // SAFETY: contract above — compiler-generated globals.
+        unsafe { std::slice::from_raw_parts(msg, len) }
+    };
+    let file = if file.is_null() {
+        std::borrow::Cow::Borrowed("<unknown>")
+    } else {
+        // SAFETY: contract above.
+        unsafe { std::ffi::CStr::from_ptr(file.cast()) }.to_string_lossy()
+    };
+
+    let stderr = std::io::stderr();
+    let mut out = stderr.lock();
+    let _ = writeln!(out, "kai runtime panic: {}", String::from_utf8_lossy(msg));
+    let _ = writeln!(out, "  at {}:{}:{}", file, line, col);
+    let _ = out.flush();
+    std::process::exit(101);
+}
+
 // -- LLVM-side plumbing -------------------------------------------------------
 
 /// `%KaiString` named struct type, created once per module. Unused while
@@ -267,13 +307,33 @@ pub(crate) fn string_eq_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
     get_or_declare(ctx, "kai_string_eq", llvm)
 }
 
+/// `kai_panic(msg*, msg_len, file*, line, col)` — reports §10.1 and exits;
+/// call sites follow with `unreachable`.
+#[allow(dead_code)] // referenced once the §10 checks emit call sites
+pub(crate) fn panic_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr = ctx.context.ptr_type(Default::default());
+    let i64_ty = ctx.context.i64_type();
+    let llvm = ctx.context.void_type().fn_type(
+        &[
+            ptr.into(),
+            i64_ty.into(),
+            ptr.into(),
+            i64_ty.into(),
+            i64_ty.into(),
+        ],
+        false,
+    );
+    get_or_declare(ctx, "kai_panic", llvm)
+}
+
 /// (LLVM symbol, host address) pairs wired into the JIT via global mapping.
 /// Taking these addresses also keeps the functions alive in the linked
 /// binary; the linker may otherwise strip unreferenced `#[no_mangle]` fns.
-pub(crate) const INTRINSICS: [(&str, *const ()); 5] = [
+pub(crate) const INTRINSICS: [(&str, *const ()); 6] = [
     ("kai_string_new", kai_string_new as *const ()),
     ("kai_array_new", kai_array_new as *const ()),
     ("kai_string_eq", kai_string_eq as *const ()),
     ("kai_retain", kai_retain as *const ()),
     ("kai_release", kai_release as *const ()),
+    ("kai_panic", kai_panic as *const ()),
 ];

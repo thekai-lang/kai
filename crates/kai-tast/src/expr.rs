@@ -1,10 +1,15 @@
 use crate::symbol::LocalId;
 use crate::ty::KaiType;
+use kai_diagnostics::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedExpr {
     pub kind: TypedExprKind,
     pub ty: KaiType,
+    /// Source span of the whole expression (byte offsets). Runtime panics
+    /// (§10.1) report `file:line:col` resolved from it at emission time;
+    /// tests and pass-generated wrappers may leave the zero span.
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,8 +112,15 @@ pub enum TypedExprKind {
 }
 
 impl TypedExpr {
+    /// Untyped-span constructor: tests and ownership-pass wrappers that
+    /// carry an existing expression's position implicitly.
     pub fn new(kind: TypedExprKind, ty: KaiType) -> Self {
-        Self { kind, ty }
+        Self::new_at(kind, ty, Span::new(0, 0))
+    }
+
+    /// Full constructor used by the type checker, which knows the AST span.
+    pub fn new_at(kind: TypedExprKind, ty: KaiType, span: Span) -> Self {
+        Self { kind, ty, span }
     }
 
     /// Integer literal constructor that picks the right width.

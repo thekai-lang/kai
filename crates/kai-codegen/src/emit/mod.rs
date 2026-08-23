@@ -3,6 +3,7 @@
 
 pub(crate) mod expr;
 pub(crate) mod ownership;
+pub(crate) mod panic;
 pub(crate) mod stmt;
 
 use crate::context::Ctx;

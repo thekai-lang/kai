@@ -93,6 +93,19 @@ fn is_owned_temp(expr: &TypedExpr) -> bool {
     }
 }
 
+/// Owning slot fed by a borrowed value (§9.5 row 2): swap the expression
+/// for a placeholder, rewrap it in a `Retain` marker that carries the
+/// inner span. Shared by every owning-slot site (returns, `let`, plain
+/// assignment, literal fields/elements).
+fn wrap_retain_if_borrowed(heap: &HeapBearing, e: &mut TypedExpr) {
+    if heap.is(&e.ty) && !is_owned_temp(e) {
+        let ty = e.ty.clone();
+        let span = e.span;
+        let inner = std::mem::replace(e, TypedExpr::new(TypedExprKind::Invalid, ty.clone()));
+        *e = TypedExpr::new_at(TypedExprKind::Retain(Box::new(inner)), ty, span);
+    }
+}
+
 fn resolve_fn(heap: &HeapBearing, decl: &mut TypedFnDecl) {
     // Frame 0: parameters — they borrow, so they are never registered for
     // release (the callee does not release what it does not own, §9.3).
@@ -198,12 +211,7 @@ fn finish_return(heap: &HeapBearing, ret: TypedStmt, _scopes: &Scopes) -> TypedS
             // array-literal elements) need their own markers before we
             // decide whether the result itself needs retaining.
             walk_expr(heap, &mut e);
-            if heap.is(&e.ty) && !is_owned_temp(&e) {
-                let ty = e.ty.clone();
-                let inner =
-                    std::mem::replace(&mut e, TypedExpr::new(TypedExprKind::Invalid, ty.clone()));
-                e = TypedExpr::new(TypedExprKind::Retain(Box::new(inner)), ty);
-            }
+            wrap_retain_if_borrowed(heap, &mut e);
             Some(e)
         }
         None => None,
@@ -216,12 +224,7 @@ fn walk_stmt(heap: &HeapBearing, stmt: TypedStmt, scopes: &mut Scopes) -> Vec<Ty
         TypedStmt::Let(mut binding) => {
             walk_expr(heap, &mut binding.init);
             // Owning slot: co-own borrowed sources (§9.4/§9.5 row 3).
-            if heap.is(&binding.init.ty) && !is_owned_temp(&binding.init) {
-                let init =
-                    std::mem::replace(&mut binding.init, TypedExpr::new(TypedExprKind::Invalid, KaiType::Unit));
-                let ty = init.ty.clone();
-                binding.init = TypedExpr::new(TypedExprKind::Retain(Box::new(init)), ty);
-            }
+            wrap_retain_if_borrowed(heap, &mut binding.init);
             scopes.declare(
                 binding.local,
                 binding.init.ty.clone(),
@@ -256,15 +259,13 @@ fn walk_stmt(heap: &HeapBearing, stmt: TypedStmt, scopes: &mut Scopes) -> Vec<Ty
 fn walk_assign(heap: &HeapBearing, mut assign: TypedAssign) -> TypedAssign {
     walk_expr(heap, &mut assign.value);
 
-    // Compound ops exist only on numeric (non-heap) slots in v0.0.5, so
-    // release_old applies to plain stores only.
     assign.release_old = assign.op.is_none() && heap.is(&assign.value.ty);
 
-    // Owning slot: retain borrowed replacements (§9.5).
-    if assign.op.is_none() && heap.is(&assign.value.ty) && !is_owned_temp(&assign.value) {
-        let value = std::mem::replace(&mut assign.value, TypedExpr::new(TypedExprKind::Invalid, KaiType::Unit));
-        let ty = value.ty.clone();
-        assign.value = TypedExpr::new(TypedExprKind::Retain(Box::new(value)), ty);
+    // Owning slot: retain borrowed replacements (§9.5). Compound ops exist
+    // only on numeric (non-heap) slots in v0.0.5, so this is plain stores
+    // only.
+    if assign.op.is_none() {
+        wrap_retain_if_borrowed(heap, &mut assign.value);
     }
     assign
 }
@@ -299,27 +300,13 @@ fn walk_expr(heap: &HeapBearing, expr: &mut TypedExpr) {
         TypedExprKind::StructLit { values, .. } => {
             for v in values.iter_mut() {
                 walk_expr(heap, v);
-                if heap.is(&v.ty) && !is_owned_temp(v) {
-                    let inner = std::mem::replace(
-                        v,
-                        TypedExpr::new(TypedExprKind::Invalid, KaiType::Unit),
-                    );
-                    let ty = inner.ty.clone();
-                    *v = TypedExpr::new(TypedExprKind::Retain(Box::new(inner)), ty);
-                }
+                wrap_retain_if_borrowed(heap, v);
             }
         }
         TypedExprKind::ArrayLit { elements } => {
             for e in elements.iter_mut() {
                 walk_expr(heap, e);
-                if heap.is(&e.ty) && !is_owned_temp(e) {
-                    let inner = std::mem::replace(
-                        e,
-                        TypedExpr::new(TypedExprKind::Invalid, KaiType::Unit),
-                    );
-                    let ty = inner.ty.clone();
-                    *e = TypedExpr::new(TypedExprKind::Retain(Box::new(inner)), ty);
-                }
+                wrap_retain_if_borrowed(heap, e);
             }
         }
         // Call arguments are BORROWED (§9.6): no retain, but nested
