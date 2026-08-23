@@ -1,6 +1,6 @@
 # Kai — Core Language Grammar (EBNF)
 
-**Scope:** v0.0.1–v0.0.6 (whitepaper v0.7's roadmap: v0.0.5 is now the
+**Scope:** v0.0.1–v0.0.6 (whitepaper v0.13's roadmap: v0.0.5 is now the
 "Ownership runtime" slot — `string`, arrays, `for..in`, retain/release —
 inserted between modules (v0.0.4) and Optional/Result/closures (now v0.0.6,
 was v0.0.5). The trust-aware layer (`require`, `observe`, `@local`/
@@ -29,6 +29,11 @@ LineComment  ::= '//' { any-char-except-newline }
 
 (* Identifiers and keywords *)
 Ident        ::= (Letter | '_') { Letter | Digit | '_' }
+               (* A bare single '_' is carved out of this rule as of
+                  v0.0.6 — it lexes as a distinct Underscore token, not an
+                  Ident, reserved exclusively for DiscardStmt below. Every
+                  other underscore-containing name (`_foo`, `my_var`) is
+                  an ordinary Ident, unaffected. *)
 Letter       ::= 'a'..'z' | 'A'..'Z'
 Digit        ::= '0'..'9'
 
@@ -38,9 +43,11 @@ Keyword      ::= 'fn' | 'let' | 'var' | 'type' | 'use' | 'return'
                      implemented — see WhileStmt and open item 1. *)
                 | 'while'
                 | 'true' | 'false'
-               | 'public' | 'mut'
-               | 'Some' | 'Result' | 'Optional'   (* Optional not yet used as keyword in examples — see open items *)
-               | 'catch' | 'as'                    (* 'as' reserved for future module alias, not v0.0.1–5 core *)
+                | 'public' | 'mut'
+                | 'Some' | 'None' | 'Result' | 'Optional'
+                  (* 'Some'/'None' construct an Optional value (v0.0.6);
+                     'Result' names a type only, never a constructor. *)
+                | 'catch' | 'as'                    (* 'as' reserved for future module alias, not core yet *)
 
 (* Literals *)
 IntLit       ::= Digit { Digit }
@@ -56,20 +63,18 @@ BoolLit      ::= 'true' | 'false'
    lexer should treat `${` inside a string as ordinary literal text, not
    as the start of an embedded expression. *)
 StringLit    ::= '"' { StringSegment } '"'
-StringSegment ::= RawTextChar | Interpolation   (* Interpolation branch: not active in v0.0.5 *)
+StringSegment ::= RawTextChar | EscapeSeq | Interpolation   (* Interpolation branch: not active in v0.0.5 *)
 Interpolation ::= '${' Expr '}'                  (* deferred — see note above *)
-RawTextChar  ::= PlainChar | EscapeSequence
-PlainChar    ::= (* any character except '"' and '\' *)
-EscapeSequence ::= '\' ( 'n' | 't' | 'r' | '"' | '\' )
-               (* v0.0.5 escape set, locked during implementation planning:
-                  newline, tab, carriage return, quote, backslash — the
-                  minimal standard set. Any other character after '\'
-                  is a LEX error ("unknown escape sequence"), not a
-                  silent pass-through: an unrecognized escape almost
-                  always means the source meant something the language
-                  doesn't say. `\` + line-continuation, `\0`, unicode
-                  escapes etc. do NOT exist yet. *)
 
+EscapeSeq    ::= '\' ('n' | 't' | 'r' | '\' | '"' | '0')
+               (* v0.0.5's full escape set — no others. An unrecognized
+                  escape (`\q`, etc.) is a lex-phase diagnostic naming the
+                  bad sequence, matching the existing precision-first lexer
+                  diagnostics (malformed numeric literals get a specific
+                  message, not "unexpected character"). `\$` is deliberately
+                  absent: `${` isn't special in v0.0.5, so there's nothing
+                  for it to escape yet — this can be revisited once
+                  interpolation itself lands. *)
 
 (* Operators and punctuation *)
 Op           ::= '+' | '-' | '*' | '/' | '%'
@@ -164,12 +169,17 @@ Stmt         ::= LetStmt
                | IfStmt
                | ForStmt
                | WhileStmt
+               | DiscardStmt
                | ExprStmt
 
 LetStmt      ::= 'let' Ident [ ':' Type ] '=' Expr ';'
 VarStmt      ::= 'var' Ident [ ':' Type ] '=' Expr ';'
                (* Both require an initializer — §9.2. No declaration-
-                  without-initializer form exists yet. *)
+                  without-initializer form exists yet. Neither accepts
+                  '_' in the Ident position — '_' is not an Ident at all
+                  as of v0.0.6 (see the Ident rule note above), so
+                  `let _ = expr;` is a parse-level rejection, not a
+                  semantic one. *)
 
 ReturnStmt   ::= 'return' [ Expr ] ';'
 
@@ -179,11 +189,21 @@ ForStmt      ::= 'for' Ident 'in' Expr Block
                (* Iterates and borrows each element per iteration — §9.9. *)
 
 WhileStmt    ::= 'while' Expr Block
-               (* SPEC-ONLY — not implemented. No parser or AST support
-                  exists in any release so far; the rule below is kept for
-                  the grammar's target shape only. An earlier revision of
-                  this document claimed `while` was "confirmed v0.0.2" —
-                  that was false and is corrected here (open item 1). *)
+               (* SPEC-ONLY — not implemented. No parser or AST support exists in
+                  any release so far (verified against kai-parser at v0.0.5.1);
+                  the rule is kept for the grammar's target shape only. An
+                  earlier revision of this document claimed `while` was
+                  "confirmed v0.0.2" — that was false and is corrected here
+                  (open item 1). *)
+
+DiscardStmt  ::= '_' '=' Expr ';'
+               (* v0.0.6. The sole explicit-discard form (whitepaper §9.9b)
+                  — applies to any expression type, not just Optional/Result,
+                  though it's specifically what makes discarding those two
+                  legal despite the diagnostic §9.9a otherwise requires.
+                  '_' here is the Underscore token, not Ident — this is a
+                  dedicated statement shape, not a variable binding; '_' is
+                  never introduced as a name anywhere else in the grammar. *)
 
 ExprStmt     ::= AssignStmt | CallExprStmt
 
@@ -269,17 +289,35 @@ PostfixOp    ::= '.' Ident                   (* field access. Also produces the
                     discipline one layer up (typed input, mechanical
                     consumer) — module-vs-value is exactly the kind of
                     semantic distinction the parser must not encode. *)
-               | '(' [ ArgList ] ')'          (* call *)
-               | '[' Expr ']'                 (* array index *)
-               | '.' 'unwrap_or' '(' Expr ')' (* Result unwrap — §3.4 *)
-               | 'catch' '|' Ident '|' Block  (* Result error-branch unwrap — §3.4 *)
+                | '(' [ ArgList ] ')'          (* call *)
+                | '[' Expr ']'                 (* array index *)
+                | 'catch' '|' Ident '|' Block  (* Result error-branch handler — §3.4 *)
+               (* `.unwrap_or(default)` has NO dedicated production: it composes
+                  from '.' Ident + call exactly like any method-shaped call
+                  (`math.sqrt(9.0)` — open item #6's composition). Whether
+                  `unwrap_or` names the builtin combinator is a TYPECHECK
+                  decision — the receiver must be Optional<T> or Result<T,E>
+                  and the default must unify with T (§9.9a); to the parser it
+                  is an ordinary FieldAccess+Call shape. The dedicated rule
+                  this grammar once carried is removed as of v0.0.6 scope-lock,
+                  same meaning-agnostic principle that kept qualified calls out
+                  of the parser. *)
 
 PrimaryExpr  ::= IntLit
                | FloatLit
                | BoolLit
                | StringLit
                | Ident
+               | 'None'
                | 'Some' '(' Expr ')'
+                 (* Both construct an Optional (v0.0.6). 'None' carries no
+                    payload, so it has no arguments to infer from — it is
+                    legal ONLY where a context type fixes T, exactly like
+                    the empty array literal (§9.7): `let x: string? = None;`
+                    is valid, bare `let x = None;` is a typecheck error.
+                    Context here means annotation/parameter/return position
+                    or an outer typed literal — same mechanism as arrays,
+                    not new inference machinery. *)
                | StructLit
                | ArrayLit
                | ClosureLit
@@ -304,14 +342,12 @@ FieldInitList ::= FieldInit { ',' FieldInit }
 FieldInit    ::= Ident ':' Expr
 
 ArrayLit     ::= '[' [ ArgList ] ']'
-               (* Empty form `[]` is legal ONLY where a context type fixes
-                  the element type (annotation on the binding, parameter or
-                  return position, outer-literal element). A bare
-                  `let arr = [];` with no annotation is a COMPILE ERROR
-                  ("empty array literal requires a type annotation") — there
-                  is no placeholder element type to infer from, and inventing
-                  one would violate the no-implicit-conversions stance. *)
-
+               (* An empty ArrayLit (`[]`) parses fine — this rule doesn't
+                  reject it. The requirement for an explicit type annotation
+                  on the enclosing `let`/`var` when the literal is empty
+                  (whitepaper §3.4) is a typecheck-phase rule, not a parser
+                  one, same pattern as everywhere else element type/context
+                  decisions have been deferred past parsing in this grammar. *)
 
 ClosureLit   ::= 'fn' '(' [ ParamList ] ')' '->' Type Block
                (* closure VALUE uses 'fn' — only the closure TYPE dropped
@@ -331,7 +367,7 @@ ClosureLit   ::= 'fn' '(' [ ParamList ] ')' '->' Type Block
 | `TypeDecl`/`StructBody`, `StructLit`, `ArgList`/calls, `Param` with `mut`, field-access `Place` (read and write, write gated by `mut`), cyclic-struct rejection | v0.0.3 |
 | `UseDecl`, `ModulePath`, qualified `PostfixOp` (`.` access as module call) | v0.0.4 |
 | `ArrayType`, `ArrayLit`, array indexing, `ForStmt`, `string` (`StringLit`, plain literals — no interpolation, deferred), string `==`/`!=` as content comparison | v0.0.5 (Ownership runtime — retain/release actually exercised here for the first time) |
-| `OptionalType`, `ResultType`, `CoalesceExpr`, `unwrap_or`/`catch`, `ClosureType`, `ClosureLit` | v0.0.6 |
+| `OptionalType`, `ResultType`, `CoalesceExpr`, `unwrap_or` (both `Optional`/`Result`), `catch` (`Result`-only), `ClosureType`, `ClosureLit`, `DiscardStmt`, closure-cycle rejection | v0.0.6 |
 
 ---
 
@@ -345,15 +381,15 @@ own changelog.
 1. **Corrected (v0.0.5.1): this item's earlier resolution was wrong in both directions.** There is no `while` — no parser or AST support has ever existed; the "confirmed v0.0.2" claim above was false, and `WhileStmt` remains spec-only. Conversely, the claim that "`for...in` itself is still not implemented" went stale: `ForStmt` **did land** in v0.0.5 (arrays + iteration) and is implemented as written. `break`/`continue` have never appeared anywhere and are not part of any rule here.
 2. ~~Boolean logic operators (`&&`, `||`, `!`) have never appeared.~~ **Resolved: all three exist**, confirmed v0.0.2, with `&&` binding tighter than `||` and short-circuit evaluation verified end-to-end.
 3. ~~**Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime)**~~ **Resolved: landed in v0.0.5.** `ForStmt`/`ArrayType`/`ArrayLit` are implemented as written above — array literals, indexing reads/writes, and element-borrowing iteration all ship with the ownership runtime.
-4. **`ClosureLit` still uses `fn(...)` while `ClosureType` dropped it** (§3.5's stated change was type-only). Not yet implemented (closures are v0.0.6, not yet reached) — still open.
+4. ~~`ClosureLit` still uses `fn(...)` while `ClosureType` dropped it.~~ **Resolved: intentional, confirmed at v0.0.6.** `fn` marks "this is an expression" and deliberately does not appear in the type position — this also leaves room for a future function-pointer-vs-closure type distinction. Not symmetry for its own sake; the asymmetry is load-bearing.
 5. ~~Assignable place — partially resolved.~~ **Now fully resolved.** Assignment is statement-only (confirmed by implementation), and `Place` includes both field access (`Place '.' Ident`, v0.0.3) and array indexing (`Place '[' Expr ']'`, v0.0.5) under one uniform rule — see the `Place` rule above and whitepaper §9.3's generalized model (root determines writability; every projection inherits it).
 6. **Module-qualified calls (`math.sqrt(9.0)`) and struct field access (`user.name`) share the same `.` postfix rule — resolved architecturally, not yet exercised by real code.** No separate AST node for "qualified call" — `math.sqrt(9.0)` parses as ordinary `Call(FieldAccess(Ident, Ident), args)` via the existing `PostfixExpr` composition (see `PostfixOp` note above); disambiguating whether the base identifier is a module or a value is a resolver-phase job. `StructLit`'s head was generalized to `QualifiedName` (dotted, §7 above) for the same reason, so `math.Point { ... }` parses without a parallel node either. This decision is recorded so a "QualifiedCall"/"QualifiedStructLit" special-case node doesn't get reintroduced later out of convenience — it would duplicate what composition already provides and push a semantic (module-vs-value) distinction into the parser, which contradicts the parser/resolver boundary this project has held everywhere else (§8's TAST discipline, the `Trust<C>` IR in §5.0/§8). Still needs real-code testing once modules (v0.0.4) and structs (v0.0.3) have both landed.
    **Downstream consequence, worth being precise about:** the meaning-agnostic parse means `p.add(2, 3)` (a struct field called like a function) is syntactically identical to `math.add(2, 3)` — the parser genuinely cannot and should not tell them apart. But the two cases resolve through **different diagnostic paths, not one shared "direct-call" diagnostic**: if the base resolves to a module (via `use`), an unknown/private member is a **resolver-phase** diagnostic (commit 4's "unknown module member"/"private access"). If the base resolves to an ordinary value, there is no module-lookup step at all — it falls to **typecheck**, with two sub-cases: the named field doesn't exist on the value's type (the same "unknown field" diagnostic an ordinary read like `p.add` would already produce, call or not), or the field exists but its type isn't callable ("value of type X is not callable" — a genuinely new diagnostic case, only reachable once closures exist at v0.0.6, since before that **no struct field is ever callable, unconditionally** — every `p.<field>(...)` where `p` isn't a module resolves as invalid at v0.0.3–v0.0.5, just via whichever of the two typecheck sub-cases the field name happens to hit).
-7. **`Optional<T>` vs. postfix `T?`** — still open; Optional/Result are now v0.0.6 scope (shifted from v0.0.5), not yet implemented.
+7. ~~`Optional<T>` vs. postfix `T?`.~~ **Resolved at v0.0.6.** `T?` is canonical source-level sugar for `Optional<T>` — desugars before typecheck, never a second semantic form (whitepaper §9.9a). `Result<T,E>` intentionally has no postfix sugar (binary type parameter, no natural unary shorthand).
 8. ~~`println` called unqualified in v0.4.5 reference code contradicts §3.6's "always namespace-qualified" rule.~~ **Resolved: `io.println(...)` only, no exception.** The v0.4.5 sample predates the current whitepaper's strict qualification rule and is not carried forward — every stdlib call, including `println`, goes through its namespace with no globally-injected builtins. Now recorded in whitepaper §3.6.
 9. ~~Language-level semantics decided in the compiler but not yet written into the whitepaper.~~ **Resolved.** Block scoping/shadowing, definite-return analysis, and integer literal widening are now in whitepaper §3.2a.
 10. ~~`mut` parameter semantics for stack types — ABI implications unclear.~~ **Resolved.** `mut` on a stack-type parameter is local-copy-permission only, zero ABI difference from an unannotated parameter, not observable by the caller. One rule ("`mut` grants write access through the binding"), two consequences depending on stack vs. heap — see whitepaper §9.3.
 11. ~~Retain rule (§9.5) enforcement version was misattributed to v0.0.3.~~ **Resolved.** v0.0.3 has zero heap-bearing types active (structs are stack-only per §9.1) — nothing there ever triggers a retain. The claim now correctly sits on v0.0.5 (Ownership runtime), where `string`/arrays first exist.
 12. ~~Cyclic struct definitions — undefined behavior.~~ **Resolved: compile error**, detected via DFS over the `TypeDecl` dependency graph, diagnostic reports the cycle path. Indirection/boxing to legitimately express self-referential types remains undesigned — tracked as its own open item in the whitepaper's Appendix A, not here (it's a semantic/type-system question, not a grammar one).
-13. **NEW — discarding a non-`unit` call result.** Resolved for v0.0.3–v0.0.5: allowed silently, no diagnostic (no correctness risk for scalars/structs). Revisited at v0.0.6 once `Result` exists — discarding a `Result` will require a diagnostic (§2.3); `Optional`'s discard policy is deliberately left open for that same version, not assumed. This is a typecheck-phase decision, not a grammar one — `CallExprStmt ::= Expr ';'` already accepts the shape regardless of what the checker eventually does with it.
+13. ~~**Discarding a non-`unit` call result.**~~ **Resolved at v0.0.6 scope-lock.** Discarding an `Optional<T>`/`Result<T,E>`-typed value as a bare statement is a diagnostic — symmetrically for both types (§9.9a); scalars/structs remain silently discardable as before. The escape hatch shipped in the same version: `_ = expr;` (`DiscardStmt`, §9.9b). The check lives at typecheck on statement-position expressions, exactly where this item predicted.
 14. **NEW — type/function namespace separation.** `type Point = {...}` and a hypothetical `fn Point(...)` don't collide: struct-literal syntax (`Point { ... }`) and call syntax (`Point(...)`) are already unambiguous to the parser via lookahead on the token following the identifier, so type names and function names can be treated as separate namespaces at the resolver level without any grammar ambiguity. Recorded here as the working assumption; not yet exercised by real code.
