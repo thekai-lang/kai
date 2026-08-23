@@ -12,7 +12,6 @@ use crate::context::Ctx;
 /// own block first, then branch to the returned one (typically as the
 /// false edge of a guard comparison). `module_key` selects the source
 /// whose span is being reported (`""` = entry module).
-#[allow(dead_code)] // referenced once the §10 checks emit call sites
 pub(crate) fn panic_block<'ctx>(
     ctx: &Ctx<'ctx>,
     module_key: &str,
@@ -52,9 +51,32 @@ pub(crate) fn panic_block<'ctx>(
     bb
 }
 
+/// §10 guard pattern: `fails` (an `i1`) branches to a fresh panic block;
+/// execution continues in a fresh continuation block the caller's next
+/// instructions land in. Values computed before the branch dominate both
+/// successors, so no phi plumbing is needed.
+pub(crate) fn trap_on<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &crate::frame::Frame<'ctx>,
+    span: Span,
+    fails: inkwell::values::IntValue<'ctx>,
+    message: &str,
+    cont_label: &str,
+) {
+    let current = ctx.builder.get_insert_block().expect("active block");
+    let function = current.get_parent().expect("function");
+    let panic_bb = panic_block(ctx, &frame.module, span, message);
+    let cont_bb = ctx.context.append_basic_block(function, cont_label);
+
+    ctx.builder.position_at_end(current);
+    ctx.builder
+        .build_conditional_branch(fails, panic_bb, cont_bb)
+        .expect("guard branch");
+    ctx.builder.position_at_end(cont_bb);
+}
+
 /// The owning module's display path as a baked global, cached per key so a
 /// function with many checks shares one string.
-#[allow(dead_code)]
 fn file_global<'ctx>(
     ctx: &Ctx<'ctx>,
     module_key: &str,

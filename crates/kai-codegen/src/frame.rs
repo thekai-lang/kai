@@ -8,12 +8,16 @@ use inkwell::values::PointerValue;
 use kai_tast::LocalId;
 
 pub(crate) struct Frame<'ctx> {
+    /// Dotted module name of the function under construction (`""` =
+    /// entry); selects the source that panic locations resolve against.
+    pub module: String,
     slots: HashMap<u32, PointerValue<'ctx>>,
 }
 
 impl<'ctx> Frame<'ctx> {
-    pub fn new() -> Self {
+    pub fn new(module: String) -> Self {
         Self {
+            module,
             slots: HashMap::new(),
         }
     }

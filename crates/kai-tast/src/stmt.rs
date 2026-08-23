@@ -73,6 +73,9 @@ pub struct TypedAssign {
     pub op: Option<BinaryOp>,
     pub value: TypedExpr,
     pub release_old: bool,
+    /// Source extent of the whole assignment; locates runtime guards it
+    /// emits (bounds checks on index hops, arithmetic traps).
+    pub span: kai_diagnostics::Span,
 }
 
 /// `for name in array { body }`. `binding_local` is declared ONCE per loop

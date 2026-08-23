@@ -31,7 +31,7 @@ fn lower_stmt(checker: &mut Checker, stmt: &Stmt, return_type: &KaiType) -> Opti
     match &stmt.kind {
         StmtKind::Return(value) => ret(checker, value.as_ref(), return_type, stmt.span),
         StmtKind::Let(b) => binding(checker, b.name.clone(), b.mutable, b.ty.as_ref(), &b.init),
-        StmtKind::Assign(a) => assign(checker, &a.target, a.op, &a.value),
+        StmtKind::Assign(a) => assign(checker, &a.target, a.op, &a.value, a.span),
         StmtKind::If(i) => if_stmt(checker, i, return_type),
         StmtKind::Block(b) => Some(TypedStmt::Block(lower_block(checker, b, return_type))),
         StmtKind::Expr(e) => Some(TypedStmt::Expr(expr::lower(checker, e, None))),
@@ -117,6 +117,7 @@ fn assign(
     target: &kai_ast::AssignTarget,
     op: AssignOp,
     value: &kai_ast::Expr,
+    stmt_span: kai_diagnostics::Span,
 ) -> Option<TypedStmt> {
     // The ROOT binding gates the whole place (§9.3): `mut` on a stack-type
     // param is a purely local permission; immutability of the root rejects
@@ -183,6 +184,7 @@ fn assign(
         value: typed_value,
         // Ownership markers land in the ownership pass (phase after this).
         release_old: false,
+        span: stmt_span,
     }))
 }
 

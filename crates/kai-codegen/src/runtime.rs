@@ -42,16 +42,30 @@ pub struct KaiHeapHeader {
 /// type by codegen; receives the array header.
 pub type ElemDtor = unsafe extern "C" fn(*mut KaiHeapHeader);
 
+/// §10.8: heap exhaustion is a runtime panic, not a Rust abort. Location
+/// data doesn't exist at this layer — the compiler reports `<runtime>:0:0`.
+fn oom_panic() -> ! {
+    const MSG: &[u8] = b"out of memory";
+    const FILE: &[u8] = b"<runtime>\0";
+    // SAFETY: both globals are valid for their declared lengths.
+    unsafe {
+        kai_panic(MSG.as_ptr(), MSG.len() as i64, FILE.as_ptr(), 0, 0);
+    }
+    unreachable!("kai_panic exits the process")
+}
+
 fn alloc_bytes(byte_len: usize) -> *mut u8 {
     if byte_len == 0 {
         return std::ptr::NonNull::<u8>::dangling().as_ptr();
     }
+    let layout = match std::alloc::Layout::from_size_align(byte_len, 1) {
+        Ok(layout) => layout,
+        Err(_) => oom_panic(),
+    };
     // SAFETY: size is non-zero; alignment 1 is always satisfiable.
-    let layout = std::alloc::Layout::from_size_align(byte_len, 1)
-        .expect("byte layout is representable");
     let ptr = unsafe { std::alloc::alloc(layout) };
     if ptr.is_null() {
-        std::alloc::handle_alloc_error(layout);
+        oom_panic();
     }
     ptr
 }
@@ -225,21 +239,10 @@ pub unsafe extern "C" fn kai_panic(
 /// `%KaiString` named struct type, created once per module. Unused while
 /// strings travel opaque; the ownership phase (retain/release, data access)
 /// GEPs through this shape.
-#[allow(dead_code)]
 pub(crate) fn heap_header_shape<'ctx>(ctx: &Ctx<'ctx>) -> [inkwell::types::BasicTypeEnum<'ctx>; 5] {
     let i64_ty = ctx.context.i64_type().into();
     let ptr = ctx.context.ptr_type(Default::default()).into();
     [i64_ty, i64_ty, i64_ty, ptr, ptr]
-}
-
-#[allow(dead_code)]
-pub(crate) fn string_header_ty<'ctx>(ctx: &Ctx<'ctx>) -> StructType<'ctx> {
-    if let Some(existing) = ctx.module.get_struct_type("KaiString") {
-        return existing;
-    }
-    let ty = ctx.context.opaque_struct_type("KaiString");
-    ty.set_body(&heap_header_shape(ctx), false);
-    ty
 }
 
 /// `%KaiArray.<name>` header type for one element type, created once per
@@ -309,7 +312,6 @@ pub(crate) fn string_eq_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
 
 /// `kai_panic(msg*, msg_len, file*, line, col)` — reports §10.1 and exits;
 /// call sites follow with `unreachable`.
-#[allow(dead_code)] // referenced once the §10 checks emit call sites
 pub(crate) fn panic_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
     let ptr = ctx.context.ptr_type(Default::default());
     let i64_ty = ctx.context.i64_type();

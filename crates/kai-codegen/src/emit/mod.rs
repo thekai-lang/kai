@@ -82,7 +82,7 @@ fn function_body<'ctx>(ctx: &Ctx<'ctx>, decl: &kai_tast::TypedFnDecl) {
     let entry = ctx.context.append_basic_block(function, "entry");
     ctx.builder.position_at_end(entry);
 
-    let mut frame = Frame::new();
+    let mut frame = Frame::new(decl.module.clone());
 
     // Params become read-write locals: alloca + store the incoming copy.
     // Callers passed values BY VALUE, so callee mutation stays invisible.

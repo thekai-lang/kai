@@ -4,6 +4,10 @@ source_filename = "kai_module"
 %Point = type { i32, i32 }
 %Segment = type { %Point, %Point }
 
+@kai.panic.msg = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.src.file = private unnamed_addr constant [8 x i8] c"<stdin>\00", align 1
+@kai.panic.msg.1 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+
 define i32 @shift(%Point %p, i32 %dx) {
 entry:
   %dx2 = alloca i32, align 4
@@ -13,14 +17,32 @@ entry:
   %place = getelementptr inbounds nuw %Point, ptr %p1, i32 0, i32 0
   %tmp = load i32, ptr %dx2, align 4
   %old = load i32, ptr %place, align 4
-  %add = add i32 %old, %tmp
+  %ovf = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %old, i32 %tmp)
+  %ovf.flag = extractvalue { i32, i1 } %ovf, 1
+  br i1 %ovf.flag, label %panic, label %arith.ok
+
+panic:                                            ; preds = %entry
+  call void @kai_panic(ptr @kai.panic.msg, i64 16, ptr @kai.src.file, i64 14, i64 5)
+  unreachable
+
+arith.ok:                                         ; preds = %entry
+  %add = extractvalue { i32, i1 } %ovf, 0
   store i32 %add, ptr %place, align 4
   %field = getelementptr inbounds nuw %Point, ptr %p1, i32 0, i32 0
   %field3 = load i32, ptr %field, align 4
   %field4 = getelementptr inbounds nuw %Point, ptr %p1, i32 0, i32 1
   %field5 = load i32, ptr %field4, align 4
-  %add6 = add i32 %field3, %field5
-  ret i32 %add6
+  %ovf6 = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %field3, i32 %field5)
+  %ovf.flag7 = extractvalue { i32, i1 } %ovf6, 1
+  br i1 %ovf.flag7, label %panic8, label %arith.ok9
+
+panic8:                                           ; preds = %arith.ok
+  call void @kai_panic(ptr @kai.panic.msg.1, i64 16, ptr @kai.src.file, i64 15, i64 12)
+  unreachable
+
+arith.ok9:                                        ; preds = %arith.ok
+  %add10 = extractvalue { i32, i1 } %ovf6, 0
+  ret i32 %add10
 }
 
 define i32 @main() {
@@ -97,3 +119,10 @@ if.then:                                          ; preds = %and.end25
 if.end:                                           ; preds = %and.end25
   ret i32 0
 }
+
+; Function Attrs: nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none)
+declare { i32, i1 } @llvm.sadd.with.overflow.i32(i32, i32) #0
+
+declare void @kai_panic(ptr, i64, ptr, i64, i64)
+
+attributes #0 = { nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none) }

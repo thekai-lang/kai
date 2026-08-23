@@ -9,7 +9,6 @@ use inkwell::values::FunctionValue;
 /// Per-module source metadata for runtime panic locations (§10.1): the
 /// display path baked into `at file:line:col`, plus line-start offsets so a
 /// byte-offset span resolves without keeping the source text alive.
-#[allow(dead_code)] // consumed by the §10 checks landing next
 pub(crate) struct SourceInfo {
     pub file: String,
     /// Byte offset where each 1-based line starts; entry 0 is always 0.
@@ -32,7 +31,6 @@ impl SourceInfo {
 
     /// 1-based (line, column) of a byte offset; offsets past the end clamp
     /// to the final position.
-    #[allow(dead_code)] // consumed by the §10 checks landing next
     pub fn line_col(&self, offset: usize) -> (i64, i64) {
         let offset = (offset as u32).min(*self.line_starts.last().unwrap_or(&0));
         let idx = match self.line_starts.binary_search(&offset) {

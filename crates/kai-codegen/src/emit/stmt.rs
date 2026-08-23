@@ -60,25 +60,7 @@ fn for_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, f: &TypedFor) {
         other => unreachable!("for iterable typed {other:?}"),
     };
     let elem_llvm = types::to_llvm(ctx, &elem_kai_ty);
-    let header_ty = crate::runtime::array_header_ty(ctx, &elem_llvm.to_string());
-
-    let len = {
-        let typed_hdr = ctx
-            .builder
-            .build_pointer_cast(header, ctx.context.ptr_type(Default::default()), "arr.hdr")
-            .expect("hdr cast");
-        let len_slot = ctx
-            .builder
-            .build_struct_gep(header_ty, typed_hdr, 1, "arr.len.p")
-            .expect("len gep");
-        let i64_ty = ctx.context.i64_type();
-        let _ = i64_ty;
-        let loaded = header_ty.get_field_type_at_index(1).expect("len field");
-        ctx.builder
-            .build_load(loaded, len_slot, "arr.len")
-            .expect("len load")
-            .into_int_value()
-    };
+    let len = expr::header_len(ctx, header, elem_llvm);
 
     let function = super::current_function(ctx);
     let binding_slot =
@@ -185,24 +167,25 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
             }
             kai_tast::TypedPlaceStep::Index(index) => {
                 let elem_ty = types::to_llvm(ctx, &assign.value.ty);
-                let elems = expr::elems_storage_of(
-                    ctx,
+                let header = expr::header_of_value(
                     ctx.builder
                         .build_load(
                             ctx.context.ptr_type(Default::default()),
                             ptr,
                             "arr.hdr",
                         )
-                        .expect("array value load")
-                        .into_pointer_value(),
-                    elem_ty,
+                        .expect("array value load"),
                 );
                 let idx64 = expr::widen_index(ctx, expr::emit(ctx, frame, index).into_int_value());
-                unsafe {
-                    ctx.builder
-                        .build_in_bounds_gep(elem_ty, elems, &[idx64], "place.elem")
-                        .expect("element gep")
-                }
+                expr::elem_slot(
+                    ctx,
+                    frame,
+                    index.span,
+                    header,
+                    elem_ty,
+                    idx64,
+                    "place.elem",
+                )
             }
         };
     }
@@ -221,7 +204,7 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
                 .builder
                 .build_load(pointee, ptr, "old")
                 .expect("load for compound assign");
-            let combined = expr::apply_binary(ctx, op, old, value, &assign.value.ty);
+            let combined = expr::apply_binary(ctx, frame, op, old, value, &assign.value.ty, assign.span);
             let _ = ctx.builder.build_store(ptr, combined);
         }
         None => {

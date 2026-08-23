@@ -34,9 +34,11 @@ pub(crate) fn emit<'ctx>(
             .const_int(*value as u64, false)
             .into(),
         TypedExprKind::LocalRef(local) => load_local(ctx, frame, *local, &ty),
-        TypedExprKind::Neg(inner) => neg(ctx, frame, inner, &ty),
+        TypedExprKind::Neg(inner) => neg(ctx, frame, inner, &ty, expr.span),
         TypedExprKind::Not(inner) => not(ctx, frame, inner),
-        TypedExprKind::Binary { op, lhs, rhs } => binary(ctx, frame, *op, lhs, rhs),
+        TypedExprKind::Binary { op, lhs, rhs } => {
+            binary(ctx, frame, *op, lhs, rhs, expr.span)
+        }
         // Poisoned recovery node; only reachable in programs that failed
         // upstream. `undef` keeps emission total without inventing behavior.
         TypedExprKind::Invalid => undef_of(ctx, &ty),
@@ -57,7 +59,9 @@ pub(crate) fn emit<'ctx>(
             };
             array_lit(ctx, frame, elements, &elem)
         }
-        TypedExprKind::Index { base, index } => index_read(ctx, frame, base, index, &ty),
+        TypedExprKind::Index { base, index } => {
+            index_read(ctx, frame, base, index, &ty, expr.span)
+        }
         // Ownership marker from the ownership pass (§9.5): the inner value
         // is borrowed and entering an owning slot. Headers get one refcount
         // op; heap-bearing structs get per-field retains at their source
@@ -207,30 +211,120 @@ pub(crate) fn elems_storage_of<'ctx>(
         .into_pointer_value()
 }
 
-/// `base[index]` read: load header, GEP into elems, load the element. A
-/// pure borrow of one slot — ownership never moves (§9.9).
+/// Header pointer out of an emitted array value; post-typecheck an array
+/// expression is always a heap-header pointer.
+pub(crate) fn header_of_value<'ctx>(
+    value: BasicValueEnum<'ctx>,
+) -> inkwell::values::PointerValue<'ctx> {
+    match value {
+        BasicValueEnum::PointerValue(p) => p,
+        _ => unreachable!("array base is always a header pointer"),
+    }
+}
+
+/// The authoritative element count for bounds checks and `for..in` loop
+/// conditions, loaded straight from the header's `len` field.
+pub(crate) fn header_len<'ctx>(
+    ctx: &Ctx<'ctx>,
+    header: inkwell::values::PointerValue<'ctx>,
+    elem_ty: BasicTypeEnum<'ctx>,
+) -> IntValue<'ctx> {
+    let header_ty = crate::runtime::array_header_ty(ctx, &elem_ty.to_string());
+    let typed = ctx
+        .builder
+        .build_pointer_cast(header, ctx.context.ptr_type(Default::default()), "arr.hdr")
+        .expect("hdr cast");
+    let len_slot = ctx
+        .builder
+        .build_struct_gep(header_ty, typed, 1, "arr.len.p")
+        .expect("len gep");
+    let loaded = header_ty.get_field_type_at_index(1).expect("len field");
+    ctx.builder
+        .build_load(loaded, len_slot, "arr.len")
+        .expect("len load")
+        .into_int_value()
+}
+
+/// §10: every indexed access traps when the index falls outside `0..len`.
+/// Emits the compare in the current block and branches through a panic
+/// block; emission continues in a fresh continuation block.
+pub(crate) fn bounds_check<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    span: kai_diagnostics::Span,
+    header: inkwell::values::PointerValue<'ctx>,
+    elem_ty: BasicTypeEnum<'ctx>,
+    idx64: IntValue<'ctx>,
+) {
+    let len = header_len(ctx, header, elem_ty);
+    let zero = idx64.get_type().const_int(0, false);
+    // Signed pair test: `idx >= 0 && idx < len`. Negative indices are as
+    // out-of-bounds as past-the-end ones.
+    let below = ctx
+        .builder
+        .build_int_compare(inkwell::IntPredicate::SGE, idx64, zero, "bnd.low")
+        .expect("lower bound icmp");
+    let above = ctx
+        .builder
+        .build_int_compare(inkwell::IntPredicate::SLT, idx64, len, "bnd.high")
+        .expect("upper bound icmp");
+    let ok = ctx
+        .builder
+        .build_and(below, above, "bnd.ok")
+        .expect("bound conjunction");
+    crate::emit::panic::trap_on(
+        ctx,
+        frame,
+        span,
+        ctx.builder
+            .build_not(ok, "bnd.bad")
+            .expect("negate guard"),
+        "array index out of bounds",
+        "in.bounds",
+    );
+}
+
+/// Element address for one indexed hop — THE shared core of array reads,
+/// rvalue places, and assignment-place steps: bounds guard, elems storage,
+/// GEP. `for..in` does not route through here: its induction variable is
+/// bounded by the same `len` it reads, so a per-iteration trap is dead
+/// weight.
+pub(crate) fn elem_slot<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    span: kai_diagnostics::Span,
+    header: inkwell::values::PointerValue<'ctx>,
+    elem_ty: BasicTypeEnum<'ctx>,
+    idx64: IntValue<'ctx>,
+    name: &str,
+) -> inkwell::values::PointerValue<'ctx> {
+    bounds_check(ctx, frame, span, header, elem_ty, idx64);
+    let elems = elems_storage_of(ctx, header, elem_ty);
+    unsafe {
+        ctx.builder
+            .build_in_bounds_gep(elem_ty, elems, &[idx64], name)
+            .expect("element gep")
+    }
+}
+
+/// `base[index]` read: load header, bounds-check the index, GEP into
+/// elems, load the element. A pure borrow of one slot — ownership never
+/// moves (§9.9).
 fn index_read<'ctx>(
     ctx: &Ctx<'ctx>,
     frame: &Frame<'ctx>,
     base: &TypedExpr,
     index: &TypedExpr,
     result_ty: &KaiType,
+    span: kai_diagnostics::Span,
 ) -> BasicValueEnum<'ctx> {
-    let header = match emit(ctx, frame, base) {
-        BasicValueEnum::PointerValue(p) => p,
-        _ => unreachable!("array base is always a header pointer"),
-    };
+    let header = header_of_value(emit(ctx, frame, base));
 
     // An index read yields the element, so the element's llvm type doubles
     // as the header-shape key here.
     let elem_ty = crate::types::to_llvm(ctx, result_ty);
-    let elems_slot = elems_storage_of(ctx, header, elem_ty);
     let idx64 = widen_index(ctx, emit(ctx, frame, index).into_int_value());
-    let slot = unsafe {
-        ctx.builder
-            .build_in_bounds_gep(elem_ty, elems_slot, &[idx64], "elem.slot")
-            .expect("element gep")
-    };
+    let slot = elem_slot(ctx, frame, span, header, elem_ty, idx64, "elem.slot");
     ctx.builder
         .build_load(elem_ty, slot, "elem")
         .expect("element load")
@@ -310,17 +404,17 @@ pub(crate) fn place_ptr<'ctx>(
         TypedExprKind::Index { base, index } => {
             // The INDEX node's type is the ELEMENT type (§9.9).
             let elem_llvm = crate::types::to_llvm(ctx, &expr.ty);
-            let header = match emit(ctx, frame, base) {
-                BasicValueEnum::PointerValue(p) => p,
-                _ => unreachable!("array base is always a header pointer"),
-            };
-            let elems = elems_storage_of(ctx, header, elem_llvm);
+            let header = header_of_value(emit(ctx, frame, base));
             let idx64 = widen_index(ctx, emit(ctx, frame, index).into_int_value());
-            Some(unsafe {
-                ctx.builder
-                    .build_in_bounds_gep(elem_llvm, elems, &[idx64], "place.elem")
-                    .expect("element gep")
-            })
+            Some(elem_slot(
+                ctx,
+                frame,
+                expr.span,
+                header,
+                elem_llvm,
+                idx64,
+                "place.elem",
+            ))
         }
         _ => None,
     }
@@ -385,6 +479,7 @@ fn neg<'ctx>(
     frame: &Frame<'ctx>,
     operand: &TypedExpr,
     result_ty: &KaiType,
+    span: kai_diagnostics::Span,
 ) -> BasicValueEnum<'ctx> {
     let value = emit(ctx, frame, operand);
     if *result_ty == KaiType::Float64 {
@@ -394,12 +489,19 @@ fn neg<'ctx>(
             .expect("fneg")
             .into()
     } else {
+        // §10.2: `-INT_MIN` overflows just like any other signed op.
         let as_int = value.into_int_value();
         let zero = int_const(ctx, 0, result_ty);
-        ctx.builder
-            .build_int_sub(zero, as_int, "neg")
-            .expect("sub for negation")
-            .into()
+        checked_arith(
+            ctx,
+            frame,
+            span,
+            "llvm.ssub.with.overflow",
+            zero,
+            as_int,
+            "neg",
+        )
+        .into()
     }
 }
 
@@ -412,13 +514,16 @@ fn not<'ctx>(ctx: &Ctx<'ctx>, frame: &Frame<'ctx>, operand: &TypedExpr) -> Basic
         .into()
 }
 /// Re-usable arithmetic/comparison core on scalars; also used by compound
-/// assignment. Dispatches on the static operand type.
+/// assignment. Dispatches on the static operand type. Signed arithmetic
+/// traps on overflow / division faults (§10.2); floats keep IEEE semantics.
 pub(crate) fn apply_binary<'ctx>(
     ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
     op: BinaryOp,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
     operand_ty: &KaiType,
+    span: kai_diagnostics::Span,
 ) -> BasicValueEnum<'ctx> {
     match operand_ty {
         KaiType::Float64 => float_arith(ctx, op, lhs.into_float_value(), rhs.into_float_value()),
@@ -452,23 +557,154 @@ pub(crate) fn apply_binary<'ctx>(
             }
             .into()
         }
-        _ => int_arith(ctx, op, lhs.into_int_value(), rhs.into_int_value()).into(),
+        _ => int_arith(ctx, frame, op, lhs.into_int_value(), rhs.into_int_value(), span).into(),
     }
+}
+
+/// `{iN result, i1 flag} @llvm.s<op>.with.overflow.iN(iN, iN)` declared on
+/// demand; LLVM recognizes these by exact name.
+fn overflow_intrinsic<'ctx>(
+    ctx: &Ctx<'ctx>,
+    name: &str,
+    int_ty: inkwell::types::IntType<'ctx>,
+) -> inkwell::values::FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(name) {
+        return existing;
+    }
+    let pair = ctx
+        .context
+        .struct_type(
+            &[int_ty.into(), ctx.context.bool_type().into()],
+            false,
+        );
+    ctx.module
+        .add_function(name, pair.fn_type(&[int_ty.into(), int_ty.into()], false), None)
+}
+
+/// Emits `llvm.s<op>.with.overflow` for `lhs`'s width, traps on the
+/// overflow flag (§10.2), and yields the arithmetic result.
+fn checked_arith<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    span: kai_diagnostics::Span,
+    intrinsic: &str,
+    lhs: IntValue<'ctx>,
+    rhs: IntValue<'ctx>,
+    name: &str,
+) -> IntValue<'ctx> {
+    let pair_fn = {
+        // LLVM requires the width-suffixed exact name (`...i32`, `...i64`).
+        let mangled = format!("{intrinsic}.i{}", lhs.get_type().get_bit_width());
+        overflow_intrinsic(ctx, &mangled, lhs.get_type())
+    };
+    let call = ctx
+        .builder
+        .build_call(pair_fn, &[lhs.into(), rhs.into()], "ovf")
+        .expect("checked arith call");
+    let res = match call.try_as_basic_value() {
+        ValueKind::Basic(value) => value.into_struct_value(),
+        _ => unreachable!("overflow intrinsic returns a struct"),
+    };
+    let flag = ctx
+        .builder
+        .build_extract_value(res, 1, "ovf.flag")
+        .expect("flag slot")
+        .into_int_value();
+    crate::emit::panic::trap_on(ctx, frame, span, flag, "integer overflow", "arith.ok");
+    ctx.builder
+        .build_extract_value(res, 0, name)
+        .expect(name)
+        .into_int_value()
+}
+
+/// §10.2: division faults — a zero divisor panics with its own message and
+/// `MIN / -1` (the one quotient outside the type's range) panics as an
+/// integer overflow.
+fn div_guard<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    span: kai_diagnostics::Span,
+    lhs: IntValue<'ctx>,
+    rhs: IntValue<'ctx>,
+    zero_message: &str,
+    cont_label: &str,
+) {
+    let b = &ctx.builder;
+    let zero = rhs.get_type().const_zero();
+    let is_zero = b
+        .build_int_compare(inkwell::IntPredicate::EQ, rhs, zero, "rhs.zero")
+        .expect("zero divisor icmp");
+    crate::emit::panic::trap_on(ctx, frame, span, is_zero, zero_message, cont_label);
+
+    let minus_one = rhs.get_type().const_int((-1i64) as u64, true);
+    let rhs_is_m1 = b
+        .build_int_compare(inkwell::IntPredicate::EQ, rhs, minus_one, "rhs.m1")
+        .expect("-1 icmp");
+    // The only overflowing quotient is MIN / -1.
+    let min = if lhs.get_type().get_bit_width() == 64 {
+        i64::MIN
+    } else {
+        i32::MIN as i64
+    };
+    let lhs_is_min = b
+        .build_int_compare(
+            inkwell::IntPredicate::EQ,
+            lhs,
+            lhs.get_type().const_int(min as u64, true),
+            "lhs.min",
+        )
+        .expect("MIN icmp");
+    let ovf = b
+        .build_and(rhs_is_m1, lhs_is_min, "min.div")
+        .expect("conjunction");
+    crate::emit::panic::trap_on(ctx, frame, span, ovf, "integer overflow", "safe.div");
 }
 
 fn int_arith<'ctx>(
     ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
     op: BinaryOp,
     lhs: IntValue<'ctx>,
     rhs: IntValue<'ctx>,
+    span: kai_diagnostics::Span,
 ) -> IntValue<'ctx> {
     let b = &ctx.builder;
     match op {
-        BinaryOp::Add => b.build_int_add(lhs, rhs, "add").expect("iadd"),
-        BinaryOp::Sub => b.build_int_sub(lhs, rhs, "sub").expect("isub"),
-        BinaryOp::Mul => b.build_int_mul(lhs, rhs, "mul").expect("imul"),
-        BinaryOp::Div => b.build_int_signed_div(lhs, rhs, "div").expect("sdiv"),
-        BinaryOp::Mod => b.build_int_signed_rem(lhs, rhs, "rem").expect("srem"),
+        BinaryOp::Add => checked_arith(
+            ctx,
+            frame,
+            span,
+            "llvm.sadd.with.overflow",
+            lhs,
+            rhs,
+            "add",
+        ),
+        BinaryOp::Sub => checked_arith(
+            ctx,
+            frame,
+            span,
+            "llvm.ssub.with.overflow",
+            lhs,
+            rhs,
+            "sub",
+        ),
+        BinaryOp::Mul => checked_arith(
+            ctx,
+            frame,
+            span,
+            "llvm.smul.with.overflow",
+            lhs,
+            rhs,
+            "mul",
+        ),
+        BinaryOp::Div => {
+            div_guard(ctx, frame, span, lhs, rhs, "division by zero", "div.safe");
+            b.build_int_signed_div(lhs, rhs, "div").expect("sdiv")
+        }
+        BinaryOp::Mod => {
+            div_guard(ctx, frame, span, lhs, rhs, "modulo by zero", "rem.safe");
+            b.build_int_signed_rem(lhs, rhs, "rem").expect("srem")
+        }
         BinaryOp::Lt => b
             .build_int_compare(inkwell::IntPredicate::SLT, lhs, rhs, "lt")
             .expect("icmp"),
@@ -542,6 +778,7 @@ fn binary<'ctx>(
     op: BinaryOp,
     lhs: &TypedExpr,
     rhs: &TypedExpr,
+    span: kai_diagnostics::Span,
 ) -> BasicValueEnum<'ctx> {
     match op {
         // `a && b`: evaluate b only when a is true.
@@ -551,7 +788,7 @@ fn binary<'ctx>(
         _ => {
             let l = emit(ctx, frame, lhs);
             let r = emit(ctx, frame, rhs);
-            apply_binary(ctx, op, l, r, &lhs.ty)
+            apply_binary(ctx, frame, op, l, r, &lhs.ty, span)
         }
     }
 }

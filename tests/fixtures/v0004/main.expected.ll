@@ -3,6 +3,18 @@ source_filename = "kai_module"
 
 %math.geometry.Point = type { i32, i32 }
 
+@kai.panic.msg = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.src.file = private unnamed_addr constant [9 x i8] c"main.kai\00", align 1
+@kai.panic.msg.1 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.panic.msg.2 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.panic.msg.3 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.src.file.4 = private unnamed_addr constant [18 x i8] c"math/geometry.kai\00", align 1
+@kai.panic.msg.5 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.panic.msg.6 = private unnamed_addr constant [17 x i8] c"division by zero\00", align 1
+@kai.panic.msg.7 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.panic.msg.8 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.src.file.9 = private unnamed_addr constant [15 x i8] c"util/flags.kai\00", align 1
+
 define i32 @main() {
 entry:
   %flag = alloca i32, align 4
@@ -60,15 +72,42 @@ if.then:                                          ; preds = %and.end16
   %field21 = load i32, ptr %field20, align 4
   %field22 = getelementptr inbounds nuw %math.geometry.Point, ptr %doubled, i32 0, i32 1
   %field23 = load i32, ptr %field22, align 4
-  %add = add i32 %field21, %field23
-  %tmp24 = load i32, ptr %flag, align 4
-  %add25 = add i32 %add, %tmp24
-  %call26 = call i32 @math.geometry.tag()
-  %add27 = add i32 %add25, %call26
-  ret i32 %add27
+  %ovf = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %field21, i32 %field23)
+  %ovf.flag = extractvalue { i32, i1 } %ovf, 1
+  br i1 %ovf.flag, label %panic, label %arith.ok
 
 if.end:                                           ; preds = %and.end16
   ret i32 0
+
+panic:                                            ; preds = %if.then
+  call void @kai_panic(ptr @kai.panic.msg, i64 16, ptr @kai.src.file, i64 20, i64 16)
+  unreachable
+
+arith.ok:                                         ; preds = %if.then
+  %add = extractvalue { i32, i1 } %ovf, 0
+  %tmp24 = load i32, ptr %flag, align 4
+  %ovf25 = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %add, i32 %tmp24)
+  %ovf.flag26 = extractvalue { i32, i1 } %ovf25, 1
+  br i1 %ovf.flag26, label %panic27, label %arith.ok28
+
+panic27:                                          ; preds = %arith.ok
+  call void @kai_panic(ptr @kai.panic.msg.1, i64 16, ptr @kai.src.file, i64 20, i64 16)
+  unreachable
+
+arith.ok28:                                       ; preds = %arith.ok
+  %add29 = extractvalue { i32, i1 } %ovf25, 0
+  %call30 = call i32 @math.geometry.tag()
+  %ovf31 = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %add29, i32 %call30)
+  %ovf.flag32 = extractvalue { i32, i1 } %ovf31, 1
+  br i1 %ovf.flag32, label %panic33, label %arith.ok34
+
+panic33:                                          ; preds = %arith.ok28
+  call void @kai_panic(ptr @kai.panic.msg.2, i64 16, ptr @kai.src.file, i64 20, i64 16)
+  unreachable
+
+arith.ok34:                                       ; preds = %arith.ok28
+  %add35 = extractvalue { i32, i1 } %ovf31, 0
+  ret i32 %add35
 }
 
 define %math.geometry.Point @math.geometry.double(%math.geometry.Point %p) {
@@ -78,14 +117,32 @@ entry:
   store %math.geometry.Point %p, ptr %p1, align 4
   %field = getelementptr inbounds nuw %math.geometry.Point, ptr %p1, i32 0, i32 0
   %field2 = load i32, ptr %field, align 4
-  %mul = mul i32 %field2, 2
+  %ovf = call { i32, i1 } @llvm.smul.with.overflow.i32(i32 %field2, i32 2)
+  %ovf.flag = extractvalue { i32, i1 } %ovf, 1
+  br i1 %ovf.flag, label %panic, label %arith.ok
+
+panic:                                            ; preds = %entry
+  call void @kai_panic(ptr @kai.panic.msg.3, i64 16, ptr @kai.src.file.4, i64 9, i64 23)
+  unreachable
+
+arith.ok:                                         ; preds = %entry
+  %mul = extractvalue { i32, i1 } %ovf, 0
   %f = getelementptr inbounds nuw %math.geometry.Point, ptr %tmp, i32 0, i32 0
   store i32 %mul, ptr %f, align 4
   %field3 = getelementptr inbounds nuw %math.geometry.Point, ptr %p1, i32 0, i32 1
   %field4 = load i32, ptr %field3, align 4
-  %mul5 = mul i32 %field4, 2
-  %f6 = getelementptr inbounds nuw %math.geometry.Point, ptr %tmp, i32 0, i32 1
-  store i32 %mul5, ptr %f6, align 4
+  %ovf5 = call { i32, i1 } @llvm.smul.with.overflow.i32(i32 %field4, i32 2)
+  %ovf.flag6 = extractvalue { i32, i1 } %ovf5, 1
+  br i1 %ovf.flag6, label %panic7, label %arith.ok8
+
+panic7:                                           ; preds = %arith.ok
+  call void @kai_panic(ptr @kai.panic.msg.5, i64 16, ptr @kai.src.file.4, i64 9, i64 35)
+  unreachable
+
+arith.ok8:                                        ; preds = %arith.ok
+  %mul9 = extractvalue { i32, i1 } %ovf5, 0
+  %f10 = getelementptr inbounds nuw %math.geometry.Point, ptr %tmp, i32 0, i32 1
+  store i32 %mul9, ptr %f10, align 4
   %lit = load %math.geometry.Point, ptr %tmp, align 4
   ret %math.geometry.Point %lit
 }
@@ -98,6 +155,22 @@ entry:
 define i32 @math.geometry.tag() {
 entry:
   %call = call i32 @math.geometry.describe()
+  br i1 false, label %panic, label %div.safe
+
+panic:                                            ; preds = %entry
+  call void @kai_panic(ptr @kai.panic.msg.6, i64 16, ptr @kai.src.file.4, i64 18, i64 12)
+  unreachable
+
+div.safe:                                         ; preds = %entry
+  %lhs.min = icmp eq i32 %call, -2147483648
+  %min.div = and i1 false, %lhs.min
+  br i1 %min.div, label %panic1, label %safe.div
+
+panic1:                                           ; preds = %div.safe
+  call void @kai_panic(ptr @kai.panic.msg.7, i64 16, ptr @kai.src.file.4, i64 18, i64 12)
+  unreachable
+
+safe.div:                                         ; preds = %div.safe
   %div = sdiv i32 %call, 10
   ret i32 %div
 }
@@ -121,6 +194,28 @@ if.then:                                          ; preds = %entry
 
 if.end:                                           ; preds = %entry
   %call2 = call i32 @util.flags.describe()
-  %sub = sub i32 0, %call2
+  %ovf = call { i32, i1 } @llvm.ssub.with.overflow.i32(i32 0, i32 %call2)
+  %ovf.flag = extractvalue { i32, i1 } %ovf, 1
+  br i1 %ovf.flag, label %panic, label %arith.ok
+
+panic:                                            ; preds = %if.end
+  call void @kai_panic(ptr @kai.panic.msg.8, i64 16, ptr @kai.src.file.9, i64 14, i64 12)
+  unreachable
+
+arith.ok:                                         ; preds = %if.end
+  %sub = extractvalue { i32, i1 } %ovf, 0
   ret i32 %sub
 }
+
+; Function Attrs: nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none)
+declare { i32, i1 } @llvm.sadd.with.overflow.i32(i32, i32) #0
+
+declare void @kai_panic(ptr, i64, ptr, i64, i64)
+
+; Function Attrs: nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none)
+declare { i32, i1 } @llvm.smul.with.overflow.i32(i32, i32) #0
+
+; Function Attrs: nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none)
+declare { i32, i1 } @llvm.ssub.with.overflow.i32(i32, i32) #0
+
+attributes #0 = { nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none) }

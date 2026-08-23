@@ -353,6 +353,7 @@ mod tests {
             op: None,
             value,
             release_old: false,
+            span: kai_diagnostics::Span::new(0, 0),
         }
     }
 
@@ -553,6 +554,7 @@ mod tests {
             op: Some(BinaryOp::Add),
             value: int_lit(1),
             release_old: false,
+            span: kai_diagnostics::Span::new(0, 0),
         };
         let body = block(vec![
             let_(0, "n", int_lit(0)),
