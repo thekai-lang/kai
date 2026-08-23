@@ -395,7 +395,7 @@ fn file_pipeline_type_errors_name_the_imported_file() {
             .any(|(name, src)| name == "math/ops.kai" && src.contains("public fn three"))
     );
     assert!(
-        failure.diagnostics[0].message.len() > 0,
+        !failure.diagnostics[0].message.is_empty(),
         "diagnostics are present"
     );
 }

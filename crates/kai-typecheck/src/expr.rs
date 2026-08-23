@@ -45,7 +45,7 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         ExprKind::Invalid => {
             let span = expr.span;
             checker.error(error::invalid_expression(span));
-            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
+            poisoned()
         }
     }
 }
@@ -74,7 +74,7 @@ fn ident_ref(checker: &mut Checker, ident: &Ident) -> TypedExpr {
             let name = ident.name.clone();
             checker.error(error::undeclared_variable(&name, span));
             // Placeholder keeps compilation going; program is discarded.
-            TypedExpr::new(TypedExprKind::IntLit(0), KaiType::Int32)
+            zero_int()
         }
     }
 }
@@ -94,7 +94,7 @@ fn unary_expr(checker: &mut Checker, op: UnaryOp, operand: &Expr) -> TypedExpr {
             } else {
                 let span = operand.span;
                 checker.error(error::operand_type_mismatch("-", ty, span));
-                TypedExpr::new(TypedExprKind::IntLit(0), KaiType::Int32)
+                zero_int()
             }
         }
         UnaryOp::Not => {
@@ -169,34 +169,15 @@ fn binary_expr(checker: &mut Checker, binary: &BinaryExpr, expected: Option<KaiT
     };
     let rhs = lower(checker, &binary.rhs, rhs_hint);
 
-    match op {
-        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-            arithmetic(checker, op, lhs, rhs, span)
-        }
-        BinaryOp::Mod => {
-            if lhs.ty != rhs.ty || !lhs.ty.is_integer() {
-                let s = span;
-                checker.error(error::mod_requires_integers(s));
-            }
-            let result_ty = lhs_placeholder_ty(lhs.ty.clone());
-            TypedExpr::new(
-                TypedExprKind::Binary {
-                    op,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-                result_ty,
-            )
-        }
-        BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
-            comparison(checker, op, lhs, rhs, span)
-        }
-        BinaryOp::Eq | BinaryOp::Ne => equality(checker, op, lhs, rhs, span),
-        BinaryOp::And | BinaryOp::Or => logical(checker, op, lhs, rhs, span),
-    }
+    typed_binary(checker, op, lhs, rhs, span)
 }
 
-fn arithmetic(
+/// Every binary typing rule shares one shape: validate the operand pair
+/// against the operator's class, report the class's diagnostic, then build
+/// the node with the class's result type (the operand type, or `bool`).
+/// Rules that fail keep compiling with placeholders — the program is
+/// discarded anyway.
+fn typed_binary(
     checker: &mut Checker,
     op: BinaryOp,
     lhs: TypedExpr,
@@ -205,96 +186,79 @@ fn arithmetic(
 ) -> TypedExpr {
     let lty = lhs.ty.clone();
     let rty = rhs.ty.clone();
-    if !lty.is_numeric() || lty != rty {
-        let name = op.describe();
-        checker.error(if lty.is_numeric() && rty.is_numeric() {
-            error::binary_type_mismatch(name, lty, rty, span)
-        } else {
-            let bad = if lty.is_numeric() { rty } else { lty };
-            error::operand_type_mismatch(name, bad, span)
-        });
-        return TypedExpr::new(TypedExprKind::IntLit(0), KaiType::Int32);
+    let name = op.describe();
+
+    match op {
+        // `+ - * /`: one shared numeric type; the result keeps it.
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+            if !lty.is_numeric() || lty != rty {
+                checker.error(if lty.is_numeric() && rty.is_numeric() {
+                    error::binary_type_mismatch(name, lty.clone(), rty.clone(), span)
+                } else {
+                    let bad = if lty.is_numeric() { rty } else { lty };
+                    error::operand_type_mismatch(name, bad, span)
+                });
+                return zero_int();
+            }
+            binary_node(op, lhs, rhs, lty)
+        }
+        // `%`: integers only; the failed-rule result still prefers an
+        // integer lhs so downstream rules see a sane shape.
+        BinaryOp::Mod => {
+            if lty != rty || !lty.is_integer() {
+                checker.error(error::mod_requires_integers(span));
+            }
+            let result_ty = lhs_placeholder_ty(lty);
+            binary_node(op, lhs, rhs, result_ty)
+        }
+        // `< > <= >=` compare numerics pairwise; `== !=` accept any ONE
+        // shared type (strings included). Both produce `bool`.
+        BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
+            if !lty.is_numeric() || lty != rty {
+                checker.error(error::binary_type_mismatch(name, lty.clone(), rty.clone(), span));
+            }
+            binary_node(op, lhs, rhs, KaiType::Bool)
+        }
+        BinaryOp::Eq | BinaryOp::Ne => {
+            if lty != rty {
+                checker.error(error::binary_type_mismatch(name, lty.clone(), rty.clone(), span));
+            }
+            binary_node(op, lhs, rhs, KaiType::Bool)
+        }
+        // `&& ||` are bool-only; point at whichever operand strayed.
+        BinaryOp::And | BinaryOp::Or => {
+            if lty != KaiType::Bool || rty != KaiType::Bool {
+                let bad = if lty == KaiType::Bool { rty } else { lty };
+                checker.error(error::operand_type_mismatch(name, bad, span));
+            }
+            binary_node(op, lhs, rhs, KaiType::Bool)
+        }
     }
+}
+
+fn binary_node(op: BinaryOp, lhs: TypedExpr, rhs: TypedExpr, ty: KaiType) -> TypedExpr {
     TypedExpr::new(
         TypedExprKind::Binary {
             op,
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
         },
-        lty,
+        ty,
     )
 }
 
-fn comparison(
-    checker: &mut Checker,
-    op: BinaryOp,
-    lhs: TypedExpr,
-    rhs: TypedExpr,
-    span: Span,
-) -> TypedExpr {
-    if !lhs.ty.is_numeric() || lhs.ty != rhs.ty {
-        let name = op.describe();
-        let lty = lhs.ty.clone();
-        let rty = rhs.ty.clone();
-        checker.error(error::binary_type_mismatch(name, lty, rty, span));
-    }
-    TypedExpr::new(
-        TypedExprKind::Binary {
-            op,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        },
-        KaiType::Bool,
-    )
+/// Placeholder int for expressions whose real type is unknowable after an
+/// operand-class error; keeps numeric contexts well-typed while the doomed
+/// program finishes lowering.
+fn zero_int() -> TypedExpr {
+    TypedExpr::new(TypedExprKind::IntLit(0), KaiType::Int32)
 }
 
-fn equality(
-    checker: &mut Checker,
-    op: BinaryOp,
-    lhs: TypedExpr,
-    rhs: TypedExpr,
-    span: Span,
-) -> TypedExpr {
-    if lhs.ty != rhs.ty {
-        let name = op.describe();
-        let lty = lhs.ty.clone();
-        let rty = rhs.ty.clone();
-        checker.error(error::binary_type_mismatch(name, lty, rty, span));
-    }
-    TypedExpr::new(
-        TypedExprKind::Binary {
-            op,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        },
-        KaiType::Bool,
-    )
-}
-
-fn logical(
-    checker: &mut Checker,
-    op: BinaryOp,
-    lhs: TypedExpr,
-    rhs: TypedExpr,
-    span: Span,
-) -> TypedExpr {
-    if lhs.ty != KaiType::Bool || rhs.ty != KaiType::Bool {
-        let name = op.describe();
-        let bad = if lhs.ty == KaiType::Bool {
-            rhs.ty.clone()
-        } else {
-            lhs.ty.clone()
-        };
-        checker.error(error::operand_type_mismatch(name, bad, span));
-    }
-    TypedExpr::new(
-        TypedExprKind::Binary {
-            op,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        },
-        KaiType::Bool,
-    )
+/// Placeholder for expressions that cannot be resolved at all (unknown
+/// callee, missing field, parse recovery). Never reaches codegen: any
+/// diagnostic fails the phase before emission.
+fn poisoned() -> TypedExpr {
+    TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
 }
 
 /// Result type after a failed `%`: prefer the lhs type when it was an integer.
@@ -318,18 +282,18 @@ fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
             Some(&idx) => FunctionId(idx as u32),
             None => {
                 checker.error(error::unknown_function(&ident.name, ident.span));
-                return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+                return poisoned();
             }
         },
         ExprKind::FieldAccess(access) => {
             match qualified_callee(checker, access) {
                 Some(id) => id,
-                None => return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32),
+                None => return poisoned(),
             }
         }
         _ => {
             checker.error(error::indirect_call(span));
-            return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+            return poisoned();
         }
     };
 
@@ -337,8 +301,8 @@ fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
     if call.args.len() != sig.param_tys.len() {
         let expected = sig.param_tys.len();
         let found = call.args.len();
-        checker.error(error::arg_count_mismatch(expected, found, span));
-        return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+        checker.error(error::arg_count_mismatch(&sig.name, expected, found, span));
+        return poisoned();
     }
 
     let mut args = Vec::with_capacity(call.args.len());
@@ -347,6 +311,7 @@ fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
         // The hint widens int literals; everything else must match exactly.
         if value.ty != *param_ty {
             checker.error(error::arg_type_mismatch(
+                &sig.name,
                 param_ty.clone(),
                 value.ty.clone(),
                 position + 1,
@@ -400,36 +365,72 @@ fn qualified_callee(checker: &mut Checker, access: &FieldAccessExpr) -> Option<F
     Some(FunctionId(idx as u32))
 }
 
+/// One `.` hop resolved against a known type — the shared core of
+/// expression field access and assignment-place walking, so both report
+/// identical errors keyed to the segment's span.
+pub(crate) fn resolve_field_hop(
+    checker: &mut Checker,
+    cur: &KaiType,
+    field: &str,
+    span: Span,
+) -> Option<(StructId, u16, KaiType)> {
+    let struct_id = match cur {
+        KaiType::Struct(id) => *id,
+        other => {
+            checker.error(error::field_access_on_non_struct(other.clone(), span));
+            return None;
+        }
+    };
+    match checker.field_slot(struct_id, field) {
+        Some((index, slot)) => Some((struct_id, index, slot.ty.clone())),
+        None => {
+            let ty_name = checker.type_name(struct_id).to_string();
+            checker.error(error::no_such_field(&ty_name, field, span));
+            None
+        }
+    }
+}
+
+/// One `[..]` hop: array-shape check plus a lowered, integer-checked index
+/// expression (§9.3).
+pub(crate) fn resolve_index_hop(
+    checker: &mut Checker,
+    cur: &KaiType,
+    index: &Expr,
+    rbracket: Span,
+) -> Option<(KaiType, TypedExpr)> {
+    let elem_ty = match cur {
+        KaiType::Array(elem) => elem.as_ref().clone(),
+        other => {
+            checker.error(error::index_on_non_array(other, rbracket));
+            return None;
+        }
+    };
+    let typed_index = lower(checker, index, None);
+    if !typed_index.ty.is_integer() {
+        let ty = typed_index.ty.clone();
+        checker.error(error::index_not_integer(&ty, rbracket));
+    }
+    Some((elem_ty, typed_index))
+}
+
 /// `base.field`. The base must be a declared struct; the result type is the
 /// field's type. Reads COPY out of the place (§9.3).
 fn field_access(checker: &mut Checker, access: &FieldAccessExpr) -> TypedExpr {
     let base = lower(checker, &access.base, None);
-
-    let struct_id = match &base.ty {
-        KaiType::Struct(id) => *id,
-        other => {
-            let other = other.clone();
-            checker.error(error::field_access_on_non_struct(other, access.field.span));
-            return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
-        }
+    let Some((struct_id, field, ty)) =
+        resolve_field_hop(checker, &base.ty, &access.field.name, access.field.span)
+    else {
+        return poisoned();
     };
-
-    match checker.field_slot(struct_id, &access.field.name) {
-        Some((index, slot)) => TypedExpr::new(
-            TypedExprKind::FieldAccess {
-                base: Box::new(base),
-                struct_id,
-                field: index,
-            },
-            slot.ty.clone(),
-        ),
-        None => {
-            let ty_name = checker.type_name(struct_id).to_string();
-            let field = access.field.name.clone();
-            checker.error(error::no_such_field(&ty_name, &field, access.field.span));
-            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
-        }
-    }
+    TypedExpr::new(
+        TypedExprKind::FieldAccess {
+            base: Box::new(base),
+            struct_id,
+            field,
+        },
+        ty,
+    )
 }
 
 /// `Name { f: e, .. }` — every field exactly once, in any source order; the
@@ -445,7 +446,7 @@ fn struct_lit(checker: &mut Checker, lit: &StructLitExpr, lit_span: Span) -> Typ
             Some(&idx) => StructId(idx as u32),
             None => {
                 checker.error(error::unknown_type(&type_name.name, type_name.span));
-                return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+                return poisoned();
             }
         }
     } else {
@@ -466,17 +467,17 @@ fn struct_lit(checker: &mut Checker, lit: &StructLitExpr, lit_span: Span) -> Typ
                 let Some(&idx) = checker.resolution.module_types[target].get(&member.name)
                 else {
                     checker.error(error::unknown_qualified_type(&path, member.span));
-                    return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+                    return poisoned();
                 };
                 if !checker.resolution.type_is_public[idx] {
                     checker.error(error::private_type(&path, member.span));
-                    return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+                    return poisoned();
                 }
                 StructId(idx as u32)
             }
             None => {
                 checker.error(error::unknown_module(&alias.name, alias.span));
-                return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+                return poisoned();
             }
         }
     };
@@ -529,7 +530,7 @@ fn struct_lit(checker: &mut Checker, lit: &StructLitExpr, lit_span: Span) -> Typ
                     .name
                     .clone();
                 checker.error(error::missing_field_in_lit(&field, &ty_name, lit_span));
-                values.push(TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32));
+                values.push(poisoned());
             }
         }
     }
@@ -561,11 +562,8 @@ fn array_lit(
         return match elem_hint {
             Some(elem) => TypedExpr::new(TypedExprKind::ArrayLit { elements: vec![] }, KaiType::Array(Box::new(elem))),
             None => {
-                checker.error(kai_diagnostics::Diagnostic::error(
-                    "empty array literal requires a type annotation",
-                    lit_span,
-                ));
-                TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
+                checker.error(error::empty_array_needs_annotation(lit_span));
+                poisoned()
             }
         };
     }
@@ -578,19 +576,14 @@ fn array_lit(
             None => elem_ty = Some(value.ty.clone()),
             Some(expected_ty) => {
                 if value.ty != *expected_ty {
-                    checker.error(kai_diagnostics::Diagnostic::error(
-                        format!(
-                            "array elements must share one type: expected `{}`, found `{}`",
-                            expected_ty, value.ty
-                        ),
-                        element.span,
-                    ));
+                    let found = value.ty.clone();
+                    checker.error(error::array_element_mismatch(expected_ty, found, element.span));
                 }
             }
         }
         typed.push(value);
     }
-    let elem = elem_ty.unwrap_or_else(|| KaiType::Int32);
+    let elem = elem_ty.unwrap_or(KaiType::Int32);
     TypedExpr::new(
         TypedExprKind::ArrayLit { elements: typed },
         KaiType::Array(Box::new(elem)),
@@ -602,21 +595,11 @@ fn array_lit(
 /// releases; here we only guarantee the shapes line up.
 fn index_expr(checker: &mut Checker, indexed: &IndexExpr) -> TypedExpr {
     let base = lower(checker, &indexed.base, None);
-
-    let elem_ty = match base.ty.clone() {
-        KaiType::Array(elem) => *elem,
-        other => {
-            checker.error(error::index_on_non_array(&other, indexed.rbracket));
-            return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
-        }
+    let Some((elem_ty, index)) =
+        resolve_index_hop(checker, &base.ty, &indexed.index, indexed.rbracket)
+    else {
+        return poisoned();
     };
-
-    let index = lower(checker, &indexed.index, None);
-    if !index.ty.is_integer() {
-        let ty = index.ty.clone();
-        checker.error(error::index_not_integer(&ty, indexed.rbracket));
-    }
-
     TypedExpr::new(
         TypedExprKind::Index {
             base: Box::new(base),

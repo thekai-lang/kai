@@ -25,8 +25,6 @@ pub(crate) struct FieldSlot {
 /// out-of-order references need no fixpoint iteration.
 #[derive(Debug, Clone)]
 pub(crate) struct FnInfo {
-    /// Kept for future diagnostics; lookups key off `Resolution.fns`.
-    #[allow(dead_code)]
     pub name: String,
     pub param_tys: Vec<KaiType>,
     pub ret: KaiType,

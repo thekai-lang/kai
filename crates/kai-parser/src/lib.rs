@@ -34,7 +34,9 @@ pub fn parse(tokens: &[kai_lexer::Token]) -> Result<Program, Vec<Diagnostic>> {
 }
 
 /// Runs `f` on a 64 MiB-stack thread, re-raising any panic unchanged.
-pub(crate) fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+/// Shared with the driver pipeline: every phase recurses over user-shaped
+/// trees before a budget trips, so all of them need the same headroom.
+pub fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     const STACK: usize = 64 * 1024 * 1024;
     let handle = std::thread::Builder::new()
         .stack_size(STACK)

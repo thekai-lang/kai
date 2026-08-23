@@ -31,7 +31,7 @@ pub fn compile(source: &str) -> Result<String, Failure> {
     let source = source.to_string();
     with_big_stack(move || {
         let program = lower(&source)?;
-        kai_codegen::compile_ir("kai_module", &program).map_err(|err| internal_failure(err))
+        kai_codegen::compile_ir("kai_module", &program).map_err(internal_failure)
     })
 }
 
@@ -40,7 +40,7 @@ pub fn jit(source: &str) -> Result<i32, Failure> {
     let source = source.to_string();
     with_big_stack(move || {
         let program = lower(&source)?;
-        kai_codegen::run_jit(&program).map_err(|err| internal_failure(err))
+        kai_codegen::run_jit(&program).map_err(internal_failure)
     })
 }
 
@@ -50,7 +50,7 @@ pub fn compile_file(entry: &Path) -> Result<String, Failure> {
     with_big_stack(move || {
         let modules = load_modules(&entry)?;
         let program = lower_modules(&modules)?;
-        kai_codegen::compile_ir("kai_module", &program).map_err(|err| internal_failure(err))
+        kai_codegen::compile_ir("kai_module", &program).map_err(internal_failure)
     })
 }
 
@@ -60,27 +60,16 @@ pub fn jit_file(entry: &Path) -> Result<i32, Failure> {
     with_big_stack(move || {
         let modules = load_modules(&entry)?;
         let program = lower_modules(&modules)?;
-        kai_codegen::run_jit(&program).map_err(|err| internal_failure(err))
+        kai_codegen::run_jit(&program).map_err(internal_failure)
     })
 }
 
-/// Runs the pipeline on a dedicated large-stack thread. Deeply nested input
-/// recurses through the parser/typechecker before the depth budget trips, and
-/// debug builds burn thousands of bytes of stack per AST level — the default
-/// 2 MiB test-thread stack is not enough to reach the diagnostic (same reason
-/// rustc runs its own passes on a big stack).
-fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    const STACK: usize = 64 * 1024 * 1024;
-    match std::thread::Builder::new()
-        .stack_size(STACK)
-        .spawn(f)
-        .expect("spawn compiler thread")
-        .join()
-    {
-        Ok(value) => value,
-        Err(panic) => std::panic::resume_unwind(panic),
-    }
-}
+// Deeply nested input recurses through every phase before a budget trips,
+// and debug builds burn thousands of bytes of stack per AST level — the
+// default 2 MiB test-thread stack is not enough to reach the diagnostic
+// (same reason rustc runs its own passes on a big stack). The helper lives
+// with the parser, which needs it first in the pipeline.
+use kai_parser::with_big_stack;
 
 fn load_modules(
     entry: &Path,

@@ -111,22 +111,23 @@ pub fn indirect_call(span: Span) -> Diagnostic {
     )
 }
 
-pub fn arg_count_mismatch(expected: usize, found: usize, span: Span) -> Diagnostic {
+pub fn arg_count_mismatch(name: &str, expected: usize, found: usize, span: Span) -> Diagnostic {
     let plural = if expected == 1 { "" } else { "s" };
     Diagnostic::error(
-        format!("this function takes {expected} argument{plural}, but {found} were supplied"),
+        format!("function `{name}` takes {expected} argument{plural}, but {found} were supplied"),
         span,
     )
 }
 
 pub fn arg_type_mismatch(
+    name: &str,
     param: KaiType,
     found: KaiType,
     position: usize,
     span: Span,
 ) -> Diagnostic {
     Diagnostic::error(
-        format!("argument {position}: expected `{param}`, found `{found}`"),
+        format!("argument {position} of `{name}`: expected `{param}`, found `{found}`"),
         span,
     )
 }
@@ -203,6 +204,24 @@ pub(crate) fn index_not_integer(ty: &KaiType, span: Span) -> Diagnostic {
 pub(crate) fn for_iterable_not_array(ty: &KaiType, span: Span) -> Diagnostic {
     Diagnostic::error(
         format!("for..in iterates arrays only, found `{ty}`"),
+        span,
+    )
+}
+
+pub(crate) fn empty_array_needs_annotation(span: Span) -> Diagnostic {
+    Diagnostic::error("empty array literal requires a type annotation", span)
+}
+
+pub(crate) fn array_element_mismatch(expected: &KaiType, found: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("array elements must share one type: expected `{expected}`, found `{found}`"),
+        span,
+    )
+}
+
+pub(crate) fn assign_type_mismatch(place: &KaiType, found: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("cannot assign `{found}` to a place of type `{place}`"),
         span,
     )
 }

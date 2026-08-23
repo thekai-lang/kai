@@ -63,7 +63,6 @@ fn ret(
     Some(TypedStmt::Return(value))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn binding(
     checker: &mut Checker,
     name: kai_ast::Ident,
@@ -139,52 +138,26 @@ fn assign(
         checker.error(error::assign_to_immutable(&root_name, root_span));
     }
 
-    // Walk the projection chain. Field hops resolve against the struct
-    // layout table; index hops require an array and an integer index. The
-    // index EXPRESSION is re-evaluated at every assignment site — it rides
-    // in the TAST step (§9.3).
+    // Walk the projection chain through the SAME hop rules expression
+    // indexing/field access uses. The index EXPRESSION is re-evaluated at
+    // every assignment site — it rides in the TAST step (§9.3).
     let mut cur_ty = info.ty.clone();
     let mut steps: Vec<TypedPlaceStep> = Vec::new();
     for step in &place_steps {
-        cur_ty = match step {
-            kai_ast::PlaceStep::Field(seg) => match cur_ty {
-                KaiType::Struct(struct_id) => match checker.field_slot(struct_id, &seg.name) {
-                    Some((index, slot)) => {
-                        steps.push(TypedPlaceStep::Field(FieldStep {
-                            struct_id,
-                            field: index,
-                        }));
-                        slot.ty.clone()
-                    }
-                    None => {
-                        let ty_name = checker.type_name(struct_id).to_string();
-                        let field = seg.name.clone();
-                        checker.error(error::no_such_field(&ty_name, &field, seg.span));
-                        return None;
-                    }
-                },
-                other => {
-                    checker.error(error::field_access_on_non_struct(other, seg.span));
-                    return None;
-                }
-            },
-            kai_ast::PlaceStep::Index { index, rbracket } => {
-                let elem_ty = match cur_ty.clone() {
-                    KaiType::Array(elem) => *elem,
-                    other => {
-                        checker.error(error::index_on_non_array(&other, *rbracket));
-                        return None;
-                    }
-                };
-                let typed_index = expr::lower(checker, index, None);
-                if !typed_index.ty.is_integer() {
-                    let ty = typed_index.ty.clone();
-                    checker.error(error::index_not_integer(&ty, *rbracket));
-                }
-                steps.push(TypedPlaceStep::Index(Box::new(typed_index)));
-                elem_ty
+        match step {
+            kai_ast::PlaceStep::Field(seg) => {
+                let (struct_id, field, ty) =
+                    expr::resolve_field_hop(checker, &cur_ty, &seg.name, seg.span)?;
+                steps.push(TypedPlaceStep::Field(FieldStep { struct_id, field }));
+                cur_ty = ty;
             }
-        };
+            kai_ast::PlaceStep::Index { index, rbracket } => {
+                let (elem_ty, typed_index) =
+                    expr::resolve_index_hop(checker, &cur_ty, index, *rbracket)?;
+                steps.push(TypedPlaceStep::Index(Box::new(typed_index)));
+                cur_ty = elem_ty;
+            }
+        }
     }
 
     let typed_value = expr::lower(checker, value, Some(cur_ty.clone()));
@@ -198,10 +171,7 @@ fn assign(
         None if typed_value.ty != cur_ty => {
             let span = value.span;
             let found = typed_value.ty.clone();
-            checker.error(kai_diagnostics::Diagnostic::error(
-                format!("cannot assign `{found}` to a place of type `{cur_ty}`"),
-                span,
-            ));
+            checker.error(error::assign_type_mismatch(&cur_ty, found, span));
         }
         None => {}
     }

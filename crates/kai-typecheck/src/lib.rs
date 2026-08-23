@@ -615,7 +615,7 @@ mod v0004_tests {
 mod v0005_tests {
     use super::*;
     use crate::test_support::parse_ok;
-    use kai_tast::{KaiType, TypedExprKind, TypedStmt};
+    use kai_tast::{KaiType, TypedExprKind};
 
     fn check_src(src: impl AsRef<str>) -> Result<TypedProgram, Vec<Diagnostic>> {
         let ast = parse_ok(src.as_ref());
