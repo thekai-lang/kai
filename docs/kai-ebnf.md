@@ -44,12 +44,29 @@ IntLit       ::= Digit { Digit }
 FloatLit     ::= Digit { Digit } '.' Digit { Digit }
 BoolLit      ::= 'true' | 'false'
 
-(* Strings support interpolation: ${ expr } inside the literal.
-   Lexer must tokenize the literal as a sequence of raw-text and
-   embedded-expression segments, not a single opaque string token. *)
+(* v0.0.5 scope: plain literals only — StringLit reduces to '"' { RawTextChar } '"'.
+   Interpolation is defined below for completeness/forward-reference but is
+   explicitly DEFERRED past v0.0.5 (whitepaper §9.7, Appendix A) — it needs
+   its own decisions (evaluation order, value-to-string conversion, temporary
+   ownership) that haven't been made yet. Do not implement the lexer's
+   segment-splitting behavior until those decisions land; until then the
+   lexer should treat `${` inside a string as ordinary literal text, not
+   as the start of an embedded expression. *)
 StringLit    ::= '"' { StringSegment } '"'
-StringSegment ::= RawTextChar | Interpolation
-Interpolation ::= '${' Expr '}'
+StringSegment ::= RawTextChar | Interpolation   (* Interpolation branch: not active in v0.0.5 *)
+Interpolation ::= '${' Expr '}'                  (* deferred — see note above *)
+RawTextChar  ::= PlainChar | EscapeSequence
+PlainChar    ::= (* any character except '"' and '\' *)
+EscapeSequence ::= '\' ( 'n' | 't' | 'r' | '"' | '\' )
+               (* v0.0.5 escape set, locked during implementation planning:
+                  newline, tab, carriage return, quote, backslash — the
+                  minimal standard set. Any other character after '\'
+                  is a LEX error ("unknown escape sequence"), not a
+                  silent pass-through: an unrecognized escape almost
+                  always means the source meant something the language
+                  doesn't say. `\` + line-continuation, `\0`, unicode
+                  escapes etc. do NOT exist yet. *)
+
 
 (* Operators and punctuation *)
 Op           ::= '+' | '-' | '*' | '/' | '%'
@@ -174,13 +191,19 @@ AssignStmt   ::= Place ('=' | '+=' | '-=' | '*=' | '/=') Expr ';'
 
 Place        ::= Ident
                | Place '.' Ident
+               | Place '[' Expr ']'
                (* Field-access assignment target added per v0.0.3 scope
                   decision: struct field writes (`p.x = 5;`) are in scope
-                  alongside field reads, gated on the receiving binding or
-                  parameter being `mut` (checked at typecheck/effect-check,
-                  not parse time — the parser accepts the shape regardless).
-                  Array-index alternative (`Place '[' Expr ']'`) still
-                  deferred — arrays land at v0.0.5, not v0.0.3. *)
+                  alongside field reads. Array-index alternative added for
+                  v0.0.5: `arr[i] = x;` uses the SAME rule as field writes,
+                  not a special case — writability is a property of the
+                  root binding (§9.3's Place model: `var`/`mut`-param roots
+                  are writable, `let`/plain-param roots are not), and every
+                  projection (`.field` or `[index]`, arbitrarily chained)
+                  inherits it uniformly. Checked at typecheck/effect-check,
+                  not parse time — the parser accepts the shape regardless
+                  of root mutability. The root of a `Place` is found by
+                  stripping projections down to the base `Ident`. *)
 
 CallExprStmt ::= Expr ';'
                (* Bare calls only in practice (`foo();`), but the grammar
@@ -275,6 +298,14 @@ FieldInitList ::= FieldInit { ',' FieldInit }
 FieldInit    ::= Ident ':' Expr
 
 ArrayLit     ::= '[' [ ArgList ] ']'
+               (* Empty form `[]` is legal ONLY where a context type fixes
+                  the element type (annotation on the binding, parameter or
+                  return position, outer-literal element). A bare
+                  `let arr = [];` with no annotation is a COMPILE ERROR
+                  ("empty array literal requires a type annotation") — there
+                  is no placeholder element type to infer from, and inventing
+                  one would violate the no-implicit-conversions stance. *)
+
 
 ClosureLit   ::= 'fn' '(' [ ParamList ] ')' '->' Type Block
                (* closure VALUE uses 'fn' — only the closure TYPE dropped
@@ -293,7 +324,7 @@ ClosureLit   ::= 'fn' '(' [ ParamList ] ')' '->' Type Block
 | `LetStmt`/`VarStmt`, `PrimitiveType` beyond int32, `AddExpr`..`MulExpr`, `IfStmt`, `WhileStmt`, `LogicalAndExpr`/`LogicalOrExpr`, unary `!` | v0.0.2 |
 | `TypeDecl`/`StructBody`, `StructLit`, `ArgList`/calls, `Param` with `mut`, field-access `Place` (read and write, write gated by `mut`), cyclic-struct rejection | v0.0.3 |
 | `UseDecl`, `ModulePath`, qualified `PostfixOp` (`.` access as module call) | v0.0.4 |
-| `ArrayType`, `ArrayLit`, array indexing, `ForStmt`, `string` (`StringLit`) | v0.0.5 (Ownership runtime — retain/release actually exercised here for the first time) |
+| `ArrayType`, `ArrayLit`, array indexing, `ForStmt`, `string` (`StringLit`, plain literals — no interpolation, deferred), string `==`/`!=` as content comparison | v0.0.5 (Ownership runtime — retain/release actually exercised here for the first time) |
 | `OptionalType`, `ResultType`, `CoalesceExpr`, `unwrap_or`/`catch`, `ClosureType`, `ClosureLit` | v0.0.6 |
 
 ---
@@ -309,7 +340,7 @@ own changelog.
 2. ~~Boolean logic operators (`&&`, `||`, `!`) have never appeared.~~ **Resolved: all three exist**, confirmed v0.0.2, with `&&` binding tighter than `||` and short-circuit evaluation verified end-to-end.
 3. **Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime)** — previously unscheduled anywhere. `ForStmt`/`ArrayType`/`ArrayLit` in this grammar are still spec-only until v0.0.5 actually lands, but the "no version assigned" gap itself is resolved.
 4. **`ClosureLit` still uses `fn(...)` while `ClosureType` dropped it** (§3.5's stated change was type-only). Not yet implemented (closures are v0.0.6, not yet reached) — still open.
-5. ~~Assignable place — partially resolved.~~ **Now fully resolved for v0.0.3's scope.** Assignment is statement-only (confirmed by implementation), and `Place` now includes field access (`Place '.' Ident`) per the v0.0.3 field-read/field-write decision — see the `Place` rule above. Array-index alternative (`Place '[' Expr ']'`) remains open until arrays land at v0.0.5.
+5. ~~Assignable place — partially resolved.~~ **Now fully resolved.** Assignment is statement-only (confirmed by implementation), and `Place` includes both field access (`Place '.' Ident`, v0.0.3) and array indexing (`Place '[' Expr ']'`, v0.0.5) under one uniform rule — see the `Place` rule above and whitepaper §9.3's generalized model (root determines writability; every projection inherits it).
 6. **Module-qualified calls (`math.sqrt(9.0)`) and struct field access (`user.name`) share the same `.` postfix rule — resolved architecturally, not yet exercised by real code.** No separate AST node for "qualified call" — `math.sqrt(9.0)` parses as ordinary `Call(FieldAccess(Ident, Ident), args)` via the existing `PostfixExpr` composition (see `PostfixOp` note above); disambiguating whether the base identifier is a module or a value is a resolver-phase job. `StructLit`'s head was generalized to `QualifiedName` (dotted, §7 above) for the same reason, so `math.Point { ... }` parses without a parallel node either. This decision is recorded so a "QualifiedCall"/"QualifiedStructLit" special-case node doesn't get reintroduced later out of convenience — it would duplicate what composition already provides and push a semantic (module-vs-value) distinction into the parser, which contradicts the parser/resolver boundary this project has held everywhere else (§8's TAST discipline, the `Trust<C>` IR in §5.0/§8). Still needs real-code testing once modules (v0.0.4) and structs (v0.0.3) have both landed.
    **Downstream consequence, worth being precise about:** the meaning-agnostic parse means `p.add(2, 3)` (a struct field called like a function) is syntactically identical to `math.add(2, 3)` — the parser genuinely cannot and should not tell them apart. But the two cases resolve through **different diagnostic paths, not one shared "direct-call" diagnostic**: if the base resolves to a module (via `use`), an unknown/private member is a **resolver-phase** diagnostic (commit 4's "unknown module member"/"private access"). If the base resolves to an ordinary value, there is no module-lookup step at all — it falls to **typecheck**, with two sub-cases: the named field doesn't exist on the value's type (the same "unknown field" diagnostic an ordinary read like `p.add` would already produce, call or not), or the field exists but its type isn't callable ("value of type X is not callable" — a genuinely new diagnostic case, only reachable once closures exist at v0.0.6, since before that **no struct field is ever callable, unconditionally** — every `p.<field>(...)` where `p` isn't a module resolves as invalid at v0.0.3–v0.0.5, just via whichever of the two typecheck sub-cases the field name happens to hit).
 7. **`Optional<T>` vs. postfix `T?`** — still open; Optional/Result are now v0.0.6 scope (shifted from v0.0.5), not yet implemented.

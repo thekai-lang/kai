@@ -1,12 +1,17 @@
 # Kai
 ### A trust-aware programming language
 
-**Status:** Draft v0.7 — pre-implementation specification
+**Status:** Draft v0.12 — pre-implementation specification
 **Purpose:** Freeze scope before writing any compiler code. Nothing described here is authoritative until it appears in this document. Feature ideas that arise during implementation go into an `IDEAS.md` backlog, not into the compiler.
 
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
 
 **Changelog**
+- **v0.12** — Locked the two decisions v0.0.5 implementation surfaced that no prior draft had ever stated: (1) **string escape sequences** — exactly five (`\n`, `\t`, `\r`, `\"`, `\\`), minimal standard set; anything else after a backslash is a lex-phase error, never silent pass-through (§9.7) — swallowing unknown escapes would corrupt values while looking fine; unicode/`\0`/line-continuation escapes stay undesigned. (2) **empty array literals require a context type** — `[]` is legal only where an annotation or enclosing type fixes the element type; bare `let arr = [];` without annotation is a compile error, because there is nothing to unify and inventing a placeholder element type would reintroduce implicit-conversion behavior this language refuses everywhere else (§9.7).
+- **v0.11** — v0.0.5's string scope locked to plain literals only; `${...}` interpolation formally deferred (§9.7, new Appendix A entry) — it needs evaluation-order, value-to-string-conversion, and temporary-ownership decisions that don't exist yet, and folding it into v0.0.5 would blur a version whose focus is ownership, not string formatting. String `==`/`!=` specified as content comparison, explicitly never pointer identity, and specified as a borrow operation (reads both operands, retains/releases nothing) — consistent with field access and array indexing already being borrows (§9.8, §9.9); pointer-equality fast paths remain a legal *implementation* optimization underneath this rule as long as it stays unobservable.
+- **v0.10** — §9.3 gains the formal two-axis invariant: `is_writable(place) = is_writable(root(place))` (Axis 1, mutability) is fully independent of `visibility(place) = mutation_regime(type_of(root(place)))` (Axis 2, stack-local vs. heap-shared) — neither axis inspects the other. Two explicit anti-patterns recorded (writability must never depend on element type; a container's ownership category must never be inferred from its element type). Retain-before-release ordering (previously stated as a new-looking rule) reworded to make clear it's §9.4's existing `var`-reassignment ordering rule extended to a new destination kind (array element), not a parallel rule — keeps the v0.0.5 amendment small. Added an explicit `var`/`let`/`mut`-param/plain-param × array/struct test matrix to v0.0.5's exit criteria (§7), proving the two axes stay independent in practice.
+- **v0.9** — Generalized the mutability gate (§9.3) into a single `Place` model: root binding determines writability, field access and array indexing are both just projections that inherit it — one rule instead of a separate rule per construct. Array indexing added to `Place` (grammar) for v0.0.5. Called out explicitly that arrays are unconditionally heap-bearing per §9.1 (unlike `Optional`/`Result`, which are conditional) — so `mut arr: int32[]` is caller-visible even though `int32` is a stack type, unlike an all-scalar `mut` struct parameter (D1); this asymmetry is easy to misjudge from element type alone. Generalized §9.4's existing "prepare replacement before releasing old value" ordering rule to any `Place` replacement, not just plain `var` reassignment — named explicitly as safety-critical for array-element replacement, where the RHS can alias the destination slot being replaced (`arr[0] = arr[0]` must not read freed memory).
+- **v0.8** — Formalized, ahead of v0.0.5 implementation, how structs with heap-bearing fields are copied/released (§9.5, new subsection): per-field retain/release, never whole-struct refcounting. This was already implicit in §9.8's existing wording, not a new decision — now made explicit with the mechanism, its codegen implications, and why the whole-struct-refcount alternative was rejected (it would silently give reference semantics to unrelated stack-type fields the moment any sibling field is heap-bearing, contradicting §9.1's unconditional stack-copy-semantics claim).
 - **v0.7** — `Diagnostic` shape gains `file` (§8 constraint 6), surfaced as a real gap during v0.0.4 implementation planning: `span` alone is ambiguous once a compilation can span multiple source files, and §10.1's panic format already implied a file-qualified location without the base shape carrying one. `file` is nullable/absent in the single-file phases (v0.0.1–v0.0.3) and populated from v0.0.4 onward. (Grammar doc, not whitepaper: `StructLit`'s head generalized from a bare `Ident` to `QualifiedName` — dotted, reusing `ModulePath`'s shape — so `math.Point { ... }` parses without a separate "qualified struct literal" node; confirmed no new AST node is needed for qualified calls either, since `math.add(...)` already composes from the existing `Call`/`FieldAccess` rules — the parser stays meaning-agnostic about module-vs-value, per open item #6, matching the parser/resolver boundary already enforced elsewhere in this project.)
 - **v0.6** — v0.0.4 scope locked: `public type` added alongside `public fn` (without it, structs couldn't cross module boundaries at all — a real gap, not a stylistic choice); project root for `use` resolution defined as the entry file's directory, not the invoking process's CWD, for deterministic resolution; stdlib (§3.7) formally deferred to v0.0.5 since every signature in it depends on `string`/arrays; noted that v0.0.4's own test suite needs no stdlib at all (user-defined modules suffice). §3.1's Hello World example annotated as the target shape, not literally achievable before v0.0.5 (it needs both modules and `string` at once).
 - **v0.5** — Inserted a new v0.0.5 ("Ownership runtime") into the roadmap between the module system (v0.0.4) and Optional/Result/closures — string, array literals + indexing, `for..in`, and actual retain/release enforcement (§9.4–9.9) all land together, since they're the first point any heap-bearing type exists. Everything previously numbered v0.0.5–v0.0.11 shifts to v0.0.6–v0.0.12; every cross-reference in this document is updated accordingly. Fixed §9.5's retain-rule enforcement claim, previously (incorrectly) attributed to v0.0.3 — v0.0.3 has zero heap-bearing types active (all structs are stack-only per §9.1), so retain literally cannot be exercised there; the claim now sits on the new v0.0.5. `mut` on a stack-type parameter is formalized as local-copy-permission only, with zero ABI difference from an unannotated parameter — one rule ("`mut` grants write access through the binding"), two consequences depending on whether the type is stack (invisible to caller) or heap (visible through the borrow, from v0.0.5 onward). §9.3's example fixed: no more bare `fn show(s: string) { ... }` (missing the mandatory `->`, and using a type with no version slot until this change) — replaced with a `Point`-based example matching v0.0.3's actual scope. v0.0.3's scope is now explicit about field read *and* write access (write gated by `mut`), and adds a compile-time cyclic-struct-definition check (DFS over the `TypeDecl` dependency graph, diagnostic reports the cycle path) — indirection/boxing to legitimately break such cycles is not yet designed and is called out as a known gap, not a silent omission. Discarding a non-`unit` call result is explicitly allowed without diagnostic in v0.0.3 (no correctness risk for scalars/structs); revisited once `Result` exists (new v0.0.6) where silently discarding it would violate §2.3.
@@ -112,7 +117,7 @@ let user = User { id: 1, name: "Kai" };
 
 ### 3.4 Arrays, Optionals, Results
 
-**Version note:** `int32[]`/array literals and indexing land at v0.0.5 (Ownership runtime — the first point any heap-bearing type exists, §9.4–9.9). `string` lands at the same version, for the same reason. `Optional`/`Result`/closures land at v0.0.6. The examples below use all of these together for readability; none of them are available before v0.0.5, and `Optional`/`Result` specifically not before v0.0.6.
+**Version note:** `int32[]`/array literals and indexing land at v0.0.5 (Ownership runtime — the first point any heap-bearing type exists, §9.4–9.9). `string` lands at the same version, for the same reason — as a **plain literal only**; `${...}` interpolation is explicitly deferred past v0.0.5 (§9.7). `Optional`/`Result`/closures land at v0.0.6. The examples below use all of these together for readability; none of them are available before v0.0.5, and `Optional`/`Result` specifically not before v0.0.6.
 
 ```kai
 let values: int32[] = [1, 2, 3];
@@ -411,7 +416,7 @@ Strict ordering. A version does not start until the previous one has a working, 
 | v0.0.2 | `let`/`var`, primitives, arithmetic, `if/else` | `let` vs `var` mutability enforced (§9.3) |
 | v0.0.3 | `type` structs, struct literals, field read **and** field write (write gated by `mut`), function calls with params, `mut` parameters, cyclic-struct-definition rejection | Type checker does real signature/field matching; `Place` rule covers field access for assignment (grammar); `mut` on a stack-type parameter is local-copy-permission only, zero ABI difference, not observable by the caller (§9.3) — **no retain-rule claim here**, since v0.0.3 has zero heap-bearing types active; cyclic struct defs rejected via DFS over the `TypeDecl` graph with the cycle path in the diagnostic |
 | v0.0.4 | `use` / module system, `public fn`/`public type` | Circular import detection tested; project root = entry-file directory (deterministic, not CWD); module resolution/qualified calls/visibility tested entirely via user-defined modules, no stdlib dependency |
-| v0.0.5 | **Ownership runtime** — `string`, array literals + indexing, `for..in`, retain/release enforcement | Ownership-transfer retain rule (§9.5) actually exercised and tested for `return`/struct-literal/array-literal, now that heap-bearing types (`string`, arrays) exist to trigger it; `for..in` borrows each element per iteration (§9.9) |
+| v0.0.5 | **Ownership runtime** — `string` (plain literals only, no interpolation), array literals + indexing, array element write, `for..in`, retain/release enforcement | Ownership-transfer retain rule (§9.5) actually exercised and tested for `return`/struct-literal/array-literal, now that heap-bearing types (`string`, arrays) exist to trigger it; `for..in` borrows each element per iteration (§9.9); `Place` generalized to array indexing (§9.3) — writability gated by root (`var`/`mut` param) uniformly with struct fields; replacement-into-owned-slot ordering (retain new before release old) tested against self-aliasing (`arr[0] = arr[0]`); the two-axis invariant (writability vs. mutation-visibility, §9.3) tested as an explicit matrix: `var`/`let` array roots, `mut`/plain array parameters, and a stack-only `mut` struct parameter side by side, confirming `arr[i]` visibility tracks the root's type category and never the element type; string `==`/`!=` tested as content comparison — same-content literals from different allocation paths (literal, constructed, retained, returned) all compare equal (§9.7) |
 | v0.0.6 | `Optional`, `Result`, closures | Generic/parametric typing works; discarding a `Result` becomes a diagnostic (§3.2a); discarding an `Optional` — policy decided in this version, not deferred further (Appendix A) |
 | v0.0.7 | `@local`, `@wallclock`, temporal flow analysis, cross-boundary rule | Compile error enforced when `@local` crosses a compiler-untraceable boundary (§5.1) |
 | v0.0.8 | `require`, `observe` | `require` violation always panics per §10.3, recorded to debt ledger before exit; `observe` never panics, tracked as Signal only, not debt |
@@ -498,6 +503,58 @@ Rules:
 
 This is a hard requirement introduced at v0.0.2 scope (where `let`/`var` first exist) and extended to parameters at v0.0.3 (where function calls with params first exist) — mutability checking is not deferred to a later version, since retrofitting it has the same "touch everything at once" risk called out in §8.
 
+**Generalization: `Place`, not per-construct special cases.** Whether a location can be written through is determined entirely by its *root* binding's mutability — field access and array indexing are both just **projections** of a `Place`, and every projection inherits the root's write permission uniformly. There is one rule, not "a struct-field rule" and "a separate array-index rule":
+
+> A `Place` is writable iff its root binding is mutable. Writable roots: `var` locals, `mut` parameters. Non-writable roots: `let` locals, ordinary (non-`mut`) parameters. Field and index projections (`p.x`, `arr[i]`, `p.a.b`, `arr[i].x`, arbitrarily chained) preserve — never grant or revoke — the root's write permission. Assignment requires the destination `Place` to be writable.
+
+| Expression | Root | Writable? |
+|---|---|---|
+| `p.x` | `var p` | yes |
+| `arr[i]` | `var arr` | yes |
+| `p.x` | `let p` | no |
+| `arr[i]` | `let arr` | no |
+| `p.x` | `mut p` (param) | yes |
+| `arr[i]` | `mut arr` (param) | yes |
+
+The root of a `Place` is found by stripping every projection down to the base identifier — this is a trivial resolver-phase helper (`root_of(place) -> Ident`), not a new concept.
+
+**Arrays are unconditionally heap-bearing — including arrays of scalars — which makes `mut arr` behave differently from `mut` on an all-scalar struct.** §9.1 lists `array` as a heap type without qualification (unlike `Optional<T>`/`Result<T,E>`, which are heap-bearing only *when their payload is*) — an array's backing buffer needs heap allocation regardless of what it stores. This means a `mut` array parameter falls under this section's **heap** consequence even when the element type is a plain stack type:
+
+```kai
+fn touch_mut(mut p: Point) { p.x = 5; }         // caller's Point is UNCHANGED — Point is all-scalar (D1), copy semantics
+fn set_first(mut arr: int32[]) { arr[0] = 42; } // caller's array IS CHANGED — array is heap-bearing regardless of element type
+```
+
+It's tempting to assume `int32[]`'s scalar element type means it should behave like `Point` (local-only mutation) — that assumption is wrong, and worth flagging explicitly because it's an easy mistake: **what determines the ownership regime is the container type, not the element type.**
+
+**The formal invariant — two orthogonal axes, never conflated:**
+
+> **Mutability is gated by the root `Place`; mutation *visibility* is determined by the root `Place`'s type category.**
+
+```
+is_writable(place) = is_writable(root(place))                    ← Axis 1: gates whether assignment is legal at all
+visibility(place)   = mutation_regime(type_of(root(place)))       ← Axis 2: what that mutation actually does
+                        stack-only  → D1 (local copy, invisible to caller)
+                        heap-bearing → shared mutation (visible to caller)
+```
+
+`p.x` and `arr[0]` can both be writable `Place`s under the exact same Axis-1 rule (root is `var`/`mut`) while having completely different Axis-2 storage semantics (`Point` is stack-only → D1; `int32[]` is heap-bearing → visible). Neither axis needs to know about the other to do its job — writability never looks at the element type, and the storage-semantics decision never looks at whether the destination happens to be writable.
+
+**Two wrong models to avoid, precisely because they look almost right:**
+- ❌ `IndexPlace writable iff element type is mutable` — writability is never an element-type question; it's always `is_writable(root(place))`, full stop.
+- ❌ `array<int32> behaves like Point because int32 is stack` — the element type is irrelevant to the container's own ownership category; `array` is unconditionally heap-bearing per §9.1 regardless of what it holds.
+
+Element type only re-enters the picture for the *replacement operation itself* (retaining the new value if it's heap-bearing, per the ordering rule below) — never for deciding whether the assignment is legal in the first place. Keeping these two concerns separate is what lets `Place` stay one uniform rule instead of splintering into per-container special cases.
+
+**Replacement into an already-owned `Place` — ordering matters, and this extends §9.4's existing rule to a new destination kind, not a parallel one.** §9.4 already specifies the safe order for `var` reassignment: prepare the replacement value, *then* release the old one. Array-element replacement is simply another kind of owning destination that rule already covers — `arr[i] = x` is a `Place` replacement exactly like `p = x`, just with an index projection instead of a bare identifier. No new ownership rule is introduced here; only the set of destination kinds §9.4 applies to grows. Here the ordering is safety-critical, not just tidy:
+
+```kai
+var arr = ["a", "b"];
+arr[0] = arr[0];   // must be safe — the RHS can alias the very slot being replaced
+```
+
+The only correct order: **evaluate and prepare the RHS (retaining it if it's a borrowed reference) *before* releasing the old value at the destination slot.** Releasing first and evaluating the RHS second would read already-freed memory whenever the RHS aliases the destination — exactly the same class of bug as the `return s` retain-boundary bug in §9.5, just at a different transfer point. This applies uniformly to any `Place` assignment (struct field, array element, plain `var`), not just arrays — array indexing just makes the aliasing hazard concrete and easy to demonstrate.
+
 ### 9.4 Assignment and binding
 
 ```kai
@@ -553,6 +610,14 @@ Compiler-facing summary table:
 
 This lives in its own IR-producing phase (§8's "ownership resolution," between typecheck and effect-check) — it is not something codegen infers. The output is an IR where every retain/release/move is already an explicit node; codegen never decides this itself, mirroring the same discipline as type information (§8, constraint 2).
 
+**How this generalizes to structs with heap-bearing fields (per-field retain, not whole-struct refcounting).** Once `string` exists (v0.0.5), a struct with a `string` field becomes heap-bearing per §9.1 — but this does not turn the struct itself into a single refcounted heap block. This was already implicit in §9.8's wording ("releasing the struct releases those field**s**," and a retained field becomes "independent of `user`'s lifetime" — both phrasings only make sense under per-field ownership) and is now made explicit:
+
+- **Representation is unchanged.** A heap-bearing struct is still a stack-resident (or embedded-in-parent) aggregate, laid out exactly like a stack-only struct — `%StructName = type { i32, ..., %KaiString* }`. A heap-bearing field is a pointer to a *separately* heap-allocated, refcounted buffer; the struct aggregate itself is never itself heap-allocated or refcounted as one unit.
+- **Copy = memcpy the aggregate + retain each heap-bearing field individually.** Every transfer-boundary case in the table above (parameter passing of an owned temporary, `let`/`var` binding, `return`, struct-literal field-init) generalizes from "retain the one value" to "retain every heap-bearing field within the aggregate being moved," recursively for nested structs-of-structs.
+- **Release = release each heap-bearing field individually**, not decrement one refcount for the whole struct — exactly as §9.8 already states, recursively for nested structs.
+- **Why not whole-struct refcounting instead:** boxing the entire struct (one heap allocation, one refcount, for the aggregate as a whole) would give *every* field of that struct reference semantics the moment *any one* field is heap-bearing — including otherwise-plain `int32` fields, which would silently stop being copy-semantics (§9.1's blanket "stack types use copy semantics" would then have a hidden exception depending on a sibling field's type). That's a spooky-action-at-a-distance surprise this project has deliberately avoided everywhere else (D1's stack/heap split is exactly the opposite instinct — keep the axis local and type-determined, never structurally contagious). Per-field retention keeps every field's semantics locally determined by *that field's own type*, with no exception.
+- **Interaction with D1 (§9.3):** unaffected. D1 only ever applied to structs where *every* field is a stack type (`Point`, `Segment` in the v0.0.4 fixtures). The moment a struct has any heap-bearing field (nested arbitrarily deep), it falls under this section's rules instead, and `mut` on such a parameter follows §9.3's heap-type consequence (writes are visible to the caller through the borrow) rather than D1's stack-type consequence (local-copy-only, zero ABI difference). This isn't a new special case — it's the same stack/heap axis §9.3 already established, just now reachable for the first time once `string` exists.
+
 ### 9.6 Function calls
 
 Arguments are borrowed by default (see §9.3 for mutability of that borrow). The caller keeps ownership; the callee does not release the argument at scope exit as if it owned the caller's storage.
@@ -562,6 +627,29 @@ If a function returns a heap value, ownership transfers to the caller, subject t
 ### 9.7 String literals
 
 String literals are borrowed static storage at expression level. When stored into an owning location, the compiler creates an owned runtime string.
+
+**v0.0.5 scope: plain string literals only — `"hello"`, `"hello world"`. No interpolation.** `${...}` expression embedding is deferred past v0.0.5 — it isn't just syntax sugar once you ask what it actually requires: evaluation order for embedded expressions, a defined conversion from arbitrary values to their string representation, and the ownership treatment of the resulting temporaries. None of that is specified yet, and v0.0.5 is already one cluster (string + array + the first exercise of retain/release, §7) — folding in a formatting/conversion feature on top would blur a version whose whole point is ownership, not string formatting. Interpolation returns once expression-to-string conversion semantics exist as their own decision (tracked in Appendix A) — not bundled into this version by default. Until then `${` inside a literal is ordinary text, and the lexer does no segment-splitting.
+
+**Escape sequences (decided during v0.0.5 implementation planning): exactly five.** `\n` (newline), `\t` (tab), `\r` (carriage return), `\"` (quote), `\\` (backslash) — the minimal standard set, enough for real programs without pre-deciding unicode-escape machinery this project hasn't designed. Any other character after `\` inside a literal is a **lex-phase error** ("unknown escape sequence"), never a silent pass-through of the backslash: an unrecognized escape almost always means the source meant something the language doesn't say, and swallowing it would corrupt the value while looking fine. `\0`, `\x..`, `\u{...}`, backslash line-continuations do NOT exist yet.
+
+**Empty array literals require a context type.** `[1, 2]` infers its element type by unifying its elements; `[]` has nothing to unify, so it is legal ONLY where a context type fixes the element type — an annotation on the binding (`let arr: int32[] = [];`), a parameter or return position, or as an element of an outer literal whose element type is already fixed (`[[], [1]]` is an error for a different reason — mixed shapes — but `[[]] : int32[][]` is well-typed). A bare `let arr = [];` with no annotation is a **compile error** ("empty array literal requires a type annotation"). There is no placeholder element type to infer from, and inventing one (a "typeless empty array" that adapts on first use) would reintroduce exactly the implicit-conversion behavior this language refuses everywhere else.
+
+**String equality (`==`/`!=`) is content comparison, and is a borrow operation — never pointer identity, never an ownership event.**
+
+```kai
+let a = "hello";
+let b = "hello";
+a == b   // true — same content. Whether `a` and `b` happen to share one
+         // allocation or point to two separate ones is never observable
+         // through `==`; it must not be.
+```
+
+Two reasons this is a hard rule, not a style preference:
+
+1. **Correctness.** A literal, a constructed string, a retained co-owner, and a value returned from a function can all represent the same content while having completely different allocation identities (§9.4–9.6). If `==` compared pointers, whether two equal-looking strings compare equal would depend on unrelated storage decisions the language has never promised to control — the same class of "leaking implementation detail into observable semantics" this project has refused everywhere else (retain-on-transfer, per-field struct retention, the `Place` writability/visibility split).
+2. **Ownership discipline.** `==` only ever *borrows* both operands to compare bytes — it does not retain, release, or otherwise touch ownership. This matches every other read-only access already established: field access (§9.8) and array indexing (§9.9) are borrows, not ownership events, and equality comparison is no different — it reads, it doesn't own.
+
+Interning or a pointer-equality fast path (`if lhs.ptr == rhs.ptr: true else: compare bytes`) is a legitimate implementation optimization *underneath* this rule, exactly because it's unobservable — the compiler is free to take that shortcut as long as the two paths always agree. What's fixed is the observable semantic: content equality, full stop.
 
 ### 9.8 Struct fields
 
@@ -683,6 +771,8 @@ Stdlib operations still return `Result` for normal recoverable failures — miss
 ## Appendix A — Open questions (deliberately unresolved)
 
 These are known unresolved design questions. They are *not* to be decided ad-hoc mid-implementation — they get resolved here, in this document, first.
+
+- **`${...}` string interpolation — deferred past v0.0.5 (§9.7).** Needs its own decisions before it can land: evaluation order for embedded expressions, a defined conversion from arbitrary values to their string representation (does every type get one? via what mechanism — a trait-like interface, or a closed set of built-ins?), and the ownership/temporary-lifetime treatment of the resulting formatted pieces. None of this is a small addition to `StringLit`'s lexical grammar (which already has the `${...}` shape defined, unused) — it's a small conversion sub-language of its own. No target version yet.
 
 - Are `require`, `reversible`, `@local`/`@wallclock` part of the type system (checked, can reject a program) or purely annotations read by tooling? This determines whether an effect-tracking layer is required in the type checker. (Note: regardless of the answer, their runtime failure behavior is now fixed — §10.3, §10.4.)
 - Conflict resolution when two overrides on the same field disagree over time — last-write-wins with a flagged history, or hard block until reconciled?
