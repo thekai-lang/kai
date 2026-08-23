@@ -4,6 +4,21 @@ This file tracks **compiler implementation** releases (`vX.Y.Z`, what `kai build
 
 ---
 
+## v0.0.5 — Ownership runtime
+
+The first release where heap-bearing types exist — and with them, compiler-managed reference counting (§9). Strings land as plain literals; arrays become first-class; `for..in` iterates; every retain/release/move is decided by an explicit compiler phase, never inferred in codegen.
+
+- **`string` type** — plain literals only (`"hello"`); `${...}` interpolation is formally deferred past this version. Exactly five escapes (`\n \t \r \" \\`); any other character after `\` is a lex-phase *error* ("unknown escape sequence"), never silent pass-through.
+- **Array literals + indexing** — `[1, 2, 3]` unifies element types; `[]` requires a context type annotation (compile error otherwise: "empty array literal requires a type annotation"); `a[i]` reads and writes with any integer index. Arrays are **unconditionally heap-bearing**, regardless of element type (§9.3).
+- **Generalized assignment places** — assignment targets are now `Ident | Place.field | Place[expr]`, arbitrarily chained (`p.a.b = x`, `arr[i].x = y`). Writability follows the ROOT binding only: writable roots are `var` locals and `mut` parameters; projections preserve but never grant permission. The two axes stay independent: writability never inspects types, mutation visibility never inspects mutability.
+- **`for..in` loops** — `for v in array { … }`; the loop variable is immutable, element-typed, and BORROWS each element per iteration — the array keeps ownership of everything after the loop. Non-array iterables are a compile error.
+- **Ownership resolution phase (§8's "ownership resolution")** — new `kai-ownership` crate between typecheck and codegen. It rewrites the typed AST so every ownership decision is an explicit node codegen reads mechanically: retain markers on borrowed values entering owning slots, scope-exit releases (innermost-first, reverse declaration order), return-with-cleanup that evaluates the value BEFORE unwinding live locals, replacement markers ordering "prepare RHS → release old → store" (self-aliasing safe), and iterable-transfer flags on `for..in`.
+- **Retain-on-transfer rule (§9.5)** — reading any binding yields a borrowed reference; only fresh allocations (literals, call results) move free. Entering an owning slot (`let`/`var` init, assignment target, heap-typed `return`, struct-literal field, array-literal element) with a borrowed value inserts a retain — co-ownership, no affine moves.
+- **Refcount runtime** — one uniform header `{rc, len, nbytes, payload, dtor}` shared by strings and arrays; refcounts start at 1, `kai_retain`/`kai_release` bump/drop, zero frees. Element destructors run exactly once, inside the final release of the owning header — co-owned arrays never double-release elements.
+- **Per-field struct ownership (§9.5)** — a heap-bearing struct (any field recursively heap-bearing) stays a stack aggregate: copying it memcpy's the fields and retains each heap field individually; releasing releases each field individually. Whole-struct refcounting was rejected by design — it would silently turn unrelated scalar fields into reference semantics. Scalars stay copy-semantics even next to string siblings.
+- **String equality** — `==`/`!=` compare CONTENT via the runtime, never pointer identity, and are borrow operations (§9.7): same text from different allocation paths compares equal, guaranteed by tests.
+- **Testing** — 223 tests: lexer/parser/typecheck unit tests for the new surface (escapes, empty-array rule, indexing rules, writability matrix through indexed places), ownership-pass unit tests (retain classification, release orderings, cleanup-carrying returns), e2e JIT tests proving aliasing safety and cross-path content equality, and golden-IR fixture `v0005`.
+
 ## v0.0.4 — Module system
 
 The first multi-file release: programs are module trees rooted at an entry file.
