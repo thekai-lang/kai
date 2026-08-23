@@ -13,6 +13,34 @@ fn fixture(rel: &str) -> String {
         .unwrap_or_else(|err| panic!("cannot read fixture {}: {err}", path.display()))
 }
 
+/// Golden-compare with write-on-missing bootstrap, shared by every version's
+/// IR test: the first run writes the file and asks for a re-run.
+fn assert_golden(rel: &str, ir: &str) {
+    let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures")
+        .join(rel);
+    if !golden.exists() {
+        std::fs::write(&golden, ir).unwrap();
+        panic!("golden file missing — wrote {rel}, re-run the test to compare");
+    }
+    let expected = std::fs::read_to_string(&golden).unwrap();
+    assert_eq!(ir, expected, "generated IR diverged from golden file ({rel})");
+}
+
+/// Asserts a source fails in `phase` with a diagnostic containing `needle`.
+fn assert_fails_at(source: &str, phase: &str, needle: &str) {
+    let failure = pipeline::compile(source).unwrap_err();
+    assert_eq!(failure.phase, phase, "source:\n{source}");
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains(needle)),
+        "expected {phase} diagnostic containing {needle:?}, got {:?}",
+        failure.diagnostics
+    );
+}
+
 const MAIN: &str = "v0001/main.kai";
 
 #[test]
@@ -20,15 +48,7 @@ fn full_pipeline_matches_golden_ir() {
     let source = fixture(MAIN);
     let ir = pipeline::compile(&source).expect("compilation should succeed");
 
-    let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/v0001/main.expected.ll");
-    if !golden.exists() {
-        std::fs::write(&golden, &ir).unwrap();
-        panic!("golden file missing — wrote it, re-run the test to compare");
-    }
-
-    let expected = std::fs::read_to_string(&golden).unwrap();
-    assert_eq!(ir, expected, "generated IR diverged from golden file");
+    assert_golden("v0001/main.expected.ll", &ir);
 }
 
 #[test]
@@ -39,31 +59,23 @@ fn jit_executes_main_and_returns_zero() {
 
 #[test]
 fn missing_main_is_reported_at_resolve() {
-    let failure = pipeline::compile("fn helper() -> int32 { return 1; }").unwrap_err();
-    assert_eq!(failure.phase, "resolve");
-    assert!(failure.diagnostics[0].message.contains("no `main`"));
+    assert_fails_at("fn helper() -> int32 { return 1; }", "resolve", "no `main`");
 }
 
 #[test]
 fn parse_error_stops_before_resolve() {
-    let failure = pipeline::compile("fn main() -> int32 { return 0 }").unwrap_err();
-    assert_eq!(failure.phase, "parse");
-    assert!(failure.diagnostics[0].message.contains('`'));
+    assert_fails_at("fn main() -> int32 { return 0 }", "parse", "`");
 }
 
 #[test]
 fn type_error_reports_literal_range() {
     let source = "fn main() -> int32 { return 2147483648; }";
-    let failure = pipeline::compile(source).unwrap_err();
-    assert_eq!(failure.phase, "typecheck");
-    assert!(failure.diagnostics[0].message.contains("does not fit"));
+    assert_fails_at(source, "typecheck", "does not fit");
 }
 
 #[test]
 fn lex_error_reports_unknown_character() {
-    let failure = pipeline::compile("fn main() -> int32 { return 0 @ 1; }").unwrap_err();
-    assert_eq!(failure.phase, "lex");
-    assert!(failure.diagnostics[0].message.contains("@"));
+    assert_fails_at("fn main() -> int32 { return 0 @ 1; }", "lex", "@");
 }
 
 // ---------------------------------------------------------------------------
@@ -77,15 +89,7 @@ fn v002_full_pipeline_matches_golden_ir() {
     let source = fixture(V002);
     let ir = pipeline::compile(&source).expect("compilation should succeed");
 
-    let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/v0002/main.expected.ll");
-    if !golden.exists() {
-        std::fs::write(&golden, &ir).unwrap();
-        panic!("golden file missing — wrote it, re-run the test to compare");
-    }
-
-    let expected = std::fs::read_to_string(&golden).unwrap();
-    assert_eq!(ir, expected, "generated IR diverged from golden file");
+    assert_golden("v0002/main.expected.ll", &ir);
 }
 
 #[test]
@@ -195,39 +199,38 @@ fn v002_error_mixed_arithmetic() {
 
 #[test]
 fn v002_error_undeclared_variable() {
-    let failure = pipeline::compile("fn main() -> int32 { return n; }").unwrap_err();
-    assert_eq!(failure.phase, "typecheck");
-    assert!(
-        failure.diagnostics[0]
-            .message
-            .contains("undeclared variable `n`")
+    assert_fails_at(
+        "fn main() -> int32 { return n; }",
+        "typecheck",
+        "undeclared variable `n`",
     );
 }
 
 #[test]
 fn v002_error_invalid_assignment_target_is_parse_phase() {
-    let failure = pipeline::compile("fn main() -> int32 { 1 + 1 = 2; return 0; }").unwrap_err();
-    assert_eq!(failure.phase, "parse");
-    assert!(
-        failure.diagnostics[0]
-            .message
-            .contains("invalid assignment target")
+    assert_fails_at(
+        "fn main() -> int32 { 1 + 1 = 2; return 0; }",
+        "parse",
+        "invalid assignment target",
     );
 }
 
 #[test]
 fn v002_error_duplicate_local_same_scope() {
-    let failure =
-        pipeline::compile("fn main() -> int32 { let x = 1; let x = 2; return x; }").unwrap_err();
-    assert_eq!(failure.phase, "typecheck");
-    assert!(failure.diagnostics[0].message.contains("already declared"));
+    assert_fails_at(
+        "fn main() -> int32 { let x = 1; let x = 2; return x; }",
+        "typecheck",
+        "already declared",
+    );
 }
 
 #[test]
 fn v002_error_definite_return_still_enforced_with_if() {
-    let failure = pipeline::compile("fn main() -> int32 { if true { return 1; } }").unwrap_err();
-    assert_eq!(failure.phase, "typecheck");
-    assert!(failure.diagnostics[0].message.contains("has no `return`"));
+    assert_fails_at(
+        "fn main() -> int32 { if true { return 1; } }",
+        "typecheck",
+        "has no `return`",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -244,9 +247,7 @@ fn v0021_deep_nesting_reports_diagnostic_not_crash() {
     src.push_str(&")".repeat(50_000));
     src.push_str("; }");
 
-    let failure = pipeline::compile(&src).unwrap_err();
-    assert_eq!(failure.phase, "parse");
-    assert!(failure.diagnostics[0].message.contains("nested too deeply"));
+    assert_fails_at(&src, "parse", "nested too deeply");
 }
 
 #[test]
@@ -270,15 +271,7 @@ fn v003_full_pipeline_matches_golden_ir() {
     let source = fixture(V003);
     let ir = pipeline::compile(&source).expect("compilation should succeed");
 
-    let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/v0003/main.expected.ll");
-    if !golden.exists() {
-        std::fs::write(&golden, &ir).unwrap();
-        panic!("golden file missing — wrote it, re-run the test to compare");
-    }
-
-    let expected = std::fs::read_to_string(&golden).unwrap();
-    assert_eq!(ir, expected, "generated IR diverged from golden file");
+    assert_golden("v0003/main.expected.ll", &ir);
 }
 
 #[test]
@@ -446,12 +439,11 @@ fn file_pipeline_rejects_private_access_across_modules() {
 
 #[test]
 fn string_api_still_refuses_use_decls() {
-    let failure = pipeline::compile(
+    assert_fails_at(
         "use util.core;\nfn main() -> int32 { return 0; }",
-    )
-    .unwrap_err();
-    assert_eq!(failure.phase, "resolve");
-    assert!(failure.diagnostics[0].message.contains("file entry point"));
+        "resolve",
+        "file entry point",
+    );
 }
 
 // -- v0.0.4 fixture: multi-module project ------------------------------------
@@ -465,14 +457,7 @@ fn v0004_entry() -> PathBuf {
 fn v004_file_pipeline_matches_golden_ir() {
     let ir = pipeline::compile_file(&v0004_entry()).expect("compilation should succeed");
 
-    let golden = v0004_entry().with_file_name("main.expected.ll");
-    if !golden.exists() {
-        std::fs::write(&golden, &ir).unwrap();
-        panic!("golden file missing — wrote it, re-run the test to compare");
-    }
-
-    let expected = std::fs::read_to_string(&golden).unwrap();
-    assert_eq!(ir, expected, "generated IR diverged from golden file");
+    assert_golden("v0004/main.expected.ll", &ir);
 }
 
 #[test]
@@ -636,14 +621,7 @@ fn v0005_entry() -> PathBuf {
 fn v005_file_pipeline_matches_golden_ir() {
     let ir = pipeline::compile_file(&v0005_entry()).expect("compilation should succeed");
 
-    let golden = v0005_entry().with_file_name("main.expected.ll");
-    if !golden.exists() {
-        std::fs::write(&golden, &ir).unwrap();
-        panic!("golden file missing — wrote it, re-run the test to compare");
-    }
-
-    let expected = std::fs::read_to_string(&golden).unwrap();
-    assert_eq!(ir, expected, "generated IR diverged from golden file");
+    assert_golden("v0005/main.expected.ll", &ir);
 }
 
 #[test]
@@ -652,4 +630,184 @@ fn v005_jit_module_tree_returns_expected_value() {
     // + 4 (mut array param visible to caller) + 47 (sum via for..in)
     // + 10 (per-field struct semantics) — see main.kai.
     assert_eq!(pipeline::jit_file(&v0005_entry()).unwrap(), 64);
+}
+
+// ---------------------------------------------------------------------------
+// v0.0.5.1: corpus robustness + §10 panic end-to-end through the CLI.
+// ---------------------------------------------------------------------------
+
+/// Every fixture in the corpus must flow through the whole pipeline without
+/// a Rust panic: success OR structured diagnostics, never a crash.
+#[test]
+fn corpus_flows_through_pipeline_without_rust_panics() {
+    use std::collections::HashSet;
+
+    const PHASES: [&str; 6] = [
+        "lex",
+        "parse",
+        "resolve",
+        "typecheck",
+        "ownership",
+        "codegen",
+    ];
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let mut stack = vec![root.clone()];
+    let mut checked = Vec::new();
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("fixture dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "kai") {
+                let rel = path
+                    .strip_prefix(&root)
+                    .expect("under fixtures")
+                    .display()
+                    .to_string();
+                match pipeline::compile_file(&path) {
+                    Ok(_) => checked.push(format!("{rel}: ok")),
+                    Err(failure) => {
+                        assert!(
+                            PHASES.contains(&failure.phase),                            "{rel}: unknown failure phase {:?}",
+                            failure.phase
+                        );
+                        assert!(
+                            !failure.diagnostics.is_empty(),
+                            "{rel}: failed with no diagnostics"
+                        );
+                        checked.push(format!("{rel}: {} diagnostics", failure.diagnostics.len()));
+                    }
+                }
+            }
+        }
+    }
+    // Every version's fixture set must actually be exercised.
+    let seen: HashSet<&str> = checked.iter().filter_map(|s| s.split('/').next()).collect();
+    for ver in ["v0001", "v0002", "v0003", "v0004", "v0005"] {
+        assert!(seen.contains(ver), "{ver} missing from corpus sweep");
+    }
+}
+
+fn run_cli(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_kai"))
+        .args(args)
+        .output()
+        .expect("spawn kai binary")
+}
+
+/// Writes `program` to a temp file, runs it through the CLI, and asserts the
+/// §10 contract: exit code 101 plus the mandated stderr shape. In-process JIT
+/// would terminate the test runner — panicking programs must be observed
+/// from outside.
+fn assert_cli_panic(name: &str, program: &str, message: &str) {
+    let dir = std::env::temp_dir().join(format!(
+        "kai-panic-e2e-{}-{}",
+        name,
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("main.kai");
+    std::fs::write(&path, program).expect("write program");
+
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(101),
+        "expected exit 101, got {:?}\nstderr:\n{stderr}",
+        out.status.code()
+    );
+    assert!(
+        stderr.contains(&format!("kai runtime panic: {message}")),
+        "missing panic message:\n{stderr}"
+    );
+    assert!(
+        stderr.lines().any(|l| l.starts_with("  at ") && l.contains("main.kai:")),
+        "missing location line:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cli_out_of_bounds_read_panics_with_location() {
+    assert_cli_panic(
+        "oob",
+        r#"fn main() -> int32 {
+    var a = [1, 2];
+    return a[9];
+}
+"#,
+        "array index out of bounds",
+    );
+}
+
+#[test]
+fn cli_negative_index_is_out_of_bounds() {
+    assert_cli_panic(
+        "negidx",
+        r#"fn main() -> int32 {
+    var a = [1, 2];
+    var i = 0 - 1;
+    return a[i];
+}
+"#,
+        "array index out of bounds",
+    );
+}
+
+#[test]
+fn cli_division_by_zero_panics() {
+    assert_cli_panic(
+        "div0",
+        r#"fn main() -> int32 {
+    var z = 0;
+    return 1 / z;
+}
+"#,
+        "division by zero",
+    );
+}
+
+#[test]
+fn cli_modulo_by_zero_panics() {
+    assert_cli_panic(
+        "mod0",
+        r#"fn main() -> int32 {
+    var z = 0;
+    return 7 % z;
+}
+"#,
+        "modulo by zero",
+    );
+}
+
+#[test]
+fn cli_int32_add_overflow_panics() {
+    assert_cli_panic(
+        "addovf",
+        r#"fn main() -> int32 {
+    var big = 2147483647;
+    return big + 1;
+}
+"#,
+        "integer overflow",
+    );
+}
+
+#[test]
+fn cli_healthy_program_exits_normally() {
+    let dir = std::env::temp_dir().join(format!("kai-ok-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("main.kai");
+    std::fs::write(&path, "fn main() -> int32 { return 7; }").expect("write");
+
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(7));
+    assert!(out.stderr.is_empty(), "unexpected stderr");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
