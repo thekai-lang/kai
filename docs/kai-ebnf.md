@@ -33,8 +33,11 @@ Letter       ::= 'a'..'z' | 'A'..'Z'
 Digit        ::= '0'..'9'
 
 Keyword      ::= 'fn' | 'let' | 'var' | 'type' | 'use' | 'return'
-               | 'if' | 'else' | 'for' | 'in' | 'while'
-               | 'true' | 'false'
+                | 'if' | 'else' | 'for' | 'in'
+                  (* 'while' below is RESERVED in this grammar but NOT
+                     implemented — see WhileStmt and open item 1. *)
+                | 'while'
+                | 'true' | 'false'
                | 'public' | 'mut'
                | 'Some' | 'Result' | 'Optional'   (* Optional not yet used as keyword in examples — see open items *)
                | 'catch' | 'as'                    (* 'as' reserved for future module alias, not v0.0.1–5 core *)
@@ -176,8 +179,11 @@ ForStmt      ::= 'for' Ident 'in' Expr Block
                (* Iterates and borrows each element per iteration — §9.9. *)
 
 WhileStmt    ::= 'while' Expr Block
-               (* Confirmed present via v0.4.5 reference code — condition
-                  loop, standard `while cond { ... }` form, nesting allowed. *)
+               (* SPEC-ONLY — not implemented. No parser or AST support
+                  exists in any release so far; the rule below is kept for
+                  the grammar's target shape only. An earlier revision of
+                  this document claimed `while` was "confirmed v0.0.2" —
+                  that was false and is corrected here (open item 1). *)
 
 ExprStmt     ::= AssignStmt | CallExprStmt
 
@@ -336,9 +342,9 @@ Items **struck through** below are now resolved by the actual implementation
 visible so the resolution history isn't lost — same spirit as the whitepaper's
 own changelog.
 
-1. ~~No loop other than `for...in` has ever appeared.~~ **Resolved: `while` exists**, confirmed v0.0.2. `for...in` itself is still not implemented yet per the changelog (v0.0.1/v0.0.2 cover only `while`, not arrays or `for`) — so `ForStmt` above is spec-only until it actually lands; don't treat it as implemented.
+1. **Corrected (v0.0.5.1): this item's earlier resolution was wrong in both directions.** There is no `while` — no parser or AST support has ever existed; the "confirmed v0.0.2" claim above was false, and `WhileStmt` remains spec-only. Conversely, the claim that "`for...in` itself is still not implemented" went stale: `ForStmt` **did land** in v0.0.5 (arrays + iteration) and is implemented as written. `break`/`continue` have never appeared anywhere and are not part of any rule here.
 2. ~~Boolean logic operators (`&&`, `||`, `!`) have never appeared.~~ **Resolved: all three exist**, confirmed v0.0.2, with `&&` binding tighter than `||` and short-circuit evaluation verified end-to-end.
-3. **Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime)** — previously unscheduled anywhere. `ForStmt`/`ArrayType`/`ArrayLit` in this grammar are still spec-only until v0.0.5 actually lands, but the "no version assigned" gap itself is resolved.
+3. ~~**Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime)**~~ **Resolved: landed in v0.0.5.** `ForStmt`/`ArrayType`/`ArrayLit` are implemented as written above — array literals, indexing reads/writes, and element-borrowing iteration all ship with the ownership runtime.
 4. **`ClosureLit` still uses `fn(...)` while `ClosureType` dropped it** (§3.5's stated change was type-only). Not yet implemented (closures are v0.0.6, not yet reached) — still open.
 5. ~~Assignable place — partially resolved.~~ **Now fully resolved.** Assignment is statement-only (confirmed by implementation), and `Place` includes both field access (`Place '.' Ident`, v0.0.3) and array indexing (`Place '[' Expr ']'`, v0.0.5) under one uniform rule — see the `Place` rule above and whitepaper §9.3's generalized model (root determines writability; every projection inherits it).
 6. **Module-qualified calls (`math.sqrt(9.0)`) and struct field access (`user.name`) share the same `.` postfix rule — resolved architecturally, not yet exercised by real code.** No separate AST node for "qualified call" — `math.sqrt(9.0)` parses as ordinary `Call(FieldAccess(Ident, Ident), args)` via the existing `PostfixExpr` composition (see `PostfixOp` note above); disambiguating whether the base identifier is a module or a value is a resolver-phase job. `StructLit`'s head was generalized to `QualifiedName` (dotted, §7 above) for the same reason, so `math.Point { ... }` parses without a parallel node either. This decision is recorded so a "QualifiedCall"/"QualifiedStructLit" special-case node doesn't get reintroduced later out of convenience — it would duplicate what composition already provides and push a semantic (module-vs-value) distinction into the parser, which contradicts the parser/resolver boundary this project has held everywhere else (§8's TAST discipline, the `Trust<C>` IR in §5.0/§8). Still needs real-code testing once modules (v0.0.4) and structs (v0.0.3) have both landed.
