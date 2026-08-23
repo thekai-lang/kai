@@ -6,8 +6,8 @@
 use crate::checker::Checker;
 use crate::error;
 use kai_ast::{
-    BinaryExpr, BinaryOp as AstBinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr, Ident,
-    StructLitExpr, UnaryOp,
+    ArrayLitExpr, BinaryExpr, BinaryOp as AstBinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr,
+    Ident, IndexExpr, StructLitExpr, UnaryOp,
 };
 use kai_diagnostics::Span;
 use kai_tast::{BinaryOp, FunctionId, KaiType, StructId, TypedExpr, TypedExprKind};
@@ -32,35 +32,14 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         ExprKind::Call(call) => call_expr(checker, call, expr.span),
         ExprKind::FieldAccess(access) => field_access(checker, access),
         ExprKind::StructLit(lit) => struct_lit(checker, lit, expr.span),
-        // Array expressions land with array typing (v0.0.5, next commit).
-        ExprKind::ArrayLit(lit) => {
-            checker.error(kai_diagnostics::Diagnostic::error(
-                "array literals require array support (not yet wired)",
-                expr.span,
-            ));
-            for element in &lit.elements {
-                let _ = lower(checker, element, None);
-            }
-            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
-        }
-        ExprKind::StrLit(_) => {
-            // String typing + equality land with the ownership runtime
-            // (v0.0.5, next commit); the shape parses and reports cleanly.
-            checker.error(kai_diagnostics::Diagnostic::error(
-                "string values require runtime support (not yet wired)",
-                expr.span,
-            ));
-            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
-        }
-        ExprKind::Index(indexed) => {
-            checker.error(kai_diagnostics::Diagnostic::error(
-                "array indexing requires array support (not yet wired)",
-                indexed.rbracket,
-            ));
-            let _ = lower(checker, &indexed.base, None);
-            let _ = lower(checker, &indexed.index, None);
-            TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
-        }
+        ExprKind::ArrayLit(lit) => array_lit(checker, lit, expected.as_ref(), expr.span),
+        ExprKind::StrLit(lit) => TypedExpr::new(
+            TypedExprKind::StrLit {
+                value: lit.value.clone(),
+            },
+            KaiType::String,
+        ),
+        ExprKind::Index(indexed) => index_expr(checker, indexed),
         // Poisoned parser-recovery node. The program already failed upstream;
         // this defensive diagnostic keeps the phase contract explicit.
         ExprKind::Invalid => {
@@ -558,5 +537,91 @@ fn struct_lit(checker: &mut Checker, lit: &StructLitExpr, lit_span: Span) -> Typ
     TypedExpr::new(
         TypedExprKind::StructLit { struct_id, values },
         KaiType::Struct(struct_id),
+    )
+}
+
+// -- v0.0.5: strings, arrays, indexing ---------------------------------------
+
+/// `[e0, e1, ..]`: every element unifies to ONE type; the context hint (an
+/// expected `T[]`) types bare int literals and — decisively — makes an
+/// EMPTY literal legal. `let a = [];` with no annotation is an error
+/// (§9.7): there is nothing to infer from.
+fn array_lit(
+    checker: &mut Checker,
+    lit: &ArrayLitExpr,
+    expected: Option<&KaiType>,
+    lit_span: Span,
+) -> TypedExpr {
+    let elem_hint: Option<KaiType> = match expected {
+        Some(KaiType::Array(elem)) => Some(elem.as_ref().clone()),
+        _ => None,
+    };
+
+    if lit.elements.is_empty() {
+        return match elem_hint {
+            Some(elem) => TypedExpr::new(TypedExprKind::ArrayLit { elements: vec![] }, KaiType::Array(Box::new(elem))),
+            None => {
+                checker.error(kai_diagnostics::Diagnostic::error(
+                    "empty array literal requires a type annotation",
+                    lit_span,
+                ));
+                TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32)
+            }
+        };
+    }
+
+    let mut typed: Vec<TypedExpr> = Vec::with_capacity(lit.elements.len());
+    let mut elem_ty: Option<KaiType> = None;
+    for element in &lit.elements {
+        let value = lower(checker, element, elem_hint.clone());
+        match &elem_ty {
+            None => elem_ty = Some(value.ty.clone()),
+            Some(expected_ty) => {
+                if value.ty != *expected_ty {
+                    checker.error(kai_diagnostics::Diagnostic::error(
+                        format!(
+                            "array elements must share one type: expected `{}`, found `{}`",
+                            expected_ty, value.ty
+                        ),
+                        element.span,
+                    ));
+                }
+            }
+        }
+        typed.push(value);
+    }
+    let elem = elem_ty.unwrap_or_else(|| KaiType::Int32);
+    TypedExpr::new(
+        TypedExprKind::ArrayLit { elements: typed },
+        KaiType::Array(Box::new(elem)),
+    )
+}
+
+/// `base[index]`: base must be `T[]`, index any integer width; the result is
+/// a plain read of `T` (§9.3). Bounds are checked at RUNTIME in later
+/// releases; here we only guarantee the shapes line up.
+fn index_expr(checker: &mut Checker, indexed: &IndexExpr) -> TypedExpr {
+    let base = lower(checker, &indexed.base, None);
+
+    let elem_ty = match base.ty.clone() {
+        KaiType::Array(elem) => *elem,
+        other => {
+            checker.error(error::index_on_non_array(&other, indexed.rbracket));
+            return TypedExpr::new(TypedExprKind::Invalid, KaiType::Int32);
+        }
+    };
+
+    let index = lower(checker, &indexed.index, None);
+    if !index.ty.is_integer() {
+        let ty = index.ty.clone();
+        checker.error(error::index_not_integer(&ty, indexed.rbracket));
+    }
+
+    TypedExpr::new(
+        TypedExprKind::Index {
+            base: Box::new(base),
+            index: Box::new(index),
+        },
+        elem_ty,
     )
 }

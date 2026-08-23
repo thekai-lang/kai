@@ -186,3 +186,23 @@ pub fn unknown_qualified_type(path: &str, span: Span) -> Diagnostic {
 pub fn private_type(path: &str, span: Span) -> Diagnostic {
     Diagnostic::error(format!("type `{path}` is not public"), span)
 }
+
+// -- v0.0.5 -------------------------------------------------------------------
+
+pub(crate) fn index_on_non_array(ty: &KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("cannot index into a value of type `{ty}` (only arrays are indexable)"),
+        span,
+    )
+}
+
+pub(crate) fn index_not_integer(ty: &KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("array index must be an integer, found `{ty}`"), span)
+}
+
+pub(crate) fn for_iterable_not_array(ty: &KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("for..in iterates arrays only, found `{ty}`"),
+        span,
+    )
+}

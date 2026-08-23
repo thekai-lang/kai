@@ -14,6 +14,7 @@ pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
             "int64" => KaiType::Int64,
             "float64" | "float" => KaiType::Float64,
             "bool" => KaiType::Bool,
+            "string" => KaiType::String,
             "unit" => KaiType::Unit,
             other => match checker.local_types().get(other) {
                 Some(&idx) => KaiType::Struct(StructId(idx as u32)),

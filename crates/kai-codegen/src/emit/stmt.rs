@@ -6,7 +6,7 @@ use crate::emit::expr;
 use crate::frame::Frame;
 use crate::types;
 use inkwell::basic_block::BasicBlock;
-use kai_tast::{TypedAssign, TypedIf, TypedLet, TypedStmt};
+use kai_tast::{TypedAssign, TypedFor, TypedIf, TypedLet, TypedStmt};
 
 pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedStmt) {
     match stmt {
@@ -23,7 +23,105 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
             // Value discarded; calls make this meaningful in v0.0.3.
             let _ = expr::emit(ctx, frame, e);
         }
+        TypedStmt::For(f) => for_stmt(ctx, frame, f),
     }
+}
+
+/// `for name in array { body }`: classic induction over the header's len.
+/// The binding slot is written fresh each iteration from the element slot —
+/// the loop variable borrows one element at a time (§9.9); no retain yet,
+/// that lands with the ownership pass.
+fn for_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, f: &TypedFor) {
+    let header = match expr::emit(ctx, frame, &f.iterable) {
+        inkwell::values::BasicValueEnum::PointerValue(p) => p,
+        _ => unreachable!("for iterable is always a header pointer"),
+    };
+
+    let elem_kai_ty = match &f.iterable.ty {
+        kai_tast::KaiType::Array(elem) => elem.as_ref().clone(),
+        other => unreachable!("for iterable typed {other:?}"),
+    };
+    let elem_llvm = types::to_llvm(ctx, &elem_kai_ty);
+    let header_ty = crate::runtime::array_header_ty(ctx, &elem_llvm.to_string());
+
+    let len = {
+        let typed_hdr = ctx
+            .builder
+            .build_pointer_cast(header, ctx.context.ptr_type(Default::default()), "arr.hdr")
+            .expect("hdr cast");
+        let len_slot = ctx
+            .builder
+            .build_struct_gep(header_ty, typed_hdr, 1, "arr.len.p")
+            .expect("len gep");
+        let i64_ty = ctx.context.i64_type();
+        let _ = i64_ty;
+        let loaded = header_ty.get_field_type_at_index(1).expect("len field");
+        ctx.builder
+            .build_load(loaded, len_slot, "arr.len")
+            .expect("len load")
+            .into_int_value()
+    };
+
+    let function = super::current_function(ctx);
+    let binding_slot =
+        super::alloca_in_entry(ctx, function, elem_llvm, &f.binding_name);
+    frame.bind(f.binding_local, binding_slot);
+    let idx_slot = super::alloca_in_entry(ctx, function, ctx.context.i64_type().into(), "for.idx");
+    let zero64 = ctx.context.i64_type().const_zero();
+    let _ = ctx.builder.build_store(idx_slot, zero64);
+
+    let current: BasicBlock = ctx.builder.get_insert_block().expect("insert position");
+    let _ = &current;
+    let cond_bb = ctx.context.append_basic_block(function, "for.cond");
+    let body_bb = ctx.context.append_basic_block(function, "for.body");
+    let end_bb = ctx.context.append_basic_block(function, "for.end");
+    let _ = ctx.builder.build_unconditional_branch(cond_bb);
+
+    ctx.builder.position_at_end(cond_bb);
+    let i = ctx
+        .builder
+        .build_load(ctx.context.i64_type(), idx_slot, "for.i")
+        .expect("idx load")
+        .into_int_value();
+    let more = ctx
+        .builder
+        .build_int_compare(inkwell::IntPredicate::SLT, i, len, "for.more")
+        .expect("icmp");
+    let _ = ctx
+        .builder
+        .build_conditional_branch(more, body_bb, end_bb);
+
+    ctx.builder.position_at_end(body_bb);
+    let elems = expr::elems_storage_of(ctx, header, elem_llvm);
+    let elem_slot = unsafe {
+        ctx.builder
+            .build_in_bounds_gep(elem_llvm, elems, &[i], "for.elem.slot")
+            .expect("element gep")
+    };
+    let elem = ctx
+        .builder
+        .build_load(elem_llvm, elem_slot, "for.elem")
+        .expect("element load");
+    let _ = ctx.builder.build_store(binding_slot, elem);
+    for inner in &f.body.stmts {
+        emit(ctx, frame, inner);
+    }
+    // Back edge only when the body didn't already diverge.
+    if ctx
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_terminator())
+        .is_none()
+    {
+        let next = ctx
+            .builder
+            .build_int_add(i, ctx.context.i64_type().const_int(1, false), "for.next")
+            .expect("iadd");
+        let _ = ctx.builder.build_store(idx_slot, next);
+        let _ = ctx.builder.build_unconditional_branch(cond_bb);
+    }
+
+    ctx.builder.position_at_end(end_bb);
 }
 
 fn ret<'ctx>(ctx: &Ctx<'ctx>, frame: &Frame<'ctx>, value: Option<&kai_tast::TypedExpr>) {
@@ -48,10 +146,38 @@ fn let_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, binding: &TypedLet) 
 }
 
 fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAssign) {
-    // Resolve the place: root slot, then getelementptr per field step.
+    // Resolve the place. Field hops GEP into inline struct memory; index
+    // hops deref the header pointer the current slot holds and GEP into
+    // element storage. The index expression re-evaluates at THIS site —
+    // it rides in the step (§9.3).
     let mut ptr = frame.slot(assign.root);
     for step in &assign.path {
-        ptr = super::field_gep(ctx, step.struct_id, ptr, u32::from(step.field), "place");
+        ptr = match step {
+            kai_tast::TypedPlaceStep::Field(fs) => {
+                super::field_gep(ctx, fs.struct_id, ptr, u32::from(fs.field), "place")
+            }
+            kai_tast::TypedPlaceStep::Index(index) => {
+                let elem_ty = types::to_llvm(ctx, &assign.value.ty);
+                let elems = expr::elems_storage_of(
+                    ctx,
+                    ctx.builder
+                        .build_load(
+                            ctx.context.ptr_type(Default::default()),
+                            ptr,
+                            "arr.hdr",
+                        )
+                        .expect("array value load")
+                        .into_pointer_value(),
+                    elem_ty,
+                );
+                let idx64 = expr::widen_index(ctx, expr::emit(ctx, frame, index).into_int_value());
+                unsafe {
+                    ctx.builder
+                        .build_in_bounds_gep(elem_ty, elems, &[idx64], "place.elem")
+                        .expect("element gep")
+                }
+            }
+        };
     }
 
     let value = expr::emit(ctx, frame, &assign.value);

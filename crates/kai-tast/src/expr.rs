@@ -76,6 +76,23 @@ pub enum TypedExprKind {
         struct_id: crate::symbol::StructId,
         values: Vec<TypedExpr>,
     },
+    /// `"text"` — escapes decoded upstream (§9.7). Owns its heap bytes;
+    /// the ownership pass decides retain/release placement around it.
+    StrLit {
+        value: String,
+    },
+    /// `[e0, e1, ..]` with every element already unified to one type
+    /// (`self.ty` = `Array(elem)`). Empty literals were rejected upstream
+    /// unless a context type existed.
+    ArrayLit {
+        elements: Vec<TypedExpr>,
+    },
+    /// `base[index]` — a BORROW read (§9.9): the element is copied out,
+    /// ownership of the array itself never moves.
+    Index {
+        base: Box<TypedExpr>,
+        index: Box<TypedExpr>,
+    },
     /// Direct call to a top-level function; argument types match the
     /// signature exactly, result type is `self.ty`.
     Call {

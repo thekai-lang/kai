@@ -12,6 +12,7 @@ pub enum TypedStmt {
     Let(TypedLet),
     Assign(TypedAssign),
     If(TypedIf),
+    For(crate::stmt::TypedFor),
     /// Bare nested block; exists purely for scoping semantics.
     Block(TypedBlock),
     Expr(TypedExpr),
@@ -34,6 +35,15 @@ pub struct FieldStep {
     pub field: u16,
 }
 
+/// One hop of the generalized v0.0.5 Place: a field projection or an array
+/// index projection. The index EXPRESSION rides along — it evaluates fresh
+/// at every assignment site (§9.3).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypedPlaceStep {
+    Field(FieldStep),
+    Index(Box<TypedExpr>),
+}
+
 /// `op == None` is plain store; `Some(op)` is read-modify-write
 /// (`x += e` lowers to load, add, store). The write goes to `root`, or —
 /// when `path` is non-empty — through the field chain starting at `root`.
@@ -41,9 +51,20 @@ pub struct FieldStep {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedAssign {
     pub root: LocalId,
-    pub path: Vec<FieldStep>,
+    pub path: Vec<TypedPlaceStep>,
     pub op: Option<BinaryOp>,
     pub value: TypedExpr,
+}
+
+/// `for name in array { body }`. `binding_local` is declared ONCE per loop
+/// (immutable, element-typed) and re-stored each iteration — the loop
+/// variable borrows, it never owns (§9.9).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedFor {
+    pub binding_local: LocalId,
+    pub binding_name: String,
+    pub iterable: TypedExpr,
+    pub body: TypedBlock,
 }
 
 #[derive(Debug, Clone, PartialEq)]

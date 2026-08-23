@@ -7,7 +7,8 @@ use crate::expr;
 use crate::ty;
 use kai_ast::{AssignOp, Block as AstBlock, Stmt, StmtKind};
 use kai_tast::{
-    BinaryOp, FieldStep, KaiType, TypedAssign, TypedBlock, TypedExpr, TypedIf, TypedLet, TypedStmt,
+    BinaryOp, FieldStep, KaiType, TypedAssign, TypedBlock, TypedExpr, TypedFor, TypedIf,
+    TypedLet, TypedPlaceStep, TypedStmt,
 };
 
 /// Lower a whole function body. `return_type` drives return checks.
@@ -34,14 +35,7 @@ fn lower_stmt(checker: &mut Checker, stmt: &Stmt, return_type: &KaiType) -> Opti
         StmtKind::If(i) => if_stmt(checker, i, return_type),
         StmtKind::Block(b) => Some(TypedStmt::Block(lower_block(checker, b, return_type))),
         StmtKind::Expr(e) => Some(TypedStmt::Expr(expr::lower(checker, e, None))),
-        // for..in lowering lands with array typing (v0.0.5, next commit).
-        StmtKind::For(f) => {
-            checker.error(kai_diagnostics::Diagnostic::error(
-                "for..in iteration requires array support (not yet wired)",
-                f.binding.span,
-            ));
-            None
-        }
+        StmtKind::For(f) => for_stmt(checker, f),
     }
 }
 
@@ -145,19 +139,21 @@ fn assign(
         checker.error(error::assign_to_immutable(&root_name, root_span));
     }
 
-    // Walk the projection chain, resolving each segment against the layout
-    // table. Index projections land with array typing (v0.0.5, in progress).
+    // Walk the projection chain. Field hops resolve against the struct
+    // layout table; index hops require an array and an integer index. The
+    // index EXPRESSION is re-evaluated at every assignment site — it rides
+    // in the TAST step (§9.3).
     let mut cur_ty = info.ty.clone();
-    let mut steps: Vec<FieldStep> = Vec::new();
+    let mut steps: Vec<TypedPlaceStep> = Vec::new();
     for step in &place_steps {
         cur_ty = match step {
             kai_ast::PlaceStep::Field(seg) => match cur_ty {
                 KaiType::Struct(struct_id) => match checker.field_slot(struct_id, &seg.name) {
                     Some((index, slot)) => {
-                        steps.push(FieldStep {
+                        steps.push(TypedPlaceStep::Field(FieldStep {
                             struct_id,
                             field: index,
-                        });
+                        }));
                         slot.ty.clone()
                     }
                     None => {
@@ -172,12 +168,21 @@ fn assign(
                     return None;
                 }
             },
-            kai_ast::PlaceStep::Index { rbracket, .. } => {
-                checker.error(kai_diagnostics::Diagnostic::error(
-                    "indexed assignment requires array support (not yet wired)",
-                    *rbracket,
-                ));
-                return None;
+            kai_ast::PlaceStep::Index { index, rbracket } => {
+                let elem_ty = match cur_ty.clone() {
+                    KaiType::Array(elem) => *elem,
+                    other => {
+                        checker.error(error::index_on_non_array(&other, *rbracket));
+                        return None;
+                    }
+                };
+                let typed_index = expr::lower(checker, index, None);
+                if !typed_index.ty.is_integer() {
+                    let ty = typed_index.ty.clone();
+                    checker.error(error::index_not_integer(&ty, *rbracket));
+                }
+                steps.push(TypedPlaceStep::Index(Box::new(typed_index)));
+                elem_ty
             }
         };
     }
@@ -265,4 +270,44 @@ fn if_stmt(
         then_block,
         else_block,
     }))
+}
+
+// -- v0.0.5: for..in ----------------------------------------------------------
+
+/// `for name in array { body }`: the iterable must be `T[]`; `name` becomes
+/// an IMMUTABLE element-typed local inside the loop's own scope (§9.9). The
+/// borrow-not-own behavior is the ownership pass's concern; here we only
+/// fix shapes.
+fn for_stmt(checker: &mut Checker, f: &kai_ast::ForStmt) -> Option<TypedStmt> {
+    let iterable = expr::lower(checker, &f.iterable, None);
+
+    let elem_ty = match iterable.ty.clone() {
+        KaiType::Array(elem) => *elem,
+        other => {
+            checker.error(error::for_iterable_not_array(&other, f.iterable.span));
+            return None;
+        }
+    };
+
+    checker.locals.push_scope();
+    let declared_name = f.binding.name.clone();
+    let binding_span = f.binding.span;
+    match checker
+        .locals
+        .declare(&declared_name, elem_ty.clone(), false)
+    {
+        crate::scope::DeclareOutcome::Fresh(info) => {
+            let body = lower_block(checker, &f.body, &KaiType::Unit);
+            Some(TypedStmt::For(TypedFor {
+                binding_local: info.id,
+                binding_name: declared_name,
+                iterable,
+                body,
+            }))
+        }
+        crate::scope::DeclareOutcome::Duplicate(_) => {
+            checker.error(error::duplicate_local(&declared_name, binding_span));
+            None
+        }
+    }
 }

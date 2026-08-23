@@ -4,8 +4,20 @@
 use crate::context::Ctx;
 use crate::frame::Frame;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{BasicValueEnum, FloatValue, IntValue};
+use inkwell::types::{BasicType, BasicTypeEnum};
+use inkwell::values::{BasicValueEnum, FloatValue, IntValue, ValueKind};
 use kai_tast::{BinaryOp, KaiType, TypedExpr, TypedExprKind};
+
+/// Runtime intrinsics always return values; normalize the call result.
+fn call_value<'ctx>(
+    ctx: &Ctx<'ctx>,
+    site: inkwell::values::CallSiteValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    match site.try_as_basic_value() {
+        ValueKind::Basic(value) => value,
+        _ => ctx.context.i32_type().get_undef().into(),
+    }
+}
 
 pub(crate) fn emit<'ctx>(
     ctx: &Ctx<'ctx>,
@@ -37,7 +49,167 @@ pub(crate) fn emit<'ctx>(
         TypedExprKind::StructLit { struct_id, values } => {
             struct_lit(ctx, frame, *struct_id, values)
         }
+        TypedExprKind::StrLit { value } => string_lit(ctx, value),
+        TypedExprKind::ArrayLit { elements } => {
+            let elem = match &expr.ty {
+                KaiType::Array(elem) => elem.as_ref().clone(),
+                other => unreachable!("array literal typed {other:?}"),
+            };
+            array_lit(ctx, frame, elements, &elem)
+        }
+        TypedExprKind::Index { base, index } => index_read(ctx, frame, base, index, &ty),
     }
+}
+
+// -- v0.0.5: heap values ------------------------------------------------------
+
+/// String literal: private global byte blob + `kai_string_new` copy. Every
+/// occurrence gets its own allocation for now — interning is a future
+/// optimization and changes no observable behavior (§9.7 content equality).
+fn string_lit<'ctx>(ctx: &Ctx<'ctx>, value: &str) -> BasicValueEnum<'ctx> {
+    let bytes = value.as_bytes();
+    let blob_ty = ctx.context.i8_type().array_type(bytes.len() as u32);
+    let global = ctx
+        .module
+        .add_global(blob_ty, Some(inkwell::AddressSpace::default()), "kai.str");
+    global.set_initializer(&ctx.context.const_string(bytes, false));
+    global.set_constant(true);
+    global.set_unnamed_addr(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+
+    let zero = ctx.context.i32_type().const_zero();
+    let data_ptr = unsafe {
+        ctx.builder
+            .build_in_bounds_gep(
+                blob_ty,
+                global.as_pointer_value(),
+                &[zero, zero],
+                "str.data",
+            )
+            .expect("gep to string blob")
+    };
+    let new_fn = crate::runtime::string_new_fn(ctx);
+    let len = ctx.context.i64_type().const_int(bytes.len() as u64, false);
+    let site = ctx
+        .builder
+        .build_call(new_fn, &[data_ptr.into(), len.into()], "str")
+        .expect("kai_string_new call");
+    call_value(ctx, site)
+}
+
+/// Array literal: allocate the header, then evaluate + store each element.
+/// Elements are evaluated left-to-right AFTER allocation, so element exprs
+/// may themselves build arrays or strings freely.
+fn array_lit<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    elements: &[TypedExpr],
+    elem_ty: &KaiType,
+) -> BasicValueEnum<'ctx> {
+    let elem_llvm = crate::types::to_llvm(ctx, elem_ty);
+    let _header_ty = crate::runtime::array_header_ty(ctx, &elem_llvm.to_string());
+
+    let new_fn = crate::runtime::array_new_fn(ctx);
+    let len = ctx
+        .context
+        .i64_type()
+        .const_int(elements.len() as u64, false);
+    // LLVM resolves this sizeof constant expression against the target
+    // layout; no host-side layout math needed.
+    let elem_size_v = elem_llvm
+        .size_of()
+        .expect("array elements are sized types");
+    let header = call_value(
+        ctx,
+        ctx.builder
+            .build_call(new_fn, &[len.into(), elem_size_v.into()], "arr")
+            .expect("kai_array_new call"),
+    )
+    .into_pointer_value();
+
+    let elems_slot = elems_storage_of(ctx, header, elem_llvm);
+    for (idx, element) in elements.iter().enumerate() {
+        let value = emit(ctx, frame, element);
+        let i = ctx.context.i64_type().const_int(idx as u64, false);
+        let slot = unsafe {
+            ctx.builder
+                .build_in_bounds_gep(elem_llvm, elems_slot, &[i], "arr.slot")
+                .expect("element gep")
+        };
+        let _ = ctx.builder.build_store(slot, value);
+    }
+
+    header.into()
+}
+
+/// Indices are any integer width at the language level; GEPs want i64.
+pub(crate) fn widen_index<'ctx>(
+    ctx: &Ctx<'ctx>,
+    idx: inkwell::values::IntValue<'ctx>,
+) -> inkwell::values::IntValue<'ctx> {
+    if idx.get_type().get_bit_width() == 64 {
+        return idx;
+    }
+    // Signed: negative indices are UB territory anyway; the cast preserves
+    // whatever bit pattern arrives so downstream behavior stays consistent.
+    ctx.builder
+        .build_int_cast_sign_flag(idx, ctx.context.i64_type(), true, "idx64")
+        .expect("index cast")
+}
+
+/// Loads the `elems` storage pointer out of an OPAQUE header pointer,
+/// transiently casting to the concrete `%KaiArray.<elem>` shape. Heap values
+/// themselves always travel as `i8*` so storage stays layout-uniform.
+pub(crate) fn elems_storage_of<'ctx>(
+    ctx: &Ctx<'ctx>,
+    header: inkwell::values::PointerValue<'ctx>,
+    elem_ty: BasicTypeEnum<'ctx>,
+) -> inkwell::values::PointerValue<'ctx> {
+    let header_ty = crate::runtime::array_header_ty(ctx, &elem_ty.to_string());
+    let typed = ctx
+        .builder
+        .build_pointer_cast(header, ctx.context.ptr_type(Default::default()), "arr.hdr")
+        .expect("hdr cast");
+    let elems_ptr_ty = header_ty
+        .get_field_type_at_index(2)
+        .expect("header has elems field");
+    let field_slot = ctx
+        .builder
+        .build_struct_gep(header_ty, typed, 2, "arr.elems.p")
+        .expect("header gep");
+    ctx.builder
+        .build_load(elems_ptr_ty, field_slot, "arr.elems")
+        .expect("load elems")
+        .into_pointer_value()
+}
+
+/// `base[index]` read: load header, GEP into elems, load the element. A
+/// pure borrow of one slot — ownership never moves (§9.9).
+fn index_read<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &Frame<'ctx>,
+    base: &TypedExpr,
+    index: &TypedExpr,
+    result_ty: &KaiType,
+) -> BasicValueEnum<'ctx> {
+    let header = match emit(ctx, frame, base) {
+        BasicValueEnum::PointerValue(p) => p,
+        _ => unreachable!("array base is always a header pointer"),
+    };
+
+    // An index read yields the element, so the element's llvm type doubles
+    // as the header-shape key here.
+    let elem_ty = crate::types::to_llvm(ctx, result_ty);
+    let elems_slot = elems_storage_of(ctx, header, elem_ty);
+    let idx64 = widen_index(ctx, emit(ctx, frame, index).into_int_value());
+    let slot = unsafe {
+        ctx.builder
+            .build_in_bounds_gep(elem_ty, elems_slot, &[idx64], "elem.slot")
+            .expect("element gep")
+    };
+    ctx.builder
+        .build_load(elem_ty, slot, "elem")
+        .expect("element load")
 }
 
 /// Direct call to a declared function. Arguments pass by value (§9.3); unit
@@ -211,6 +383,36 @@ pub(crate) fn apply_binary<'ctx>(
 ) -> BasicValueEnum<'ctx> {
     match operand_ty {
         KaiType::Float64 => float_arith(ctx, op, lhs.into_float_value(), rhs.into_float_value()),
+        // Strings compare by CONTENT through the runtime; pointer identity
+        // is never observable (§9.7). Ne is the inverted eq.
+        KaiType::String if matches!(op, BinaryOp::Eq | BinaryOp::Ne) => {
+            let raw = call_value(
+                ctx,
+                ctx.builder
+                    .build_call(
+                        crate::runtime::string_eq_fn(ctx),
+                        &[
+                            lhs.into_pointer_value().into(),
+                            rhs.into_pointer_value().into(),
+                        ],
+                        "str.eq",
+                    )
+                    .expect("kai_string_eq call"),
+            )
+            .into_int_value();
+            let truth = ctx.builder.build_int_truncate_or_bit_cast(
+                raw,
+                ctx.context.bool_type(),
+                "str.eq.b",
+            ).expect("trunc to i1");
+            if op == BinaryOp::Ne {
+                let one = ctx.context.bool_type().const_int(1, false);
+                ctx.builder.build_xor(truth, one, "str.ne").expect("xor")
+            } else {
+                truth
+            }
+            .into()
+        }
         _ => int_arith(ctx, op, lhs.into_int_value(), rhs.into_int_value()).into(),
     }
 }

@@ -5,6 +5,7 @@ pub(crate) mod context;
 pub(crate) mod emit;
 pub(crate) mod frame;
 pub(crate) mod module;
+pub(crate) mod runtime;
 pub(crate) mod types;
 
 use context::Ctx;
@@ -35,6 +36,16 @@ pub fn run_jit(program: &TypedProgram) -> Result<i32, String> {
     let engine = module
         .create_jit_execution_engine(inkwell::OptimizationLevel::None)
         .map_err(|e| e.to_string())?;
+
+    // Bind the runtime intrinsics explicitly: the linker is free to strip
+    // `#[no_mangle]` extern fns nothing in Rust references, so dlsym alone
+    // cannot be trusted. Taking their addresses here also pins them into
+    // the final binary.
+    for (name, addr) in runtime::INTRINSICS {
+        if let Some(f) = module.get_function(name) {
+            engine.add_global_mapping(&f, addr as usize);
+        }
+    }
 
     unsafe {
         let main = engine
@@ -241,7 +252,8 @@ mod v0003_tests {
     use super::*;
     use kai_tast::{
         FieldStep, FunctionId, KaiType, LocalId, StructId, TypedBlock, TypedExpr, TypedExprKind,
-        TypedFnDecl, TypedParam, TypedProgram, TypedStmt, TypedStruct, TypedStructField,
+        TypedFnDecl, TypedParam, TypedPlaceStep, TypedProgram, TypedStmt, TypedStruct,
+        TypedStructField,
     };
 
     // Reuse the parent test module's declaration helper.
@@ -325,10 +337,10 @@ mod v0003_tests {
                 stmts: vec![
                     TypedStmt::Assign(kai_tast::TypedAssign {
                         root: LocalId(0),
-                        path: vec![FieldStep {
+                        path: vec![TypedPlaceStep::Field(FieldStep {
                             struct_id: StructId(0),
                             field: 0,
-                        }],
+                        })],
                         op: Some(kai_tast::BinaryOp::Add),
                         value: TypedExpr::new(TypedExprKind::IntLit(5), KaiType::Int32),
                     }),
