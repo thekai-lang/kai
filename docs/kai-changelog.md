@@ -4,6 +4,20 @@ This file tracks **compiler implementation** releases (`vX.Y.Z`, what `kai build
 
 ---
 
+## v0.0.4 — Module system
+
+The first multi-file release: programs are module trees rooted at an entry file.
+
+- **`use` imports** — `use a.b;` loads `<root>/a/b.kai`, where `<root>` is the ENTRY FILE's directory (never the process CWD — deterministic builds); the alias is the last path segment (`math.add(…)`). Modules load once each, so diamond imports are fine.
+- **Circular import detection (§7 exit criterion)** — revisiting a module that is still on the DFS stack is a compile error reporting the whole chain (`cyclic import: mod.a -> mod.b -> mod.a`), never a stack overflow; the diagnostic points at the offending `use` site in the importing file.
+- **Per-module namespaces (§3.6)** — unqualified names resolve ONLY inside the declaring module: imports never inject into any scope. Qualified references go through aliases to PUBLIC declarations only — `public fn` / `public type` qualifiers gate access, and violations report the qualified path (`function `core.secret` is not public`). Types and functions stay separate namespaces; import aliases form a third.
+- **Qualified struct literals** — `alias.Point { … }` builds public structs from other modules; field rules unchanged.
+- **Two-branch callee rule** — a call like `x.f(…)` where `x` is not an import alias is treated as value semantics first (field access lowers normally), then rejected as a non-direct call with a targeted diagnostic instead of miscompiling as a module reference.
+- **Entry contract scoped** — `main` must live in the entry module; an imported public `main` does not make a program runnable.
+- **Symbol qualification** — module-scoped declarations get `module.name` LLVM symbols (and `%module.Name` struct types), so same-named declarations in different modules coexist in one binary; entry-module names stay bare for JIT.
+- **Multi-file diagnostics** — every diagnostic carries its file; the reporter renders each against its OWN source (caret lines always match the named file), including errors raised inside imported modules during typecheck.
+- **Testing** — loader unit tests (pre-order loading, diamond reuse, cycle chains, missing modules, per-file attribution), resolver/typecheck unit tests for visibility and namespace isolation, codegen symbol-collision tests, and golden-IR fixture `v0004`: a three-file project (public struct through alias, two same-named private helpers) whose JIT run returns 31.
+
 ## v0.0.3 — Structs, parameters, calls, field access
 
 First aggregate value type, and with it real function interfaces.
