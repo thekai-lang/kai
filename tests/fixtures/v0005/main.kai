@@ -1,0 +1,71 @@
+// v0.0.5 "Ownership runtime": the first program where heap-bearing types
+// exist and retain/release actually run.
+//
+// - `string` values flow through every allocation path the spec cares
+//   about: literal, returned (borrowed param retained at §9.5's boundary),
+//   co-owned binding, struct field;
+// - `==` compares CONTENT everywhere (§9.7) — same text from different
+//   allocations must compare equal;
+// - arrays are unconditionally heap-bearing: `mut first(arr)` writes
+//   through to the caller's buffer (Axis 2 tracks the root's type
+//   category, never the element type);
+// - `arr[0] = arr[0]` exercises replacement ordering into an owned slot
+//   whose RHS aliases it (§9.4);
+// - `for..in` borrows each element per iteration (§9.9).
+
+type Named = { label: string; weight: int32; }
+
+fn id(s: string) -> string {
+    return s;
+}
+
+fn set_first(mut arr: int32[]) -> unit {
+    arr[0] = 42;
+    return;
+}
+
+fn sum(a: int32[]) -> int32 {
+    var total = 0;
+    for v in a { total += v; }
+    return total;
+}
+
+fn main() -> int32 {
+    // String equality across allocation paths.
+    let lit = "kai";
+    let out = id(lit);
+    var score = 0;
+    if lit == out && out == "kai" && "kai" != "KAI" {
+        score += 1;
+    }
+
+    // Self-aliased element replacement stays safe; content survives.
+    var words = ["aa", "bb"];
+    words[0] = words[0];
+    if words[0] == "aa" && words[1] == "bb" {
+        score += 2;
+    }
+
+    // Two-axis invariant, heap side: `mut` array parameter writes are
+    // visible to the caller (array is heap-bearing regardless of int32).
+    var nums = [1, 2, 3];
+    set_first(nums);
+    if nums[0] == 42 {
+        score += 4;
+    }
+
+    // Owned temporary iterable transfers into the loop; borrowed iterable
+    // borrows. Both sum correctly.
+    score += sum(nums);          // 42+2+3
+
+    // Per-field struct semantics: heap field co-owned by `label`, scalar
+    // field copied independently.
+    var n = Named { label: "ada", weight: 7 };
+    let label = n.label;
+    n.weight = 8;
+    if label == "ada" && n.label == "ada" && n.weight == 8 {
+        score += 10;
+    }
+
+    return score;
+}

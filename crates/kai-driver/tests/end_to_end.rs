@@ -624,3 +624,32 @@ fn main() -> int32 {
 "#;
     assert_eq!(pipeline::jit(src).unwrap(), 7);
 }
+
+// -- v0.0.5 fixture: ownership runtime -----------------------------------------
+
+fn v0005_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/v0005/main.kai")
+}
+
+#[test]
+fn v005_file_pipeline_matches_golden_ir() {
+    let ir = pipeline::compile_file(&v0005_entry()).expect("compilation should succeed");
+
+    let golden = v0005_entry().with_file_name("main.expected.ll");
+    if !golden.exists() {
+        std::fs::write(&golden, &ir).unwrap();
+        panic!("golden file missing — wrote it, re-run the test to compare");
+    }
+
+    let expected = std::fs::read_to_string(&golden).unwrap();
+    assert_eq!(ir, expected, "generated IR diverged from golden file");
+}
+
+#[test]
+fn v005_jit_module_tree_returns_expected_value() {
+    // 1 (string equality across paths) + 2 (self-alias replacement)
+    // + 4 (mut array param visible to caller) + 47 (sum via for..in)
+    // + 10 (per-field struct semantics) — see main.kai.
+    assert_eq!(pipeline::jit_file(&v0005_entry()).unwrap(), 64);
+}
