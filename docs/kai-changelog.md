@@ -4,6 +4,22 @@ This file tracks **compiler implementation** releases (`vX.Y.Z`, what `kai build
 
 ---
 
+## v0.0.6 — Optionals, Results, closures, and the discard statement
+
+The first version where failure becomes a *type*: `Optional<T>` and `Result<T, E>` land as tagged unions with ownership applied only to the active payload, closures arrive as unconditionally heap-bearing values with retained captures, and silent discards of tagged unions become diagnostics behind one explicit escape hatch. Scope locked by whitepaper **v0.13** (§9.9a, §9.9b, §9.10); grammar surface was already drafted in the EBNF and completed here.
+
+- **`Optional<T>` / `T?`, `Result<T, E>`** — one semantic form per type; `T?` desugars straight to `Optional<T>` at parse time (no second nullable concept), and `Result` deliberately takes no sugar. Generic parameters exist ONLY on these two builtins — unknown generics are a dedicated diagnostic, as is wrong arity.
+- **Tagged-union ownership (§9.9a)** — inline `{ tag, payload }` aggregates; retain/release applies to the ACTIVE payload only, keyed per instantiated type at compile time: `Optional<int32>` emits zero refcount calls (proven at IR level by a test), while `Optional<string>` releases through a runtime tag check. Result layouts are non-overlapping (`{ tag, ok, err }`) for correctness first.
+- **`None` joins the grammar** — the empty constructor the whitepaper always implied but never wrote down. Context-typed exactly like the empty array literal: bare `let x = None;` is an error.
+- **`.unwrap_or(default)` on both tagged unions, no dedicated production** — it composes from FieldAccess+Call like any method-shaped call; builtin status resolves in typecheck when the receiver is tagged and the base isn't an import alias. `catch |err| { stmts.. tail }` stays Result-only, with a narrow CatchBlock shape (statements plus ONE mandatory trailing value) that never generalizes into block-as-expression.
+- **Discard rule, symmetric** — discarding an `Optional` or `Result` as a bare statement is a diagnostic; `_ = expr;` is the sole escape hatch, with `_` carved out of `Ident` entirely (`let _` dies at parse). The discarded expression evaluates under ordinary ownership rules.
+- **Closures (§9.10)** — values are `{ code, env }` fat pointers, unconditionally heap-bearing regardless of capture. Environments are heap headers whose generated destructors release captured values exactly once; captures are retained at construction, compile-time keyed per capture type. First-class calls (`f(x)` on a closure-typed local or field) work with env as the hidden first parameter. Closure-bearing types poison transitively through fields, array ELEMENTS, and tagged payloads — capturing one is rejected up front, the structural precondition for an RC cycle (deliberately conservative, reusing the resolver's TypeDecl graph).
+- **Ownership pass generalizes** — `walk_expr` gains scope context for catch frames; catch-block locals release after the tail consumes them; `Some` payloads are owning slots; coalesce results follow the active branch's ownership (consumer retains-as-borrow, creator-reference released after branch join).
+- **Known gap recorded**: pure Kai source cannot construct a `Result` yet — no `Ok`/`Err` literals exist and stdlib arrives later; Result-flow coverage rides shared typing paths until then. The whitepaper's `(unit) -> unit` closure spellings were normalized to canonical `() -> unit`.
+- **Deferred to the next cycle**: real materialization nodes for `&&`/`||` borrow-position temporaries (the B1 exemption from v0.0.5.1 remains), and string interpolation.
+
+295 tests green across 22 suites; clippy clean.
+
 ## v0.0.5.1 — Runtime panics (§10) and ownership leak fixes
 
 A hardening patch over the ownership runtime: the §10 error model becomes real, and the first round of heap-leak audits lands fixes. No new language surface. Release identity is **v0.0.5.1** (git tag + this section); the Cargo workspace version intentionally stays `0.0.5` — semver has no fourth component, and this patch adds no feature surface worth a minor bump.
