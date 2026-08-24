@@ -21,7 +21,7 @@ fn call_value<'ctx>(
 
 pub(crate) fn emit<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     expr: &TypedExpr,
 ) -> BasicValueEnum<'ctx> {
     let ty = expr.ty.clone();
@@ -42,14 +42,33 @@ pub(crate) fn emit<'ctx>(
         // Poisoned recovery node; only reachable in programs that failed
         // upstream. `undef` keeps emission total without inventing behavior.
         TypedExprKind::Invalid => undef_of(ctx, &ty),
-        // v0.0.6 nodes reach here only after the P5 codegen commit; until
-        // then typecheck still rejects every program containing them, so
-        // `undef` is unreachable-in-practice and keeps the match total.
-        TypedExprKind::SomeLit(_)
-        | TypedExprKind::NoneLit
-        | TypedExprKind::Coalesce { .. }
-        | TypedExprKind::UnwrapOr { .. }
-        | TypedExprKind::Catch { .. }
+        // -- v0.0.6 (§9.9a/§9.10) ----------------------------------------
+        TypedExprKind::NoneLit => tagged_none_const(ctx, &ty),
+        TypedExprKind::SomeLit(value) => {
+            let payload = emit(ctx, frame, value);
+            let agg = crate::types::to_llvm(ctx, &ty).into_struct_type().get_undef();
+            let with_tag = ctx
+                .builder
+                .build_insert_value(agg, i64_const(ctx, 0), 0, "some.tag")
+                .expect("insert tag");
+            ctx.builder
+                .build_insert_value(with_tag, payload, 1, "some.payload")
+                .expect("insert payload")
+                .into_struct_value()
+                .into()
+        }
+        // `lhs ?? rhs` — the rhs evaluates ONLY when lhs is inactive (§9.9a
+        // laziness). The result flows through an entry slot so both branches
+        // join without a phi; ownership follows the active branch (the pass
+        // treats the result as borrowed — see the ownership commit).
+        TypedExprKind::Coalesce { lhs, rhs } => {
+            lazy_select(ctx, frame, lhs, rhs, &ty)
+        }
+        TypedExprKind::UnwrapOr { receiver, default } => {
+            lazy_select(ctx, frame, receiver, default, &ty)
+        }
+        // Remaining v0.0.6 lowerings land with the closure/catch commit.
+        TypedExprKind::Catch { .. }
         | TypedExprKind::CallIndirect { .. }
         | TypedExprKind::ClosureLit(_) => undef_of(ctx, &ty),
         TypedExprKind::Call { func, args } => call(ctx, frame, *func, args),
@@ -149,7 +168,7 @@ fn string_lit<'ctx>(ctx: &Ctx<'ctx>, value: &str) -> BasicValueEnum<'ctx> {
 /// may themselves build arrays or strings freely.
 fn array_lit<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     elements: &[TypedExpr],
     elem_ty: &KaiType,
 ) -> BasicValueEnum<'ctx> {
@@ -276,7 +295,7 @@ pub(crate) fn header_len<'ctx>(
 /// block; emission continues in a fresh continuation block.
 pub(crate) fn bounds_check<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     span: kai_diagnostics::Span,
     header: inkwell::values::PointerValue<'ctx>,
     elem_ty: BasicTypeEnum<'ctx>,
@@ -317,7 +336,7 @@ pub(crate) fn bounds_check<'ctx>(
 /// weight.
 pub(crate) fn elem_slot<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     span: kai_diagnostics::Span,
     header: inkwell::values::PointerValue<'ctx>,
     elem_ty: BasicTypeEnum<'ctx>,
@@ -338,7 +357,7 @@ pub(crate) fn elem_slot<'ctx>(
 /// moves (§9.9).
 fn index_read<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     base: &TypedExpr,
     index: &TypedExpr,
     result_ty: &KaiType,
@@ -361,7 +380,7 @@ fn index_read<'ctx>(
 /// always discard.
 fn call<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     func: kai_tast::FunctionId,
     args: &[TypedExpr],
 ) -> BasicValueEnum<'ctx> {
@@ -386,7 +405,7 @@ fn call<'ctx>(
 /// Reads a field: GEP the base place by this access's index, then load.
 fn field_read<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     base: &TypedExpr,
     struct_id: kai_tast::StructId,
     field: u16,
@@ -408,7 +427,7 @@ fn field_read<'ctx>(
 /// exactly the places; anything else has no address.
 pub(crate) fn place_ptr<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     expr: &TypedExpr,
 ) -> Option<inkwell::values::PointerValue<'ctx>> {
     match &expr.kind {
@@ -450,7 +469,7 @@ pub(crate) fn place_ptr<'ctx>(
 /// (declaration order — the type checker already reordered the values).
 fn struct_lit<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     struct_id: kai_tast::StructId,
     values: &[TypedExpr],
 ) -> BasicValueEnum<'ctx> {
@@ -489,7 +508,7 @@ fn int_const<'ctx>(ctx: &Ctx<'ctx>, value: i64, ty: &KaiType) -> IntValue<'ctx> 
 
 fn load_local<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     local: kai_tast::LocalId,
     ty: &KaiType,
 ) -> BasicValueEnum<'ctx> {
@@ -502,7 +521,7 @@ fn load_local<'ctx>(
 
 fn neg<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     operand: &TypedExpr,
     result_ty: &KaiType,
     span: kai_diagnostics::Span,
@@ -531,7 +550,7 @@ fn neg<'ctx>(
     }
 }
 
-fn not<'ctx>(ctx: &Ctx<'ctx>, frame: &Frame<'ctx>, operand: &TypedExpr) -> BasicValueEnum<'ctx> {
+fn not<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, operand: &TypedExpr) -> BasicValueEnum<'ctx> {
     let value = emit(ctx, frame, operand).into_int_value();
     let truth = ctx.context.bool_type().const_int(1, false);
     ctx.builder
@@ -544,7 +563,7 @@ fn not<'ctx>(ctx: &Ctx<'ctx>, frame: &Frame<'ctx>, operand: &TypedExpr) -> Basic
 /// traps on overflow / division faults (§10.2); floats keep IEEE semantics.
 pub(crate) fn apply_binary<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     op: BinaryOp,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
@@ -611,7 +630,7 @@ fn overflow_intrinsic<'ctx>(
 /// overflow flag (§10.2), and yields the arithmetic result.
 fn checked_arith<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     span: kai_diagnostics::Span,
     intrinsic: &str,
     lhs: IntValue<'ctx>,
@@ -648,7 +667,7 @@ fn checked_arith<'ctx>(
 /// integer overflow.
 fn div_guard<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     span: kai_diagnostics::Span,
     lhs: IntValue<'ctx>,
     rhs: IntValue<'ctx>,
@@ -688,7 +707,7 @@ fn div_guard<'ctx>(
 
 fn int_arith<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     op: BinaryOp,
     lhs: IntValue<'ctx>,
     rhs: IntValue<'ctx>,
@@ -800,7 +819,7 @@ fn float_arith<'ctx>(
 
 fn binary<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     op: BinaryOp,
     lhs: &TypedExpr,
     rhs: &TypedExpr,
@@ -824,7 +843,7 @@ fn binary<'ctx>(
 /// run when short-circuited.
 fn short_circuit<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &Frame<'ctx>,
+    frame: &mut Frame<'ctx>,
     lhs_expr: &TypedExpr,
     rhs_expr: &TypedExpr,
     is_or: bool,
@@ -865,4 +884,113 @@ fn short_circuit<'ctx>(
         .expect("phi node");
     phi.add_incoming(&[(&lhs_val, current), (&rhs_val, rhs_end)]);
     phi.as_basic_value()
+}
+
+// -- v0.0.6 helpers (§9.9a) -----------------------------------------------------
+
+fn i64_const<'ctx>(ctx: &Ctx<'ctx>, v: u64) -> inkwell::values::IntValue<'ctx> {
+    ctx.context.i64_type().const_int(v, false)
+}
+
+/// `{ tag = 1 }` with a zeroed payload — the None/absent shape. Payload
+/// fields are zeroed per LLVM kind; nested aggregates stay undef (they are
+/// never read while the tag says absent).
+fn tagged_none_const<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicValueEnum<'ctx> {
+    let llvm = crate::types::to_llvm(ctx, ty).into_struct_type();
+    let mut fields: Vec<BasicValueEnum<'ctx>> = vec![i64_const(ctx, 1).into()];
+    for idx in 1..llvm.count_fields() {
+        fields.push(zero_of(ctx, llvm.get_field_type_at_index(idx).expect("field")));
+    }
+    llvm.const_named_struct(&fields).into()
+}
+
+fn zero_of<'ctx>(ctx: &Ctx<'ctx>, ty: inkwell::types::BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    match ty {
+        inkwell::types::BasicTypeEnum::PointerType(_) => {
+            ctx.context.ptr_type(Default::default()).const_zero().into()
+        }
+        inkwell::types::BasicTypeEnum::IntType(t) => t.const_zero().into(),
+        inkwell::types::BasicTypeEnum::FloatType(t) => t.const_zero().into(),
+        other => other.into_struct_type().get_undef().into(),
+    }
+}
+
+/// Shared `??` / `.unwrap_or` shape: both are "active branch's payload or
+/// the fallback". Tag 0 = Some/Ok in either layout; payload sits at member 1.
+fn lazy_select<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &mut Frame<'ctx>,
+    receiver: &TypedExpr,
+    fallback: &TypedExpr,
+    result_ty: &KaiType,
+) -> BasicValueEnum<'ctx> {
+    let recv = emit(ctx, frame, receiver).into_struct_value();
+    let tag = ctx
+        .builder
+        .build_extract_value(recv, 0, "tag")
+        .expect("tag")
+        .into_int_value();
+    let active = ctx
+        .builder
+        .build_int_compare(inkwell::IntPredicate::EQ, tag, i64_const(ctx, 0), "active")
+        .expect("tag cmp");
+
+    let result_llvm = crate::types::to_llvm(ctx, result_ty);
+    let slot = crate::emit::alloca_in_entry(
+        ctx,
+        crate::emit::current_function(ctx),
+        result_llvm,
+        "co.r",
+    );
+    let some_bb = ctx
+        .context
+        .append_basic_block(crate::emit::current_function(ctx), "co.some");
+    let else_bb = ctx
+        .context
+        .append_basic_block(crate::emit::current_function(ctx), "co.fallback");
+    let join_bb = ctx
+        .context
+        .append_basic_block(crate::emit::current_function(ctx), "co.join");
+    let _ = ctx
+        .builder
+        .build_conditional_branch(active, some_bb, else_bb);
+
+    // Active: forward the payload bits untouched — the consumer's retain
+    // (borrow semantics) balances against its later release.
+    ctx.builder.position_at_end(some_bb);
+    let payload = ctx
+        .builder
+        .build_extract_value(recv, 1, "payload")
+        .expect("payload");
+    let _ = ctx.builder.build_store(slot, payload);
+    let _ = ctx.builder.build_unconditional_branch(join_bb);
+
+    // Fallback: evaluate lazily; when it produced an OWNED header, drop the
+    // creator's reference after copying into the slot (§9.9a scheme).
+    ctx.builder.position_at_end(else_bb);
+    let d = emit(ctx, frame, fallback);
+    let _ = ctx.builder.build_store(slot, d);
+    if crate::emit::ownership::heap_bearing(ctx, result_ty) {
+        match result_ty {
+            KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                crate::emit::ownership::release_header_value(ctx, d);
+            }
+            other => {
+                let tmp = crate::emit::alloca_in_entry(
+                    ctx,
+                    crate::emit::current_function(ctx),
+                    result_llvm,
+                    "co.tmp",
+                );
+                let _ = ctx.builder.build_store(tmp, d);
+                crate::emit::ownership::emit_release_slot(ctx, other, tmp);
+            }
+        }
+    }
+    let _ = ctx.builder.build_unconditional_branch(join_bb);
+
+    ctx.builder.position_at_end(join_bb);
+    ctx.builder
+        .build_load(result_llvm, slot, "co.v")
+        .expect("load coalesced")
 }

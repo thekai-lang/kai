@@ -133,7 +133,7 @@ fn for_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, f: &TypedFor) {
     }
 }
 
-fn ret<'ctx>(ctx: &Ctx<'ctx>, frame: &Frame<'ctx>, value: Option<&kai_tast::TypedExpr>) {
+fn ret<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, value: Option<&kai_tast::TypedExpr>) {
     match value {
         Some(e) => {
             let value = expr::emit(ctx, frame, e);
