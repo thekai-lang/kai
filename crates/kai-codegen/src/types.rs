@@ -32,12 +32,9 @@ pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicTypeEnum<'ctx
             ];
             ctx.context.struct_type(&fields, false).into()
         }
-        // Closures are fat pointers `{ fn_ptr, env_ptr }` (§9.10); the env
-        // header carries the refcount, so the value itself is two words.
-        KaiType::Closure { .. } => {
-            let ptr = ctx.context.ptr_type(inkwell::AddressSpace::default());
-            ctx.context.struct_type(&[ptr.into(), ptr.into()], false).into()
-        }
+        // Closures are fat pointers `{ fn_ptr, env_ptr }` (§9.10) — always
+        // the shared NAMED shape so signatures and literals unify.
+        KaiType::Closure { .. } => closure_fat_ty(ctx).into(),
     }
 }
 

@@ -342,9 +342,11 @@ pub(crate) fn emit<'ctx>(
                 KaiType::Closure { ret, .. } => (**ret).clone(),
                 other => unreachable!("closure type {other:?}"),
             };
+            // Convention: env is the HIDDEN FIRST parameter, matching the
+            // indirect-call site which always leads with it.
             let mut sig: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> =
-                param_llvm.iter().map(|t| (*t).into()).collect();
-            sig.push(ctx.context.ptr_type(Default::default()).into());
+                vec![ctx.context.ptr_type(Default::default()).into()];
+            sig.extend(param_llvm.iter().map(|t| inkwell::types::BasicMetadataTypeEnum::from(*t)));
             let llvm = if matches!(ret_ty, KaiType::Unit) {
                 ctx.context.void_type().fn_type(&sig, false)
             } else {
@@ -357,7 +359,7 @@ pub(crate) fn emit<'ctx>(
             ctx.builder.position_at_end(entry);
             let mut inner = Frame::new(frame.module.clone());
             for (idx, pid) in clo.param_ids.iter().enumerate() {
-                let arg = body_fn.get_nth_param(idx as u32).expect("param");
+                let arg = body_fn.get_nth_param((idx + 1) as u32).expect("param");
                 let pslot = crate::emit::alloca_in_entry(
                     ctx,
                     body_fn,
@@ -367,11 +369,30 @@ pub(crate) fn emit<'ctx>(
                 let _ = ctx.builder.build_store(pslot, arg);
                 inner.bind(*pid, pslot);
             }
-            // Captures read straight out of the environment payload.
+            // Captures read straight out of THIS function's environment
+            // parameter — never the creator's payload instruction.
+            let env_arg = body_fn
+                .get_nth_param(0)
+                .expect("env param")
+                .into_pointer_value();
+            let body_header_ty = crate::runtime::array_header_ty(ctx, &caps_ty.to_string());
+            let body_payload_ptr = ctx
+                .builder
+                .build_struct_gep(body_header_ty, env_arg, 3, "env.payload.p")
+                .expect("payload gep");
+            let body_payload = ctx
+                .builder
+                .build_load(
+                    ctx.context.ptr_type(Default::default()),
+                    body_payload_ptr,
+                    "env.payload",
+                )
+                .expect("payload load")
+                .into_pointer_value();
             for (idx, cap) in clo.captures.iter().enumerate() {
                 let view = ctx
                     .builder
-                    .build_struct_gep(caps_ty, payload, idx as u32, "cap.view")
+                    .build_struct_gep(caps_ty, body_payload, idx as u32, "cap.view")
                     .expect("capture view");
                 inner.bind(cap.local, view);
             }
@@ -439,13 +460,25 @@ pub(crate) fn emit<'ctx>(
             KaiType::Struct(_)
             | KaiType::Optional(_)
             | KaiType::Result { .. } => {
-                let place = place_ptr(ctx, frame, inner)
-                    .expect("retained aggregate source is always a place");
+                // Prefer the source's storage; computed aggregates (e.g. a
+                // `??` result) retain through an entry temporary instead.
+                let value = emit(ctx, frame, inner);
+                let agg_ty = to_llvm(ctx, &expr.ty);
+                let tmp = crate::emit::alloca_in_entry(
+                    ctx,
+                    crate::emit::current_function(ctx),
+                    agg_ty,
+                    "retain.tmp",
+                );
+                let _ = ctx.builder.build_store(tmp, value);
                 if matches!(expr.ty, KaiType::Struct(_)) {
-                    crate::emit::ownership::retain_struct_copy(ctx, &expr.ty, place)
+                    crate::emit::ownership::retain_struct_copy(ctx, &expr.ty, tmp);
                 } else {
-                    crate::emit::ownership::retain_tagged_copy(ctx, &expr.ty, place)
+                    crate::emit::ownership::retain_tagged_copy(ctx, &expr.ty, tmp);
                 }
+                ctx.builder
+                    .build_load(agg_ty, tmp, "retained.v")
+                    .expect("load retained")
             }
             other => unreachable!("retain of non-heap type {other:?}"),
         },

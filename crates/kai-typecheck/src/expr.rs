@@ -323,6 +323,16 @@ fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
         ExprKind::Ident(ident) => match checker.local_fns().get(&ident.name) {
             Some(&idx) => FunctionId(idx as u32),
             None => {
+                // Not a declared function — maybe a closure-VALUED local
+                // (v0.0.6 first-class calls).
+                if checker
+                    .locals
+                    .lookup(&ident.name)
+                    .is_some_and(|info| matches!(info.ty, KaiType::Closure { .. }))
+                    && let Some(t) = try_closure_call(checker, call, span)
+                {
+                    return t;
+                }
                 checker.error(error::unknown_function(&ident.name, ident.span));
                 return poisoned();
             }

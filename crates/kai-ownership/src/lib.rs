@@ -255,6 +255,10 @@ fn is_owned_temp(expr: &TypedExpr) -> bool {
 /// inner span. Shared by every owning-slot site (returns, `let`, plain
 /// assignment, literal fields/elements).
 fn wrap_retain_if_borrowed(heap: &HeapBearing, e: &mut TypedExpr) {
+    // `None` carries no live payload — there is nothing to co-own.
+    if matches!(e.kind, TypedExprKind::NoneLit) {
+        return;
+    }
     if heap.is(&e.ty) && !is_owned_temp(e) {
         let ty = e.ty.clone();
         let span = e.span;
