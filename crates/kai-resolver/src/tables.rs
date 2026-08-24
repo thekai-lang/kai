@@ -46,6 +46,13 @@ pub struct Resolution {
     pub fn_file: Vec<String>,
     /// Module index -> dotted name ("" is the entry module).
     pub module_names: Vec<String>,
+    /// §9.10 poisoning (v0.0.6): per global type index, true when the
+    /// struct transitively contains a closure type through a heap-bearing
+    /// member path (field, array ELEMENT, Optional/Result payload). A
+    /// closure literal may not capture a value of such a type — that is the
+    /// structural precondition for an RC cycle. Computed after cycle
+    /// detection; legacy single() callers carry an empty vector.
+    pub closure_bearing: Vec<bool>,
 }
 
 impl Default for Resolution {
@@ -68,10 +75,11 @@ impl Resolution {
             fn_is_public: Vec::new(),
             type_module: Vec::new(),
             fn_module: Vec::new(),
-            type_file: Vec::new(),
-            fn_file: Vec::new(),
-            module_names: vec![String::new()],
-        }
+        type_file: Vec::new(),
+        fn_file: Vec::new(),
+        module_names: vec![String::new()],
+        closure_bearing: Vec::new(),
+    }
     }
 
     /// File that owns global fn `id`.
@@ -228,8 +236,7 @@ fn check_duplicate_fields(
 
 /// DFS over the struct-dependency graph (edges: a field's named type that is
 /// itself a declared struct IN THE SAME MODULE — unqualified type references
-/// cannot cross module boundaries, so cycles cannot either). Cycles are
-/// impossible to lay out, so they are a compile error reporting the path:
+/// cannot cross module boundaries, so cycles cannot either). Cycles are/// impossible to lay out, so they are a compile error reporting the path:
 /// `cyclic type: A -> B -> A`.
 ///
 /// Unknown names are not edges — "unknown type" is reported later, per use.
@@ -349,4 +356,101 @@ pub(crate) fn detect_cycles(
             }
         }
     }
+}
+
+/// §9.10 poisoning (v0.0.6): computes `Resolution::closure_bearing`.
+///
+/// A struct is closure-bearing when any field transitively contains a
+/// closure type through a heap-bearing member path — a struct field, an
+/// ARRAY ELEMENT, or an Optional/Result payload. Note the deliberate
+/// contrast with the layout-cycle DFS above: arrays are pointers there
+/// (they never close a *layout* cycle) but propagate here, because an
+/// array of closures shares its buffer mutably — exactly the container a
+/// `n.action = fn() { n.arr[i] }`-shaped cycle needs. Closure types in fn
+/// signatures poison nothing: functions are not capturable containers.
+///
+/// Runs after `detect_cycles` in the pipeline; cyclic programs never reach
+/// the checker, so the Busy guard below is pure defense.
+pub(crate) fn compute_closure_bearing(
+    modules: &[ModuleInput],
+    resolution: &Resolution,
+) -> Vec<bool> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        Todo,
+        Busy,
+        Done,
+    }
+
+    let total = resolution.type_module.len();
+    // Same concatenation order build_multi used to assign global indices.
+    let decls: Vec<&kai_ast::TypeDecl> = modules
+        .iter()
+        .flat_map(|m| m.program.types.iter())
+        .collect();
+
+    fn ty_poisons(
+        ty: &Ty,
+        module_idx: usize,
+        resolution: &Resolution,
+        decls: &[&kai_ast::TypeDecl],
+        state: &mut [State],
+        out: &mut [bool],
+    ) -> bool {
+        match ty {
+            Ty::Closure { .. } => true,
+            Ty::Array(elem) => ty_poisons(elem, module_idx, resolution, decls, state, out),
+            Ty::Optional(inner) => ty_poisons(inner, module_idx, resolution, decls, state, out),
+            Ty::Result { ok, err } => {
+                ty_poisons(ok, module_idx, resolution, decls, state, out)
+                    || ty_poisons(err, module_idx, resolution, decls, state, out)
+            }
+            // Field type names resolve through the OWNING module's table —
+            // unqualified references never cross modules (§3.6).
+            Ty::Named(ident) => match resolution.module_types[module_idx].get(&ident.name) {
+                Some(&global) => visit(global, resolution, decls, state, out),
+                None => false, // unknown type reported later, per use
+            },
+        }
+    }
+
+    fn visit(
+        global: usize,
+        resolution: &Resolution,
+        decls: &[&kai_ast::TypeDecl],
+        state: &mut [State],
+        out: &mut [bool],
+    ) -> bool {
+        match state[global] {
+            State::Done => return out[global],
+            State::Busy => return false, // cycle: rejected by detect_cycles
+            State::Todo => {}
+        }
+        state[global] = State::Busy;
+        let module_idx = resolution.type_module[global];
+        let mut bearing = false;
+        for field in &decls[global].fields {
+            if ty_poisons(
+                &field.ty,
+                module_idx,
+                resolution,
+                decls,
+                state,
+                out,
+            ) {
+                bearing = true;
+                break;
+            }
+        }
+        out[global] = bearing;
+        state[global] = State::Done;
+        bearing
+    }
+
+    let mut state = vec![State::Todo; total];
+    let mut out = vec![false; total];
+    for global in 0..total {
+        visit(global, resolution, &decls, &mut state, &mut out);
+    }
+    out
 }

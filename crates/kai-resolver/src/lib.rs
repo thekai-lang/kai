@@ -37,7 +37,7 @@ pub fn analyze(program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
 pub fn analyze_modules(modules: &[ModuleInput]) -> Result<Resolution, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
-    let resolution = tables::build_multi(modules, &mut diagnostics);
+    let mut resolution = tables::build_multi(modules, &mut diagnostics);
 
     // Cycle detection and entry validation run over the merged view. The
     // entry contract consults Resolution.fn_module, so imported `main`s
@@ -46,6 +46,10 @@ pub fn analyze_modules(modules: &[ModuleInput]) -> Result<Resolution, Vec<Diagno
         tables::detect_cycles(entry.program, &resolution, &mut diagnostics);
         check_entry(entry.program, &resolution, &mut diagnostics);
     }
+
+    // §9.10 closure-bearing poisoning: after cycle detection (cyclic
+    // programs abort before the checker ever consults this table).
+    resolution.closure_bearing = tables::compute_closure_bearing(modules, &resolution);
 
     if diagnostics.is_empty() {
         Ok(resolution)
@@ -209,5 +213,79 @@ mod tests {
         )
         .unwrap_err();
         assert!(diags.iter().any(|d| d.message.starts_with("cyclic type")));
+    }
+}
+
+// -- v0.0.6: §9.10 closure-bearing poisoning -----------------------------------
+
+#[cfg(test)]
+mod v0006_tests {
+    use super::*;
+
+    fn parse_src(src: &str) -> kai_ast::Program {
+        let lexed = kai_lexer::lex(src);
+        kai_parser::parse(&lexed.tokens).expect("parse failed")
+    }
+
+    fn bearing_of(src: &str) -> Vec<bool> {
+        let program = parse_src(src);
+        let resolution = analyze(&program).unwrap();
+        resolution.closure_bearing
+    }
+
+    #[test]
+    fn direct_closure_field_poisons() {
+        let flags = bearing_of(
+            "type Node = { action: (unit) -> unit; } \
+             type Plain = { x: int32; } \
+             fn main() -> int32 { return 0; }",
+        );
+        assert_eq!(flags, vec![true, false]);
+    }
+
+    #[test]
+    fn transitive_field_chain_poisons() {
+        // Inner holds the closure; Outer holds Inner — both poisoned.
+        let flags = bearing_of(
+            "type Inner = { cb: (unit) -> unit; } \
+             type Outer = { inner: Inner; } \
+             type Unrelated = { n: int32; } \
+             fn main() -> int32 { return 0; }",
+        );
+        assert_eq!(flags, vec![true, true, false]);
+    }
+
+    #[test]
+    fn array_element_propagates_even_though_layout_does_not() {
+        // Arrays are pointers for LAYOUT cycles but share their buffer
+        // mutably — §9.10 poisoning follows the semantics, not the layout.
+        let flags = bearing_of(
+            "type Holder = { actions: (unit) -> unit[]; } \
+             type ScalarArr = { xs: int32[]; } \
+             fn main() -> int32 { return 0; }",
+        );
+        assert_eq!(flags, vec![true, false]);
+    }
+
+    #[test]
+    fn tagged_union_payloads_propagate() {
+        let flags = bearing_of(
+            "type Opt = { o: (unit) -> unit?; } \
+             type Res = { r: Result<int32, (unit) -> unit>; } \
+             type Clean = { o: int32?; } \
+             fn main() -> int32 { return 0; }",
+        );
+        assert_eq!(flags, vec![true, true, false]);
+    }
+
+    #[test]
+    fn unknown_field_type_is_not_an_edge_here() {
+        // `Mystery` resolves nowhere; "unknown type" is reported later per
+        // use — poisoning must not crash on it.
+        let flags = bearing_of(
+            "type H = { m: Mystery; } fn main() -> int32 { return 0; }",
+        );
+        assert_eq!(flags.len(), 1);
+        assert!(!flags[0]);
     }
 }
