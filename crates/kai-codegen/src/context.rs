@@ -67,6 +67,9 @@ pub(crate) struct Ctx<'ctx> {
     pub elem_dtors: std::cell::RefCell<HashMap<String, FunctionValue<'ctx>>>,
     /// Module-file name globals baked for panic sites, one per module key.
     pub file_globals: std::cell::RefCell<HashMap<String, inkwell::values::PointerValue<'ctx>>>,
+    /// Monotonic counter for per-literal closure artifacts (body functions,
+    /// environment dtors) — each literal is distinct code.
+    pub closure_seq: std::cell::Cell<u32>,
 }
 
 impl<'ctx> Ctx<'ctx> {
@@ -89,6 +92,7 @@ impl<'ctx> Ctx<'ctx> {
             release_helpers: Default::default(),
             elem_dtors: Default::default(),
             file_globals: Default::default(),
+            closure_seq: std::cell::Cell::new(0),
         }
     }
 

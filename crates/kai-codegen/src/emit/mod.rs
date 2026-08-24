@@ -5,6 +5,7 @@ pub(crate) mod expr;
 pub(crate) mod ownership;
 pub(crate) mod panic;
 pub(crate) mod stmt;
+pub(crate) use stmt::fallback_return;
 
 use crate::context::Ctx;
 use crate::frame::Frame;

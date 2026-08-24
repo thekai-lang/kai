@@ -3,9 +3,10 @@
 
 use crate::context::Ctx;
 use crate::frame::Frame;
+use crate::types::to_llvm;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FloatValue, IntValue, ValueKind};
+use inkwell::values::{BasicValue, BasicValueEnum, FloatValue, IntValue, ValueKind};
 use kai_tast::{BinaryOp, KaiType, TypedExpr, TypedExprKind};
 
 /// Runtime intrinsics always return values; normalize the call result.
@@ -67,10 +68,334 @@ pub(crate) fn emit<'ctx>(
         TypedExprKind::UnwrapOr { receiver, default } => {
             lazy_select(ctx, frame, receiver, default, &ty)
         }
-        // Remaining v0.0.6 lowerings land with the closure/catch commit.
-        TypedExprKind::Catch { .. }
-        | TypedExprKind::CallIndirect { .. }
-        | TypedExprKind::ClosureLit(_) => undef_of(ctx, &ty),
+        // `base catch |err| { stmts.. tail }` (§3.4): the Ok path forwards
+        // the payload; the Err path binds the error, runs the block, then
+        // evaluates the tail — releases run AFTER the tail (it may read the
+        // locals being released).
+        TypedExprKind::Catch { base, err_binding, err_ty, stmts, tail, releases } => {
+            let recv = emit(ctx, frame, base).into_struct_value();
+            let tag = ctx
+                .builder
+                .build_extract_value(recv, 0, "tag")
+                .expect("tag")
+                .into_int_value();
+            let is_ok = ctx
+                .builder
+                .build_int_compare(inkwell::IntPredicate::EQ, tag, i64_const(ctx, 0), "is.ok")
+                .expect("tag cmp");
+
+            let result_llvm = crate::types::to_llvm(ctx, &ty);
+            let slot = crate::emit::alloca_in_entry(
+                ctx,
+                crate::emit::current_function(ctx),
+                result_llvm,
+                "catch.r",
+            );
+            let err_slot = crate::emit::alloca_in_entry(
+                ctx,
+                crate::emit::current_function(ctx),
+                to_llvm(ctx, err_ty),
+                "catch.err",
+            );
+            frame.bind(*err_binding, err_slot);
+
+            let fn_v = crate::emit::current_function(ctx);
+            let ok_bb = ctx.context.append_basic_block(fn_v, "catch.ok");
+            let err_bb = ctx.context.append_basic_block(fn_v, "catch.err");
+            let join_bb = ctx.context.append_basic_block(fn_v, "catch.join");
+            let _ = ctx.builder.build_conditional_branch(is_ok, ok_bb, err_bb);
+
+            ctx.builder.position_at_end(ok_bb);
+            let payload = ctx
+                .builder
+                .build_extract_value(recv, 1, "ok.payload")
+                .expect("ok payload");
+            let _ = ctx.builder.build_store(slot, payload);
+            let _ = ctx.builder.build_unconditional_branch(join_bb);
+
+            ctx.builder.position_at_end(err_bb);
+            let err_val = ctx
+                .builder
+                .build_extract_value(recv, 2, "err.payload")
+                .expect("err payload");
+            let _ = ctx.builder.build_store(err_slot, err_val);
+            for st in stmts.iter() {
+                crate::emit::stmt::emit(ctx, frame, st);
+                if terminated_here(ctx) {
+                    break;
+                }
+            }
+            if !terminated_here(ctx) {
+                let tail_v = emit(ctx, frame, tail);
+                let _ = ctx.builder.build_store(slot, tail_v);
+                for (local, rty) in releases.iter() {
+                    crate::emit::ownership::emit_release_slot(ctx, rty, frame.slot(*local));
+                }
+                let _ = ctx.builder.build_unconditional_branch(join_bb);
+            }
+
+            if !terminated_here(ctx) {
+                ctx.builder.position_at_end(join_bb);
+            }
+            // Value only meaningful when control actually reaches here.
+            ctx.builder
+                .build_load(result_llvm, slot, "catch.v")
+                .expect("load catch result")
+        }
+        // `f(args)` through a closure VALUE `{ code, env }` (§9.10): env
+        // passes as the hidden first parameter; the signature is rebuilt
+        // from the static argument/result types.
+        TypedExprKind::CallIndirect { callee, args } => {
+            let fat = emit(ctx, frame, callee).into_struct_value();
+            let code = ctx
+                .builder
+                .build_extract_value(fat, 0, "clo.code")
+                .expect("code ptr")
+                .into_pointer_value();
+            let env = ctx
+                .builder
+                .build_extract_value(fat, 1, "clo.env")
+                .expect("env ptr");
+
+            let mut arg_vals: Vec<BasicValueEnum<'ctx>> =
+                vec![env];
+            for a in args {
+                arg_vals.push(emit(ctx, frame, a));
+            }
+            let mut param_tys: Vec<BasicTypeEnum<'ctx>> =
+                vec![ctx.context.ptr_type(Default::default()).into()];
+            for v in &arg_vals[1..] {
+                param_tys.push(v.get_type());
+            }
+            // fn_type takes metadata enums; map the plain types over.
+            let param_tys: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> =
+                param_tys.iter().map(|t| (*t).into()).collect();
+
+            let llvm = match &ty {
+                KaiType::Unit => ctx.context.void_type().fn_type(&param_tys, false),
+                r => to_llvm(ctx, r).fn_type(&param_tys, false),
+            };
+            let args_meta: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = arg_vals
+                .iter()
+                .map(|v| (*v).into())
+                .collect();
+            let site = ctx
+                .builder
+                .build_indirect_call(llvm, code, &args_meta, "icall")
+                .expect("indirect call");
+            match site.try_as_basic_value() {
+                ValueKind::Basic(v) => v,
+                _ => ctx.context.i32_type().get_undef().into(),
+            }
+        }
+        // Closure literal (§9.10): the environment is a heap header whose
+        // payload carries [captures..., code]; a generated dtor releases
+        // heap-bearing captures exactly once at rc==0. The value is the
+        // `{ code, env }` fat pointer; the body function takes
+        // `(params.., env)` with capture ids bound INTO the payload.
+        TypedExprKind::ClosureLit(clo) => {
+            let seq = ctx.closure_seq.get();
+            ctx.closure_seq.set(seq + 1);
+            let fn_name = format!("kai.clo.{seq}");
+
+            let param_llvm: Vec<BasicTypeEnum<'ctx>> = match &ty {
+                KaiType::Closure { params, .. } => {
+                    params.iter().map(|p| to_llvm(ctx, p)).collect()
+                }
+                other => unreachable!("closure literal typed {other:?}"),
+            };
+
+            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = clo
+                .captures
+                .iter()
+                .map(|c| to_llvm(ctx, &c.ty))
+                .collect();
+            field_tys.push(ctx.context.ptr_type(Default::default()).into());
+            let caps_ty = {
+                let name = format!("KaiEnvCaps.{seq}");
+                if let Some(existing) = ctx.module.get_struct_type(&name) {
+                    existing
+                } else {
+                    let t = ctx.context.opaque_struct_type(&name);
+                    t.set_body(&field_tys, false);
+                    t
+                }
+            };
+            let caps_size = caps_ty.size_of().expect("sized captures");
+
+            let any_heap = clo
+                .captures
+                .iter()
+                .any(|c| crate::emit::ownership::heap_bearing(ctx, &c.ty));
+            let dtor_val: BasicValueEnum<'ctx> = if any_heap {
+                let dname = format!("kai.dtor.env.{seq}");
+                let ptr = ctx.context.ptr_type(Default::default());
+                let llvm = ctx.context.void_type().fn_type(&[ptr.into()], false);
+                let dtor = ctx.module.add_function(&dname, llvm, None);
+                let saved_block = ctx.builder.get_insert_block();
+                let entry = ctx.context.append_basic_block(dtor, "entry");
+                ctx.builder.position_at_end(entry);
+                let hdr = dtor.get_nth_param(0).expect("hdr").into_pointer_value();
+                let header_ty = crate::runtime::array_header_ty(ctx, &caps_ty.to_string());
+                let payload_ptr_slot = ctx
+                    .builder
+                    .build_struct_gep(header_ty, hdr, 3, "dtor.payload.p")
+                    .expect("payload gep");
+                let payload = ctx
+                    .builder
+                    .build_load(
+                        ctx.context.ptr_type(Default::default()),
+                        payload_ptr_slot,
+                        "dtor.payload",
+                    )
+                    .expect("payload load")
+                    .into_pointer_value();
+                for (idx, cap) in clo.captures.iter().enumerate() {
+                    if !crate::emit::ownership::heap_bearing(ctx, &cap.ty) {
+                        continue;
+                    }
+                    let slot = ctx
+                        .builder
+                        .build_struct_gep(caps_ty, payload, idx as u32, "dtor.cap")
+                        .expect("capture gep");
+                    crate::emit::ownership::emit_release_slot(ctx, &cap.ty, slot);
+                }
+                let _ = ctx.builder.build_return(None);
+                if let Some(saved) = saved_block {
+                    ctx.builder.position_at_end(saved);
+                }
+                dtor.as_global_value().as_pointer_value().into()
+            } else {
+                ctx.context.ptr_type(Default::default()).const_zero().into()
+            };
+
+            // Environment header via the generic runtime allocator.
+            let env_hdr = {
+                let new_fn = crate::runtime::array_new_fn(ctx);
+                let args_meta: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![
+                    i64_const(ctx, 1).into(),
+                    caps_size.into(),
+                    dtor_val.into(),
+                ];
+                ctx.builder
+                    .build_call(new_fn, &args_meta, "env.hdr")
+                    .expect("env alloc")
+                    .try_as_basic_value()
+            };
+            let env_hdr = match env_hdr {
+                ValueKind::Basic(v) => v.into_pointer_value(),
+                _ => unreachable!("array_new returns a pointer"),
+            };
+            let header_ty = crate::runtime::array_header_ty(ctx, &caps_ty.to_string());
+            let payload_ptr_slot = ctx
+                .builder
+                .build_struct_gep(header_ty, env_hdr, 3, "env.payload.p")
+                .expect("payload gep");
+            let payload = ctx
+                .builder
+                .build_load(
+                    ctx.context.ptr_type(Default::default()),
+                    payload_ptr_slot,
+                    "env.payload",
+                )
+                .expect("payload load")
+                .into_pointer_value();
+
+            // Retain + store each capture into the payload.
+            for (idx, cap) in clo.captures.iter().enumerate() {
+                let src = frame.slot(cap.local);
+                let dst = ctx
+                    .builder
+                    .build_struct_gep(caps_ty, payload, idx as u32, "cap.dst")
+                    .expect("capture gep");
+                match &cap.ty {
+                    KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                        let v = ctx
+                            .builder
+                            .build_load(to_llvm(ctx, &cap.ty), src, "cap.v")
+                            .expect("load capture");
+                        crate::emit::ownership::retain_header(ctx, v);
+                        let _ = ctx.builder.build_store(dst, v);
+                    }
+                    k if matches!(k, KaiType::Struct(_) | KaiType::Optional(_) | KaiType::Result { .. })
+                        && crate::emit::ownership::heap_bearing(ctx, k) =>
+                    {
+                        let copy = if matches!(k, KaiType::Struct(_)) {
+                            crate::emit::ownership::retain_struct_copy(ctx, k, src)
+                        } else {
+                            crate::emit::ownership::retain_tagged_copy(ctx, k, src)
+                        };
+                        let _ = ctx.builder.build_store(dst, copy);
+                    }
+                    _ => {
+                        let v = ctx
+                            .builder
+                            .build_load(to_llvm(ctx, &cap.ty), src, "cap.v")
+                            .expect("load capture");
+                        let _ = ctx.builder.build_store(dst, v);
+                    }
+                }
+            }
+
+            // Body function: private, `(params.., env) -> ret`.
+            let ret_ty = match &ty {
+                KaiType::Closure { ret, .. } => (**ret).clone(),
+                other => unreachable!("closure type {other:?}"),
+            };
+            let mut sig: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> =
+                param_llvm.iter().map(|t| (*t).into()).collect();
+            sig.push(ctx.context.ptr_type(Default::default()).into());
+            let llvm = if matches!(ret_ty, KaiType::Unit) {
+                ctx.context.void_type().fn_type(&sig, false)
+            } else {
+                to_llvm(ctx, &ret_ty).fn_type(&sig, false)
+            };
+            let body_fn = ctx.module.add_function(&fn_name, llvm, None);
+
+            let saved_block = ctx.builder.get_insert_block();
+            let entry = ctx.context.append_basic_block(body_fn, "entry");
+            ctx.builder.position_at_end(entry);
+            let mut inner = Frame::new(frame.module.clone());
+            for (idx, pid) in clo.param_ids.iter().enumerate() {
+                let arg = body_fn.get_nth_param(idx as u32).expect("param");
+                let pslot = crate::emit::alloca_in_entry(
+                    ctx,
+                    body_fn,
+                    param_llvm[idx],
+                    &format!("p{idx}"),
+                );
+                let _ = ctx.builder.build_store(pslot, arg);
+                inner.bind(*pid, pslot);
+            }
+            // Captures read straight out of the environment payload.
+            for (idx, cap) in clo.captures.iter().enumerate() {
+                let view = ctx
+                    .builder
+                    .build_struct_gep(caps_ty, payload, idx as u32, "cap.view")
+                    .expect("capture view");
+                inner.bind(cap.local, view);
+            }
+            for st in &clo.body.stmts {
+                crate::emit::stmt::emit(ctx, &mut inner, st);
+            }
+            crate::emit::fallback_return(ctx, &ret_ty);
+            if let Some(saved) = saved_block {
+                ctx.builder.position_at_end(saved);
+            }
+
+            let fat_t = crate::types::closure_fat_ty(ctx);
+            let agg = fat_t.get_undef();
+            let code_v = body_fn.as_global_value().as_pointer_value().as_basic_value_enum();
+            let with_code = ctx
+                .builder
+                .build_insert_value(agg, code_v, 0, "clo.c")
+                .expect("insert code");
+            let with_env = ctx
+                .builder
+                .build_insert_value(with_code, env_hdr.as_basic_value_enum(), 1, "clo.e")
+                .expect("insert env");
+            with_env.into_struct_value().into()
+        }
         TypedExprKind::Call { func, args } => call(ctx, frame, *func, args),
         TypedExprKind::FieldAccess {
             base,
@@ -993,4 +1318,14 @@ fn lazy_select<'ctx>(
     ctx.builder
         .build_load(result_llvm, slot, "co.v")
         .expect("load coalesced")
+}
+
+
+/// True when the current insert block already has a terminator (an early
+/// `return` inside a catch body leaves it that way).
+fn terminated_here(ctx: &Ctx<'_>) -> bool {
+    ctx.builder
+        .get_insert_block()
+        .and_then(|b| b.get_terminator())
+        .is_some()
 }
