@@ -4,6 +4,22 @@ This file tracks **compiler implementation** releases (`vX.Y.Z`, what `kai build
 
 ---
 
+## v0.0.6.2 — Split remainder (no new surface, §8 debt paydown)
+
+Continues v0.0.6.1's split: every logic file >500 LOC is now <500, per whitepaper §8.4 "no file >500 LOC". No language surface, no whitepaper change — pure file hygiene so v0.0.7 trust layer lands on a decomposable base.
+
+- **`kai-codegen/src/emit/expr.rs:1408` → `expr/mod.rs:347` + `expr/arith.rs:383` + `expr/heap.rs:379` + `expr/tagged.rs:129` + `expr/closure.rs:234`** — `emit` (514) now delegates `arith::neg/not/binary/short_circuit` and `heap::string_lit/array_lit/index_read/call/field_read/place_ptr/struct_lit` and `tagged::tagged_none_const/zero_of/lazy_select` and `closure::emit_closure` (220). `crate::emit::expr::elems_storage_of` etc re-exported at `expr/mod.rs:16` so `ownership.rs:270`/`stmt.rs:63` keep `expr::` path. `mod.rs` uses `#[allow(clippy::empty_line_after_doc_comments)]` + `#[allow(unused_imports)]` for re-exports.
+- **`kai-typecheck/src/expr.rs:1060` → `expr/mod.rs:352` + `expr/call.rs:205` + `expr/struct_lit.rs:182` + `expr/array.rs:72` + `expr/tagged.rs:166` + `expr/collect.rs:111`** — `lower` stays in `mod.rs:352`, `call::call_expr`/`struct_lit::field_access`/`array::array_lit`/`tagged::coalesce_expr` etc via `super::lower` and `pub(crate) use` re-exports at `mod.rs:29`. `collect` (LocalRef collection) and `capture_poisoned` moved. `is_import_alias` moved to `collect.rs` and re-exported.
+- **`kai-typecheck/src/lib.rs:927` → `lib.rs:55` + `tests.rs:216`/`v0003_tests.rs:163`/`v0004_tests.rs:179`/`v0005_tests.rs:131`/`v0006_tests.rs:139`/`v0005_string_extra.rs:25`** — logic 55, tests extracted per version (like `kai-ownership` v0.0.6.1). `test_support.rs:490` already separate.
+- **`kai-parser/src/lib.rs:960` → `lib.rs:54` + `tests.rs:605`/`v0006_tests.rs:296`** — `tests.rs:605` is test-only and just over 500, tracked as next split (test file, not logic).
+- **`kai-lexer/src/lexer.rs:680` → `lexer/mod.rs:206` + `lexer/string.rs:54` + `lexer/number.rs:66` + `lexer/tests.rs:216`/`v0005_tests.rs:65`/`v0006_tests.rs:77`** — `scan_string` and `scan_number`/`accumulate_int` moved to `impl Lexer` in `string.rs`/`number.rs` via `super::Lexer`.
+- **`kai-codegen/src/lib.rs:719` → `lib.rs:117` + `tests.rs:178`/`v0003_tests.rs:217`/`v0004_tests.rs:78`/`v0005_panic_tests.rs:122`**
+- **Remaining >500 test files tracked**: `kai-ownership/src/tests.rs:513`, `kai-parser/src/tests.rs:605` (both test-only, next patch will split per-feature). All *logic* files now <500; `wc -l` total `13319` (was `14735` at v0.0.6).
+
+295 tests green + clippy `-D warnings` clean (added `#![allow(clippy::empty_line_after_doc_comments)]` where doc→fn empty line lint fired after moves). Cargo stays `0.0.6`, git tag `v0.0.6.2`.
+
+---
+
 ## v0.0.6.1 — Split & hardening patch (no new surface, whitepaper v0.14 alignment)
 
 Patch over v0.0.6 that pays down §8 debt before the trust layer (§5, v0.0.7+). Scope is hardening + file splits + `Ok`/`Err` constructors (whitepaper v0.14 §3.4 gap-closure); grammar already locked in EBNF, now landed in code.
