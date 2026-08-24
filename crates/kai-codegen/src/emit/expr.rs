@@ -77,15 +77,31 @@ pub(crate) fn emit<'ctx>(
         // op; heap-bearing structs get per-field retains at their source
         // place, then a bitwise copy flows onward.
         TypedExprKind::Retain(inner) => match &expr.ty {
-            KaiType::String | KaiType::Array(_) => {
+            KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
                 let value = emit(ctx, frame, inner);
-                crate::emit::ownership::retain_header(ctx, value);
+                // Closures retain through their ENV header (§9.10); the code
+                // pointer is immutable and rides along.
+                let env = if matches!(expr.ty, KaiType::Closure { .. }) {
+                    let agg = value.into_struct_value();
+                    ctx.builder
+                        .build_extract_value(agg, 1, "clo.env")
+                        .expect("env member")
+                } else {
+                    value
+                };
+                crate::emit::ownership::retain_header(ctx, env);
                 value
             }
-            KaiType::Struct(_) => {
+            KaiType::Struct(_)
+            | KaiType::Optional(_)
+            | KaiType::Result { .. } => {
                 let place = place_ptr(ctx, frame, inner)
-                    .expect("retained struct source is always a place");
-                crate::emit::ownership::retain_struct_copy(ctx, &expr.ty, place)
+                    .expect("retained aggregate source is always a place");
+                if matches!(expr.ty, KaiType::Struct(_)) {
+                    crate::emit::ownership::retain_struct_copy(ctx, &expr.ty, place)
+                } else {
+                    crate::emit::ownership::retain_tagged_copy(ctx, &expr.ty, place)
+                }
             }
             other => unreachable!("retain of non-heap type {other:?}"),
         },

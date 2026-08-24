@@ -41,6 +41,19 @@ pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicTypeEnum<'ctx
     }
 }
 
+/// The closure VALUE shape `{ fn_ptr, env_ptr }` (§9.10) — shared by
+/// literals, slots, and field storage.
+pub(crate) fn closure_fat_ty<'ctx>(ctx: &Ctx<'ctx>) -> inkwell::types::StructType<'ctx> {
+    let name = "KaiClosure";
+    if let Some(existing) = ctx.module.get_struct_type(name) {
+        return existing;
+    }
+    let ptr = ctx.context.ptr_type(Default::default());
+    let ty = ctx.context.opaque_struct_type(name);
+    ty.set_body(&[ptr.into(), ptr.into()], false);
+    ty
+}
+
 /// Function signature type: `void` for unit returns, by-value parameters
 /// (§9.3 — callees see copies, so mutation stays local).
 pub(crate) fn fn_signature<'ctx>(

@@ -22,6 +22,12 @@ pub(crate) fn heap_bearing(ctx: &Ctx<'_>, ty: &KaiType) -> bool {
         KaiType::Struct(id) => ctx.struct_fields[id.0 as usize]
             .iter()
             .any(|f| heap_bearing(ctx, f)),
+        // Tagged unions (§9.9a): conditional on the active payload's shape —
+        // Result counts either branch. Closures: unconditionally heap-bearing
+        // (v0.13), the environment header always exists.
+        KaiType::Optional(inner) => heap_bearing(ctx, inner),
+        KaiType::Result { ok, err } => heap_bearing(ctx, ok) || heap_bearing(ctx, err),
+        KaiType::Closure { .. } => true,
         _ => false,
     }
 }
@@ -66,8 +72,40 @@ pub(crate) fn emit_release_slot<'ctx>(
         KaiType::Struct(_) if heap_bearing(ctx, ty) => {
             call_void(ctx, struct_helper(ctx, ty, Helper::Release), &[value_ptr.into()]);
         }
+        // Tagged unions (§9.9a): generated helper checks the tag and
+        // releases only the ACTIVE payload slot.
+        KaiType::Optional(_) | KaiType::Result { .. } => {
+            call_void(ctx, tagged_helper(ctx, ty, Helper::Release), &[value_ptr.into()]);
+        }
+        // A closure slot holds `{ code, env }`: releasing means dropping one
+        // reference to the ENVIRONMENT header — its dtor cascades into the
+        // captured values exactly once, when rc reaches zero (§9.10).
+        KaiType::Closure { .. } => {
+            let env = ctx
+                .builder
+                .build_load(
+                    ctx.context.ptr_type(Default::default()),
+                    member_gep(ctx, value_ptr, 1, "clo.env.p"),
+                    "clo.env",
+                )
+                .expect("load env for release");
+            release_header_value(ctx, env);
+        }
         _ => {}
     }
+}
+
+/// `%KaiFat{code,env}` second-member GEP on a POINTER to the aggregate.
+fn member_gep<'ctx>(
+    ctx: &Ctx<'ctx>,
+    place: inkwell::values::PointerValue<'ctx>,
+    idx: u32,
+    name: &str,
+) -> inkwell::values::PointerValue<'ctx> {
+    let fat = crate::types::closure_fat_ty(ctx);
+    ctx.builder
+        .build_struct_gep(fat, place, idx, name)
+        .expect("fat gep")
 }
 
 /// Releases one header POINTER value directly — the for-end of an owned
@@ -166,10 +204,14 @@ fn struct_helper<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType, which: Helper) -> Function
                     .expect("field load");
                 match field_ty {
                     KaiType::String | KaiType::Array(_) => retain_header(ctx, loaded),
-                    // Nested heap-bearing struct field: recurse through its
-                    // own helper on the field's storage.
+                    // A closure field retains through its ENV member.
+                    KaiType::Closure { .. } => retain_header(ctx, loaded),
+                    // Nested aggregates recurse on the field's storage.
                     other @ KaiType::Struct(_) => {
                         retain_struct_copy(ctx, other, field_slot);
+                    }
+                    other @ (KaiType::Optional(_) | KaiType::Result { .. }) => {
+                        retain_tagged_copy(ctx, other, field_slot);
                     }
                     _ => {}
                 }
@@ -294,4 +336,137 @@ fn sanitize_symbol(stem: &str) -> String {
             }
         })
         .collect()
+}
+
+// -- v0.0.6 tagged unions & closures (§9.9a/§9.10) ------------------------------
+
+/// Retains each heap-bearing ACTIVE-payload field of the tagged aggregate at
+/// `place`, then loads and returns the bitwise copy — §9.5 copy semantics
+/// generalized behind a runtime tag check.
+pub(crate) fn retain_tagged_copy<'ctx>(
+    ctx: &Ctx<'ctx>,
+    ty: &KaiType,
+    place: inkwell::values::PointerValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    call_void(ctx, tagged_helper(ctx, ty, Helper::Retain), &[place.into()]);
+    ctx.builder
+        .build_load(crate::types::to_llvm(ctx, ty), place, "copied")
+        .expect("load copied aggregate")
+}
+
+/// `void @kai.<retain|release>.<opt|res>.<T>(ptr agg)` — the tag decides
+/// which payload slot the per-field machinery touches. One helper per
+/// instantiated shape; the tag itself owns nothing (§9.9a).
+fn tagged_helper<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType, which: Helper) -> FunctionValue<'ctx> {
+    let key = format!("{}@{}", which.prefix(), type_stem(ctx, ty));
+    let cached = match which {
+        Helper::Retain => ctx.retain_helpers.borrow().get(&key).copied(),
+        Helper::Release => ctx.release_helpers.borrow().get(&key).copied(),
+    };
+    if let Some(existing) = cached {
+        return existing;
+    }
+
+    let name = sanitize_symbol(&key);
+    let ptr = ctx.context.ptr_type(Default::default());
+    let llvm = ctx.context.void_type().fn_type(&[ptr.into()], false);
+    let function = ctx.module.add_function(&name, llvm, None);
+    match which {
+        Helper::Retain => ctx.retain_helpers.borrow_mut().insert(key, function),
+        Helper::Release => ctx.release_helpers.borrow_mut().insert(key, function),
+    };
+
+    let saved_block = ctx.builder.get_insert_block();
+    let entry = ctx.context.append_basic_block(function, "entry");
+    ctx.builder.position_at_end(entry);
+
+    let agg = function
+        .get_nth_param(0)
+        .expect("agg param")
+        .into_pointer_value();
+    let llvm_ty = crate::types::to_llvm(ctx, ty).into_struct_type();
+
+    // Payload slot indices: Optional = {tag, payload}; Result = {tag, ok, err}.
+    let (tag_idx, branches): (u32, Vec<(u64, &KaiType, u32)>) = match ty {
+        KaiType::Optional(inner) => (0, vec![(0, inner.as_ref(), 1)]),
+        KaiType::Result { ok, err } => (
+            0,
+            vec![(0, ok.as_ref(), 1), (1, err.as_ref(), 2)],
+        ),
+        other => unreachable!("tagged helper for {other:?}"),
+    };
+
+    let i64_ty = ctx.context.i64_type();
+    let tag_slot = ctx
+        .builder
+        .build_struct_gep(llvm_ty, agg, tag_idx, "tag.p")
+        .expect("tag gep");
+    let tag = ctx
+        .builder
+        .build_load(i64_ty, tag_slot, "tag")
+        .expect("tag load")
+        .into_int_value();
+    let done = ctx.context.append_basic_block(function, "inactive");
+
+    for (value, payload_ty, payload_idx) in branches {
+        if !heap_bearing(ctx, payload_ty) {
+            continue; // stack payloads: no RC ops in any branch (compile-time keyed)
+        }
+        let is_active = ctx
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                i64_ty.const_int(value, false),
+                "active",
+            )
+            .expect("tag cmp");
+        let branch = ctx.context.append_basic_block(function, "active.payload");
+        let _ = ctx.builder.build_conditional_branch(is_active, branch, done);
+
+        ctx.builder.position_at_end(branch);
+        let slot = ctx
+            .builder
+            .build_struct_gep(llvm_ty, agg, payload_idx, "payload.p")
+            .expect("payload gep");
+        emit_payload_op(ctx, payload_ty, which, slot);
+        let _ = ctx.builder.build_unconditional_branch(done);
+    }
+    ctx.builder.position_at_end(done);
+    let _ = ctx.builder.build_return(None);
+
+    if let Some(saved) = saved_block {
+        ctx.builder.position_at_end(saved);
+    }
+    function
+}
+
+/// One payload-slot operation inside a tagged helper: headers retain/release
+/// through the pointer stored in the slot; aggregates recurse on storage.
+fn emit_payload_op<'ctx>(
+    ctx: &Ctx<'ctx>,
+    payload_ty: &KaiType,
+    which: Helper,
+    slot: inkwell::values::PointerValue<'ctx>,
+) {
+    match (which, payload_ty) {
+        (Helper::Retain, KaiType::String | KaiType::Array(_) | KaiType::Closure { .. }) => {
+            let loaded = ctx
+                .builder
+                .build_load(crate::types::to_llvm(ctx, payload_ty), slot, "p.v")
+                .expect("payload load");
+            retain_header(ctx, loaded);
+        }
+        (Helper::Retain, other @ (KaiType::Struct(_) | KaiType::Optional(_) | KaiType::Result { .. })) => {
+            if matches!(other, KaiType::Struct(_)) {
+                retain_struct_copy(ctx, other, slot);
+            } else {
+                retain_tagged_copy(ctx, other, slot);
+            }
+        }
+        // Stack payloads never reach here: the helper skips non-heap
+        // branches at generation time.
+        (Helper::Release, _) => emit_release_slot(ctx, payload_ty, slot),
+        (Helper::Retain, _) => {}
+    }
 }
