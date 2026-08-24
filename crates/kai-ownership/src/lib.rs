@@ -48,6 +48,12 @@ struct FreshIds {
     next: u32,
 }
 
+impl Default for FreshIds {
+    fn default() -> Self {
+        Self { next: 10_000 }
+    }
+}
+
 impl FreshIds {
     fn seeded_beyond(program: &kai_tast::TypedProgram) -> Self {
         let mut max = 0;
@@ -234,7 +240,8 @@ fn is_owned_temp(expr: &TypedExpr) -> bool {
         | TypedExprKind::Call { .. }
         // `Some(x)` builds a fresh tagged aggregate (§9.9a): its payload is
         // retained at construction when heap-bearing.
-        | TypedExprKind::SomeLit(_) => true,
+        | TypedExprKind::SomeLit(_)
+        | TypedExprKind::ClosureLit(_) => true,
         // Everything else borrows: bindings, projections, scalars, poison.
         // Coalesce/UnwrapOr/Catch forward a payload chosen at runtime —
         // precise tag-guarded handling lands with the P4 commit; treated as
@@ -327,7 +334,7 @@ fn walk_block(
             // borrows; the §9.5 retain on the value keeps heap content
             // alive past the releases). One node carries both.
             ret @ TypedStmt::Return(_) => {
-                let ret = finish_return(heap, ret);
+                let ret = finish_return(heap, ret, scopes, fresh);
                 let TypedStmt::Return(value) = ret else {
                     unreachable!("finish_return returns a Return");
                 };
@@ -356,7 +363,12 @@ fn walk_block(
     block
 }
 
-fn finish_return(heap: &HeapBearing, ret: TypedStmt) -> TypedStmt {
+fn finish_return(
+    heap: &HeapBearing,
+    ret: TypedStmt,
+    scopes: &mut Scopes,
+    fresh: &mut FreshIds,
+) -> TypedStmt {
     let TypedStmt::Return(value) = ret else {
         unreachable!("finish_return on non-return")
     };
@@ -365,7 +377,7 @@ fn finish_return(heap: &HeapBearing, ret: TypedStmt) -> TypedStmt {
             // Descend first: nested owning slots (struct-literal fields,
             // array-literal elements) need their own markers before we
             // decide whether the result itself needs retaining.
-            walk_expr(heap, &mut e);
+            walk_expr(heap, &mut e, scopes, fresh);
             wrap_retain_if_borrowed(heap, &mut e);
             Some(e)
         }
@@ -387,7 +399,7 @@ fn walk_stmt(
             // a transfer into the owning slot.
             let mut out = Vec::new();
             hoist_borrow_temps(heap, &mut binding.init, fresh, scopes, &mut out, true);
-            walk_expr(heap, &mut binding.init);
+            walk_expr(heap, &mut binding.init, scopes, fresh);
             // Owning slot: co-own borrowed sources (§9.4/§9.5 row 3).
             wrap_retain_if_borrowed(heap, &mut binding.init);
             scopes.declare(
@@ -408,13 +420,13 @@ fn walk_stmt(
                 }
             }
             hoist_borrow_temps(heap, &mut assign.value, fresh, scopes, &mut out, true);
-            out.push(TypedStmt::Assign(walk_assign(heap, assign)));
+            out.push(TypedStmt::Assign(walk_assign(heap, assign, scopes, fresh)));
             out
         }
         TypedStmt::If(mut if_) => {
             let mut out = Vec::new();
             hoist_borrow_temps(heap, &mut if_.cond, fresh, scopes, &mut out, false);
-            walk_expr(heap, &mut if_.cond);
+            walk_expr(heap, &mut if_.cond, scopes, fresh);
             if_.then_block = walk_block(heap, if_.then_block, scopes, fresh);
             if_.else_block =
                 if_.else_block.map(|b| walk_block(heap, b, scopes, fresh));
@@ -441,7 +453,7 @@ fn walk_stmt(
                 return out;
             }
             hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
-            walk_expr(heap, &mut e);
+            walk_expr(heap, &mut e, scopes, fresh);
             out.push(TypedStmt::Expr(e));
             out
         }
@@ -492,6 +504,20 @@ fn hoist_borrow_temps(
     match &mut expr.kind {
         // Guarded by control flow: leave untouched (see doc comment).
         TypedExprKind::Binary { op: BinaryOp::And | BinaryOp::Or, .. } => {}
+        // v0.0.6: `Some`'s payload position is an owning slot handled by
+        // the retain wrapper; hoisting it would double-own.
+        TypedExprKind::SomeLit(value) => {
+            hoist_borrow_temps(heap, value, fresh, scopes, out, false);
+        }
+        // Laziness/env identity: `??`/`unwrap_or` fallbacks and catch bodies
+        // must not evaluate eagerly, and closure literals ARE the value —
+        // codegen's result-slot/capture rules manage them instead.
+        TypedExprKind::Coalesce { .. }
+        | TypedExprKind::UnwrapOr { .. }
+        | TypedExprKind::Catch { .. }
+        | TypedExprKind::CallIndirect { .. }
+        | TypedExprKind::ClosureLit(_)
+        | TypedExprKind::NoneLit => {}
         TypedExprKind::Binary { lhs, rhs, .. } => {
             hoist_borrow_temps(heap, lhs, fresh, scopes, out, false);
             hoist_borrow_temps(heap, rhs, fresh, scopes, out, false);
@@ -514,8 +540,19 @@ fn hoist_borrow_temps(
     }
 }
 
-fn walk_assign(heap: &HeapBearing, mut assign: TypedAssign) -> TypedAssign {
-    walk_expr(heap, &mut assign.value);
+/// Drains remaining catch-block statements verbatim after an early `return`
+/// terminated the block (dead code, kept so spans survive).
+fn walk_stmt_rest(rest: &mut Vec<TypedStmt>) -> Vec<TypedStmt> {
+    std::mem::take(rest)
+}
+
+fn walk_assign(
+    heap: &HeapBearing,
+    mut assign: TypedAssign,
+    scopes: &mut Scopes,
+    fresh: &mut FreshIds,
+) -> TypedAssign {
+    walk_expr(heap, &mut assign.value, scopes, fresh);
 
     assign.release_old = assign.op.is_none() && heap.is(&assign.value.ty);
 
@@ -544,7 +581,7 @@ fn walk_for(
 ) -> (TypedFor, Vec<TypedStmt>, Vec<(LocalId, KaiType)>) {
     scopes.push();
     let mut pre = Vec::new();
-    walk_expr(heap, &mut f.iterable);
+    walk_expr(heap, &mut f.iterable, scopes, fresh);
     if is_owned_temp(&f.iterable) && heap.is(&f.iterable.ty) {
         let local = fresh.alloc();
         let ty = f.iterable.ty.clone();
@@ -567,33 +604,38 @@ fn walk_for(
     (f, pre, frame)
 }
 
-fn walk_expr(heap: &HeapBearing, expr: &mut TypedExpr) {
+fn walk_expr(
+    heap: &HeapBearing,
+    expr: &mut TypedExpr,
+    scopes: &mut Scopes,
+    fresh: &mut FreshIds,
+) {
     match &mut expr.kind {
         TypedExprKind::IntLit(_) | TypedExprKind::FloatLit(_) | TypedExprKind::BoolLit(_)
         | TypedExprKind::LocalRef(_) | TypedExprKind::StrLit { .. } | TypedExprKind::Invalid => {}
         TypedExprKind::Neg(inner) | TypedExprKind::Not(inner) | TypedExprKind::Retain(inner) => {
-            walk_expr(heap, inner)
+            walk_expr(heap, inner, scopes, fresh)
         }
         TypedExprKind::Binary { op: _, lhs, rhs } => {
-            walk_expr(heap, lhs);
-            walk_expr(heap, rhs);
+            walk_expr(heap, lhs, scopes, fresh);
+            walk_expr(heap, rhs, scopes, fresh);
         }
-        TypedExprKind::FieldAccess { base, .. } => walk_expr(heap, base),
+        TypedExprKind::FieldAccess { base, .. } => walk_expr(heap, base, scopes, fresh),
         TypedExprKind::Index { base, index } => {
-            walk_expr(heap, base);
-            walk_expr(heap, index);
+            walk_expr(heap, base, scopes, fresh);
+            walk_expr(heap, index, scopes, fresh);
         }
         // Literal fields/elements ARE owning slots: retain borrowed sources
         // at construction (§9.5 wrap()/pair() examples).
         TypedExprKind::StructLit { values, .. } => {
             for v in values.iter_mut() {
-                walk_expr(heap, v);
+                walk_expr(heap, v, scopes, fresh);
                 wrap_retain_if_borrowed(heap, v);
             }
         }
         TypedExprKind::ArrayLit { elements } => {
             for e in elements.iter_mut() {
-                walk_expr(heap, e);
+                walk_expr(heap, e, scopes, fresh);
                 wrap_retain_if_borrowed(heap, e);
             }
         }
@@ -601,38 +643,75 @@ fn walk_expr(heap: &HeapBearing, expr: &mut TypedExpr) {
         // expressions inside argument positions still get walked.
         TypedExprKind::Call { args, .. } => {
             for a in args.iter_mut() {
-                walk_expr(heap, a);
+                walk_expr(heap, a, scopes, fresh);
             }
         }
-        // Interim like Call: the callee VALUE is walked; capture/env retain
-        // and indirect-call argument rules land with P4/P5.
-        TypedExprKind::CallIndirect { callee, args } => {
-            walk_expr(heap, callee);
-            for a in args.iter_mut() {
-                walk_expr(heap, a);
-            }
+        // -- v0.0.6 (§9.9a/§9.10) ----------------------------------------
+        // `Some(x)` builds a fresh tagged aggregate: its payload is an
+        // OWNING slot — retain borrowed sources at construction, exactly
+        // like struct/array literal members.
+        TypedExprKind::SomeLit(value) => {
+            walk_expr(heap, value, scopes, fresh);
+            wrap_retain_if_borrowed(heap, value);
         }
-        // -- v0.0.6 ------------------------------------------------------
-        // Interim descent: children keep their existing treatment; the
-        // tag-guarded payload rules land with the P4 commit.
-        TypedExprKind::SomeLit(value) => walk_expr(heap, value),
+        // Carries no payload; nothing to own.
         TypedExprKind::NoneLit => {}
+        // Coalesce/UnwrapOr forward whichever branch was active. Consumers
+        // treat the result as borrowed (retain-on-bind); when the losing
+        // side produced an owned temporary, codegen releases the creator's
+        // reference right after the branch join — balanced in both cases.
+        // The pass itself adds no markers here.
         TypedExprKind::Coalesce { lhs, rhs }
         | TypedExprKind::UnwrapOr {
             receiver: lhs,
             default: rhs,
         } => {
-            walk_expr(heap, lhs);
-            walk_expr(heap, rhs);
+            walk_expr(heap, lhs, scopes, fresh);
+            walk_expr(heap, rhs, scopes, fresh);
         }
-        // Interim: catch statements are rewritten only by the P4 commit —
-        // walk_stmt needs the scope/fresh context that expressions don't
-        // carry. Base and tail still descend.
-        TypedExprKind::Catch { base, tail, .. } => {
-            walk_expr(heap, base);
-            walk_expr(heap, tail);
+        // The catch block owns a scope frame: locals declared inside are
+        // released AFTER the tail evaluates (they may feed it). The err
+        // binding borrows the Err payload — never tracked.
+        TypedExprKind::Catch { base, stmts, tail, releases, .. } => {
+            walk_expr(heap, base, scopes, fresh);
+            scopes.push();
+            let mut done: Vec<TypedStmt> = Vec::with_capacity(stmts.len());
+            for s in std::mem::take(stmts) {
+                match s {
+                    ret @ TypedStmt::Return(_) => {
+                        let ret = finish_return(heap, ret, scopes, fresh);
+                        let TypedStmt::Return(value) = ret else {
+                            unreachable!("finish_return returns a Return");
+                        };
+                        done.push(TypedStmt::ReturnCleanup {
+                            value,
+                            releases: scopes.releases_all(),
+                        });
+                        done.extend(walk_stmt_rest(stmts));
+                        break;
+                    }
+                    other => done.extend(walk_stmt(heap, other, scopes, fresh)),
+                }
+            }
+            *stmts = done;
+            if !matches!(stmts.last(), Some(TypedStmt::ReturnCleanup { .. })) {
+                *releases = scopes.pop();
+            } else {
+                scopes.pop();
+            }
+            walk_expr(heap, tail, scopes, fresh);
         }
-        // Captures are retained INTO the environment at construction (P4).
+        // Arguments borrow as usual; the callee VALUE walks too. Capture
+        // retains happen at construction inside codegen (compile-time keyed
+        // per capture type), so the pass adds nothing here.
+        TypedExprKind::CallIndirect { callee, args } => {
+            walk_expr(heap, callee, scopes, fresh);
+            for a in args.iter_mut() {
+                walk_expr(heap, a, scopes, fresh);
+            }
+        }
+        // A literal is a fresh heap allocation (unconditionally
+        // heap-bearing): an owned temp like any StrLit/ArrayLit.
         TypedExprKind::ClosureLit(_) => {}
     }
 }
@@ -1151,5 +1230,181 @@ mod tests {
         let out = run(program);
         let TypedStmt::For(f) = &out.fns[0].body.stmts[1] else { panic!() };
         assert!(!f.iterable_owned);
+    }
+}
+
+// -- v0.0.6 (§9.9a/§9.10) -------------------------------------------------------
+
+#[cfg(test)]
+mod v0006_tests {
+    use super::*;
+    use kai_tast::TypedClosure;
+
+    fn str_lit(s: &str) -> TypedExpr {
+        TypedExpr::new(TypedExprKind::StrLit { value: s.into() }, KaiType::String)
+    }
+    fn int_lit(v: i64) -> TypedExpr {
+        TypedExpr::new(TypedExprKind::IntLit(v), KaiType::Int32)
+    }
+    fn local_ref(id: u32, ty: KaiType) -> TypedExpr {
+        TypedExpr::new(TypedExprKind::LocalRef(LocalId(id)), ty)
+    }
+    fn let_(id: u32, name: &str, init: TypedExpr) -> TypedStmt {
+        TypedStmt::Let(kai_tast::TypedLet { local: LocalId(id), name: name.into(), init })
+    }
+    fn ret(e: Option<TypedExpr>) -> TypedStmt {
+        TypedStmt::Return(e)
+    }
+    fn block(stmts: Vec<TypedStmt>) -> TypedBlock {
+        TypedBlock { stmts }
+    }
+    fn heap_table() -> HeapBearing {
+        HeapBearing::new(&[])
+    }
+    fn run(body: Vec<TypedStmt>) -> Vec<TypedStmt> {
+        let heap = heap_table();
+        let mut fresh = FreshIds::default();
+        let mut scopes = Scopes::default();
+        walk_block(&heap, block(body), &mut scopes, &mut fresh).stmts
+    }
+
+    #[test]
+    fn some_payload_is_an_owning_slot() {
+        // `let o: string? = Some(name);` — the payload borrows `name`, so
+        // construction retains it (§9.5 row 3 generalized to tagged unions).
+        let mut some = TypedExpr {
+            kind: TypedExprKind::SomeLit(Box::new(local_ref(0, KaiType::String))),
+            ty: KaiType::Optional(Box::new(KaiType::String)),
+            span: kai_diagnostics::Span::new(0, 0),
+        };
+        let body = vec![let_(1, "o", some.clone()), ret(None)];
+        let out = run(body);
+        match &out[0] {
+            TypedStmt::Let(l) => match &l.init.kind {
+                TypedExprKind::SomeLit(inner) => assert!(
+                    matches!(inner.kind, TypedExprKind::Retain(_)),
+                    "payload must be retained at construction"
+                ),
+                other => panic!("expected SomeLit, got {other:?}"),
+            },
+            other => panic!("expected let, got {other:?}"),
+        }
+        // The binding releases on the return path like any heap local.
+        let released_through_return = matches!(
+            &out[1],
+            TypedStmt::ReturnCleanup { releases, .. }
+                if releases.iter().any(|(l, _)| *l == LocalId(1))
+        );
+        assert!(released_through_return, "got {:?}", out[1]);
+        let _ = &mut some;
+    }
+
+    #[test]
+    fn closure_literal_counts_as_owned_temporary() {
+        // Discarding a closure literal binds it to a hidden `$tmp` so the
+        // environment is released at statement end (unconditionally
+        // heap-bearing, §9.10).
+        let clo = TypedExpr {
+            kind: TypedExprKind::ClosureLit(Box::new(kai_tast::TypedClosure {
+                param_ids: vec![],
+                body: block(vec![ret(Some(int_lit(0)))]),
+                captures: vec![],
+            })),
+            ty: KaiType::Closure { params: vec![], ret: Box::new(KaiType::Int32) },
+            span: kai_diagnostics::Span::new(0, 0),
+        };
+        let out = run(vec![
+            TypedStmt::Expr(clo),
+            ret(None),
+        ]);
+        assert!(
+            matches!(&out[0], TypedStmt::Let(l) if l.name == "$tmp"),
+            "closure literal must materialize when discarded: {:?}",
+            out[0]
+        );
+    }
+
+    #[test]
+    fn coalesce_fallback_is_not_hoisted_eagerly() {
+        // Laziness: the rhs must stay INSIDE the Coalesce node — hoisting it
+        // into a hidden local would evaluate it even when lhs wins.
+        let mut co = TypedExpr {
+            kind: TypedExprKind::Coalesce {
+                lhs: Box::new(local_ref(0, KaiType::String)),
+                rhs: Box::new(str_lit("d")),
+            },
+            ty: KaiType::String,
+            span: kai_diagnostics::Span::new(0, 0),
+        };
+        let heap = heap_table();
+        let mut fresh = FreshIds::default();
+        let mut scopes = Scopes::default();
+        let mut pre = Vec::new();
+        hoist_borrow_temps(&heap, &mut co, &mut fresh, &mut scopes, &mut pre, false);
+        assert!(pre.is_empty(), "no eager statements for lazy positions");
+        assert!(
+            matches!(co.kind, TypedExprKind::Coalesce { .. }),
+            "node must survive untouched"
+        );
+    }
+
+    #[test]
+    fn catch_block_locals_release_after_the_tail() {
+        // A string declared inside the catch block is released only after
+        // the tail consumed it — encoded in Catch.releases.
+        let mut catch_expr = TypedExpr {
+            kind: TypedExprKind::Catch {
+                base: Box::new(local_ref(0, KaiType::Result {
+                    ok: Box::new(KaiType::Int32),
+                    err: Box::new(KaiType::String),
+                })),
+                err_binding: LocalId(90),
+                err_ty: KaiType::String,
+                stmts: vec![let_(91, "$s", str_lit("log"))],
+                tail: Box::new(int_lit(7)),
+                releases: vec![],
+            },
+            ty: KaiType::Int32,
+            span: kai_diagnostics::Span::new(0, 0),
+        };
+        let heap = heap_table();
+        let mut fresh = FreshIds::default();
+        let mut scopes = Scopes::default();
+        scopes.push(); // function root
+        walk_expr(&heap, &mut catch_expr, &mut scopes, &mut fresh);
+        scopes.pop();
+        match catch_expr.kind {
+            TypedExprKind::Catch { releases, .. } => {
+                assert_eq!(releases.len(), 1, "{releases:?}");
+                assert_eq!(releases[0].0, LocalId(91));
+            }
+            other => panic!("expected catch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn capture_retains_are_codegen_keyed_not_pass_nodes() {
+        // Contract test: a closure literal with heap captures passes through
+        // WITHOUT Retain wrappers — codegen retains per capture type at env
+        // construction (compile-time keyed, §9.9a's one-mechanism rule).
+        let clo = TypedClosure {
+            param_ids: vec![],
+            body: block(vec![ret(Some(local_ref(3, KaiType::String)))]),
+            captures: vec![kai_tast::TypedCapture {
+                local: LocalId(3),
+                ty: KaiType::String,
+            }],
+        };
+        let mut e = TypedExpr {
+            kind: TypedExprKind::ClosureLit(Box::new(clo)),
+            ty: KaiType::Closure { params: vec![], ret: Box::new(KaiType::String) },
+            span: kai_diagnostics::Span::new(0, 0),
+        };
+        let heap = heap_table();
+        let mut fresh = FreshIds::default();
+        let mut scopes = Scopes::default();
+        scopes.push();
+        walk_expr(&heap, &mut e, &mut scopes, &mut fresh);
+        assert!(matches!(e.kind, TypedExprKind::ClosureLit(_)));
     }
 }

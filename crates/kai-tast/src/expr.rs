@@ -130,6 +130,9 @@ pub enum TypedExprKind {
         err_ty: KaiType,
         stmts: Vec<crate::stmt::TypedStmt>,
         tail: Box<TypedExpr>,
+        /// Locals declared by the catch block, released after `tail`
+        /// evaluates (ownership pass fills this; codegen emits them).
+        releases: Vec<(crate::symbol::LocalId, KaiType)>,
     },
     /// Call through a closure VALUE (`f(x)` where `f: Closure{..}`, v0.0.6):
     /// argument/result types already unified against the signature.

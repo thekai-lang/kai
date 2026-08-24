@@ -740,6 +740,7 @@ fn catch_expr(checker: &mut Checker, c: &CatchExpr) -> TypedExpr {
             err_ty,
             stmts,
             tail: Box::new(tail),
+            releases: Vec::new(),
         },
         ok_ty,
     )
