@@ -21,10 +21,20 @@ pub fn scan(cursor: &mut Cursor, first: u8) -> Option<Result<TokenKind, char>> {
         b'+' => pair_or_single(cursor, second, b'=', TokenKind::PlusEq, TokenKind::Plus),
         b'*' => pair_or_single(cursor, second, b'=', TokenKind::StarEq, TokenKind::Star),
         b'/' => pair_or_single(cursor, second, b'=', TokenKind::SlashEq, TokenKind::Slash),
+        // `??` is the coalesce operator; lone `?` is `T?` type sugar (v0.0.6).
+        b'?' => pair_or_single(
+            cursor,
+            second,
+            b'?',
+            TokenKind::QuestionQuestion,
+            TokenKind::Question,
+        ),
         b'%' => single(TokenKind::Percent),
-        // Lone '&' / '|' are errors; only '&&' / '||' exist.
+        // Lone '&' is an error; only '&&' exists. Lone '|' lexes as Pipe —
+        // the `catch |err|` delimiter (v0.0.6); the parser rejects it where
+        // a binary operator was expected.
         b'&' => require_double(cursor, second, b'&'),
-        b'|' => require_double(cursor, second, b'|'),
+        b'|' => pair_or_single(cursor, second, b'|', TokenKind::PipePipe, TokenKind::Pipe),
         _ => return None,
     };
 
@@ -105,7 +115,7 @@ mod tests {
             vec![Ok(TokenKind::AmpAmp), Ok(TokenKind::PipePipe)]
         );
         assert_eq!(scan_all("&"), vec![Err('&')]);
-        assert_eq!(scan_all("|"), vec![Err('|')]);
+        assert_eq!(scan_all("|"), vec![Ok(TokenKind::Pipe)]);
     }
 
     #[test]

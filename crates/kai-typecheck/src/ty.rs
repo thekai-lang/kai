@@ -27,5 +27,12 @@ pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
         },
         // `T[]`: the element type resolves like any other reference.
         Ty::Array(elem) => KaiType::Array(Box::new(resolve(checker, elem))),
+        // v0.0.6 types parse (P1); KaiType variants + unification land in P3.
+        // Reported without recursing so one bad annotation reports once.
+        Ty::Optional(_) | Ty::Result { .. } | Ty::Closure { .. } => {
+            let span = ty.span();
+            checker.error(error::not_yet_typed("this v0.0.6 type", span));
+            KaiType::Int32
+        }
     }
 }

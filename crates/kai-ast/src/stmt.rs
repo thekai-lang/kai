@@ -48,6 +48,11 @@ pub enum StmtKind {
     For(ForStmt),
     /// Bare nested block: its own variable scope (§9.3 shadowing rules).
     Block(Block),
+    /// `_ = expr;` (v0.0.6, §9.9b) — the sole explicit-discard form. The
+    /// expression evaluates normally under ordinary ownership rules; its
+    /// value simply isn't bound. This is also the legal way to discard an
+    /// `Optional`/`Result` without triggering the §9.9a diagnostic.
+    Discard(Expr),
     Expr(Expr),
 }
 

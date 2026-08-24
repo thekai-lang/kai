@@ -254,21 +254,31 @@ pub(crate) fn detect_cycles(
         let mut color = vec![Color::White; program.types.len()];
         let mut stack: Vec<usize> = Vec::new();
 
-        fn edges(
-            program: &Program,
-            table: &HashMap<String, usize>,
-            idx: usize,
-        ) -> Vec<usize> {
+        fn edges(program: &Program, table: &HashMap<String, usize>, idx: usize) -> Vec<usize> {
             program.types[idx]
                 .fields
                 .iter()
-                .filter_map(|field| match &field.ty {
-                    Ty::Named(ident) => table.get(&ident.name).copied(),
-                    // Array fields are pointers to heap headers (§9.1):
-                    // they never close a value-layout cycle.
-                    Ty::Array(_) => None,
-                })
+                .flat_map(|field| ty_edges(&field.ty, table))
                 .collect()
+        }
+
+        /// Which declared structs does this field type embed BY VALUE?
+        /// Arrays are pointers to heap headers (§9.1) and closure values are
+        /// fixed-size fat pointers (`{fn, env}`, v0.0.6) — neither closes a
+        /// value-layout cycle. Tagged unions (`Optional`/`Result`, §9.9a)
+        /// are inline aggregates: their payload sits inside the containing
+        /// value's layout, so they inherit the payload's edges.
+        fn ty_edges(ty: &Ty, table: &HashMap<String, usize>) -> Vec<usize> {
+            match ty {
+                Ty::Named(ident) => table.get(&ident.name).copied().into_iter().collect(),
+                Ty::Array(_) | Ty::Closure { .. } => Vec::new(),
+                Ty::Optional(inner) => ty_edges(inner, table),
+                Ty::Result { ok, err } => {
+                    let mut out = ty_edges(ok, table);
+                    out.extend(ty_edges(err, table));
+                    out
+                }
+            }
         }
 
         fn visit(

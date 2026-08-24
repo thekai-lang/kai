@@ -69,7 +69,17 @@ impl<'src> Lexer<'src> {
             b'"' => self.scan_string(start),
             b'-' => Some(self.scan_minus(start)),
             b'0'..=b'9' => Some(self.scan_number(byte, start)),
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.scan_word(start),
+            b'a'..=b'z' | b'A'..=b'Z' => self.scan_word(start),
+            b'_' => {
+                // v0.0.6 (§9.9b): a bare `_` lexes as its own token, reserved
+                // for the discard statement. `_foo` and friends stay ordinary
+                // identifiers.
+                if self.cursor.peek().is_some_and(is_word_continue) {
+                    self.scan_word(start)
+                } else {
+                    Some(self.token(TokenKind::Underscore, start))
+                }
+            }
             b'.' => {
                 // `.5` and friends: numbers must start with a digit, so a dot
                 // directly followed by one is a malformed number (recovery
@@ -118,8 +128,8 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    /// String literal (v0.0.5): `"..."` with exactly five escape sequences
-    /// (`\n`, `\t`, `\r`, `\"`, `\\`; §9.7). Anything else after a
+    /// String literal (v0.0.5): `"..."` with exactly six escape sequences
+    /// (`\n`, `\t`, `\r`, `\"`, `\\`, `\0`; §9.7). Anything else after a
     /// backslash is a lex error — never silent pass-through. `${` is plain
     /// text until interpolation is actually designed; newlines may not
     /// appear inside a literal (an unterminated string reports once).
@@ -143,13 +153,14 @@ impl<'src> Lexer<'src> {
                     Some(b'r') => content.push(b'\r'),
                     Some(b'"') => content.push(b'"'),
                     Some(b'\\') => content.push(b'\\'),
+                    Some(b'0') => content.push(0),
                     Some(other) => {
                         // Keep scanning so one bad escape doesn't cascade;
                         // the offending character stays literally.
                         content.push(other);
                         self.diagnostics.push(Diagnostic::error(
                             format!(
-                                "unknown escape sequence `\\{}` (expected one of n, t, r, quote, backslash)",
+                                "unknown escape sequence `\\{}` (expected one of n, t, r, 0, quote, backslash)",
                                 other as char
                             ),
                             Span::new(self.cursor.pos() - 2, self.cursor.pos()),
@@ -583,5 +594,86 @@ mod v0005_tests {
         assert_eq!(ks[2], TokenKind::In);
         assert!(matches!(ks[4], TokenKind::LBracket));
         assert!(ks.last().is_some_and(|k| matches!(k, TokenKind::Eof)));
+    }
+}
+
+#[cfg(test)]
+mod v0006_tests {
+    use super::*;
+
+    fn kinds(src: &str) -> Vec<TokenKind> {
+        lex(src).tokens.into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn bare_underscore_is_its_own_token() {
+        assert_eq!(kinds("_ = 1;"), vec![
+            TokenKind::Underscore, TokenKind::Eq, TokenKind::IntLit(1), TokenKind::Semi,
+            TokenKind::Eof
+        ]);
+    }
+
+    #[test]
+    fn prefixed_underscore_stays_an_ident() {
+        // §9.9b: only a BARE `_` is carved out of Ident.
+        assert_eq!(
+            kinds("_foo my_var __x"),
+            vec![
+                TokenKind::Ident("_foo".into()),
+                TokenKind::Ident("my_var".into()),
+                TokenKind::Ident("__x".into()),
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn some_none_catch_are_keywords() {
+        assert!(matches!(kinds("Some")[0], TokenKind::SomeKw));
+        assert!(matches!(kinds("None")[0], TokenKind::NoneKw));
+        assert!(matches!(kinds("catch")[0], TokenKind::Catch));
+        // Type names stay identifiers resolved by the type checker.
+        assert_eq!(
+            kinds("Result Optional"),
+            vec![
+                TokenKind::Ident("Result".into()),
+                TokenKind::Ident("Optional".into()),
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn question_tokens_maximal_munch() {
+        assert_eq!(
+            kinds("a ?? b"),
+            vec![
+                TokenKind::Ident("a".into()),
+                TokenKind::QuestionQuestion,
+                TokenKind::Ident("b".into()),
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("string?"),
+            vec![TokenKind::Ident("string".into()), TokenKind::Question, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn lone_pipe_lexes_but_double_wins() {
+        assert_eq!(
+            kinds("| ||"),
+            vec![TokenKind::Pipe, TokenKind::PipePipe, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn nul_escape_decodes() {
+        // `\0` joined the locked escape set (whitepaper v0.12).
+        match &lex(r#""a\0b""#).tokens[0].kind {
+            TokenKind::StrLit(text) => assert_eq!(text.as_bytes(), b"a\0b"),
+            other => panic!("expected string token, got {other:?}"),
+        }
     }
 }

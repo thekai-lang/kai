@@ -40,6 +40,15 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
             KaiType::String,
         ),
         ExprKind::Index(indexed) => index_expr(checker, indexed),
+        // v0.0.6 surface parses (P1); typing rules arrive with the P3 commit.
+        ExprKind::SomeLit(_)
+        | ExprKind::NoneLit
+        | ExprKind::Coalesce(_)
+        | ExprKind::Catch(_)
+        | ExprKind::ClosureLit(_) => {
+            checker.error(error::not_yet_typed("this v0.0.6 expression", expr.span));
+            poisoned()
+        }
         // Poisoned parser-recovery node. The program already failed upstream;
         // this defensive diagnostic keeps the phase contract explicit.
         ExprKind::Invalid => {

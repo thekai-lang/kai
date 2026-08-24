@@ -37,8 +37,131 @@ fn stmt(parser: &mut Parser) -> Stmt {
         TokenKind::If => if_stmt(parser),
         TokenKind::For => for_stmt(parser),
         TokenKind::LBrace => bare_block(parser),
+        // `_ = expr;` (v0.0.6, §9.9b) — `_` cannot start an expression, so
+        // this dispatch is unambiguous. Note `let _ = ...` needs no special
+        // case: binding() demands an Ident and finds Underscore instead.
+        TokenKind::Underscore => discard(parser),
         _ => expr_or_assign(parser),
     }
+}
+
+/// `_ = expr;` — the sole explicit-discard statement (§9.9b). The expression
+/// evaluates normally; only the binding is skipped. Typecheck decides whether
+/// the discarded type needed this escape hatch (Optional/Result diagnostics).
+fn discard(parser: &mut Parser) -> Stmt {
+    let start = parser.span_here();
+    parser.bump(); // `_`
+    parser.expect_simple(&TokenKind::Eq);
+    let value = expr::expr(parser);
+    let end = parser.expect_simple(&TokenKind::Semi);
+    Stmt {
+        span: Span::merge(start, end),
+        kind: StmtKind::Discard(value),
+    }
+}
+
+/// `'{' { Stmt } Expr '}'` — CatchBlock (v0.0.6, §3.4): ordinary statements,
+/// then exactly ONE mandatory trailing value expression without `;`. This
+/// narrow shape exists only for `catch`; general blocks stay statement-only
+/// (`Block ::= '{' { Stmt } '}'`), so block-as-expression never leaks into
+/// the rest of the language.
+///
+/// Disambiguation: block/if/for/binding/discard start with dedicated tokens,
+/// so they are unambiguous statements. Anything else is expression-shaped —
+/// it is a statement iff an assign-op or `;` follows, otherwise it IS the
+/// mandatory tail. Same rules as `expr_or_assign`, just two-way splitting
+/// instead of demanding the semicolon up front.
+pub(crate) fn catch_block(parser: &mut Parser) -> (Vec<Stmt>, Expr, Span) {
+    let start = parser.span_here();
+    parser.expect_simple(&TokenKind::LBrace);
+
+    let mut stmts = Vec::new();
+    let mut tail: Option<Expr> = None;
+    while tail.is_none() {
+        match parser.peek().kind.clone() {
+            TokenKind::RBrace | TokenKind::Eof => {
+                parser.diagnostics.push(error::custom(
+                    "a catch block must end with a value expression",
+                    parser.span_here(),
+                ));
+                break;
+            }
+            // Dedicated statement starters: never the tail.
+            TokenKind::Return
+            | TokenKind::Let
+            | TokenKind::Var
+            | TokenKind::If
+            | TokenKind::For
+            | TokenKind::LBrace => {
+                let s = stmt(parser);
+                stmts.push(s);
+            }
+            TokenKind::Underscore => {
+                let s = discard(parser);
+                stmts.push(s);
+            }
+            _ => {
+                // Expression-shaped: statement (assign-op or `;` follows) or tail.
+                let first = expr::expr(parser);
+                if let Some(op) = try_assign_op(parser) {
+                    let start_span = first.span;
+                    let value = expr::expr(parser);
+                    let end = parser.expect_simple(&TokenKind::Semi);
+                    let span = Span::merge(start_span, end);
+                    let assigned = match place_from(&first) {
+                        Some(target) => target,
+                        None => {
+                            parser
+                                .diagnostics
+                                .push(error::custom("invalid assignment target", start_span));
+                            continue;
+                        }
+                    };
+                    stmts.push(Stmt {
+                        span,
+                        kind: StmtKind::Assign(AssignStmt {
+                            target: assigned,
+                            op,
+                            value,
+                            span,
+                        }),
+                    });
+                    continue;
+                }
+                if parser.eat_simple(&TokenKind::Semi) {
+                    // Ordinary expression statement — same call-only rule as
+                    // the top-level statement grammar (§6).
+                    let start_span = first.span;
+                    if !matches!(first.kind, ExprKind::Call(_) | ExprKind::Invalid) {
+                        parser.diagnostics.push(error::custom(
+                            "only function calls can appear as expression statements",
+                            start_span,
+                        ));
+                    }
+                    stmts.push(Stmt {
+                        kind: StmtKind::Expr(first),
+                        span: start_span,
+                    });
+                    continue;
+                }
+                // No operator, no semicolon: this is the mandatory tail.
+                if parser.peek().kind != TokenKind::RBrace && !parser.at_eof() {
+                    parser.diagnostics.push(error::custom(
+                        "a catch block must end with a value expression",
+                        first.span,
+                    ));
+                }
+                tail = Some(first);
+            }
+        }
+    }
+
+    let end = parser.expect_simple(&TokenKind::RBrace);
+    let tail = tail.unwrap_or(Expr {
+        kind: ExprKind::Invalid,
+        span: end,
+    });
+    (stmts, tail, Span::merge(start, end))
 }
 
 /// A bare `{ ... }` block statement: introduces a fresh variable scope.

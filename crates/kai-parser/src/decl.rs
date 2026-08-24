@@ -94,7 +94,8 @@ fn fn_decl(parser: &mut Parser) -> FnDecl {
 /// `( [ [mut] name : Type { , [mut] name : Type } ] )`
 ///
 /// The arrow return type is mandatory in Kai (§9.3): `-> unit` for procedures.
-fn params(parser: &mut Parser) -> Vec<Param> {
+/// Shared by function declarations and closure literals (v0.0.6).
+pub(crate) fn params(parser: &mut Parser) -> Vec<Param> {
     parser.expect_simple(&TokenKind::LParen);
     let mut out = Vec::new();
 

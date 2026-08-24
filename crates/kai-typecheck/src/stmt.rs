@@ -34,6 +34,10 @@ fn lower_stmt(checker: &mut Checker, stmt: &Stmt, return_type: &KaiType) -> Opti
         StmtKind::Assign(a) => assign(checker, &a.target, a.op, &a.value, a.span),
         StmtKind::If(i) => if_stmt(checker, i, return_type),
         StmtKind::Block(b) => Some(TypedStmt::Block(lower_block(checker, b, return_type))),
+        // `_ = expr;` (§9.9b): the expression evaluates under ordinary
+        // rules; only the binding is skipped. Interim P1 form — the
+        // Optional/Result discard diagnostic joins in P3.
+        StmtKind::Discard(value) => Some(TypedStmt::Expr(expr::lower(checker, value, None))),
         StmtKind::Expr(e) => Some(TypedStmt::Expr(expr::lower(checker, e, None))),
         StmtKind::For(f) => for_stmt(checker, f),
     }

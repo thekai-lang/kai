@@ -13,8 +13,9 @@ pub mod use_decl;
 
 pub use assign::{AssignOp, AssignTarget, PlaceStep};
 pub use expr::{
-    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr, FieldInit,
-    FloatLit, IndexExpr, IntLit, StrLitExpr, StructLitExpr, UnaryExpr, UnaryOp,
+    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, CatchExpr, ClosureLitExpr, CoalesceExpr, Expr,
+    ExprKind, FieldAccessExpr, FieldInit, FloatLit, IndexExpr, IntLit, SomeLitExpr, StrLitExpr,
+    StructLitExpr, UnaryExpr, UnaryOp,
 };
 pub use fn_decl::FnDecl;
 pub use ident::Ident;

@@ -225,3 +225,12 @@ pub(crate) fn assign_type_mismatch(place: &KaiType, found: KaiType, span: Span) 
         span,
     )
 }
+
+// -- v0.0.6 interim ------------------------------------------------------------
+// P1 (frontend) accepts the new surface; full typing rules land with P3.
+// Until then these nodes parse but typecheck rejects them explicitly instead
+// of crashing on unhandled variants.
+
+pub(crate) fn not_yet_typed(what: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(format!("{what} is not typed yet (v0.0.6 typing lands next)"), span)
+}

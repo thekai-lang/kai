@@ -24,6 +24,11 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         // v0.0.5 keywords. `for`/`in` open the array iteration loop (§9.9).
         "for" => Some(TokenKind::For),
         "in" => Some(TokenKind::In),
+        // v0.0.6 keywords (§9.9a/§9.9b). `Some`/`None` construct an Optional;
+        // `catch` is a postfix operator on Result.
+        "Some" => Some(TokenKind::SomeKw),
+        "None" => Some(TokenKind::NoneKw),
+        "catch" => Some(TokenKind::Catch),
         _ => None,
     }
 }

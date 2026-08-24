@@ -4,9 +4,11 @@
 
 use crate::error;
 use crate::parser::Parser;
+use crate::{decl, stmt, ty as ty_parser};
 use kai_ast::{
-    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr, FieldInit,
-    FloatLit, IndexExpr, IntLit, StrLitExpr, StructLitExpr, UnaryExpr, UnaryOp,
+    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, ClosureLitExpr, CatchExpr, CoalesceExpr, Expr,
+    ExprKind, FieldAccessExpr, FieldInit, FloatLit, IndexExpr, IntLit, SomeLitExpr, StrLitExpr,
+    StructLitExpr, UnaryExpr, UnaryOp,
 };
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
@@ -66,10 +68,26 @@ left_assoc_level!(multiplicative, unary,
     TokenKind::Slash => BinaryOp::Div,
     TokenKind::Percent => BinaryOp::Mod);
 
-/// `??` is right-associative; it arrives with Optionals (v0.0.5). The level
-/// exists in the chain so its position is explicit.
+/// `??` is right-associative (§9.9a): `a ?? b ?? c` reads `a ?? (b ?? c)`.
+/// The chain parses iteratively (collect, then fold from the right) so a
+/// long coalesce chain never grows parser recursion.
 fn coalesce(parser: &mut Parser) -> Expr {
-    equality(parser)
+    let mut parts = vec![equality(parser)];
+    while parser.eat_simple(&TokenKind::QuestionQuestion) {
+        parts.push(equality(parser));
+    }
+    let mut rhs = parts.pop().expect("at least one operand");
+    while let Some(lhs) = parts.pop() {
+        let span = Span::merge(lhs.span, rhs.span);
+        rhs = Expr {
+            span,
+            kind: ExprKind::Coalesce(CoalesceExpr {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            }),
+        };
+    }
+    rhs
 }
 
 /// Prefix operators are collected iteratively (no parser recursion), but each
@@ -180,6 +198,25 @@ fn postfix(parser: &mut Parser) -> Expr {
                     }),
                 };
             }
+            TokenKind::Catch => {
+                // `base catch |err| { stmts.. tail }` (v0.0.6, §3.4). Postfix
+                // level: binds tighter than `??` and the binary operators.
+                parser.bump(); // `catch`
+                parser.expect_simple(&TokenKind::Pipe);
+                let err_binding = parser.expect_ident("an error variable name");
+                parser.expect_simple(&TokenKind::Pipe);
+                let (catch_stmts, tail, block_span) = stmt::catch_block(parser);
+                let span = Span::merge(e.span, block_span);
+                e = Expr {
+                    span,
+                    kind: ExprKind::Catch(CatchExpr {
+                        base: Box::new(e),
+                        err_binding,
+                        stmts: catch_stmts,
+                        tail: Box::new(tail),
+                    }),
+                }
+            }
             _ => break,
         }
     }
@@ -227,6 +264,48 @@ fn primary(parser: &mut Parser) -> Expr {
             value: false,
             span: token.span
         }),
+        TokenKind::NoneKw => leaf!(ExprKind::NoneLit),
+        TokenKind::SomeKw => {
+            // `Some(expr)` — Optional construction (v0.0.6, §9.9a).
+            parser.bump(); // `Some`
+            parser.expect_simple(&TokenKind::LParen);
+            let value = expr(parser);
+            let end = parser.expect_simple(&TokenKind::RParen);
+            Expr {
+                span: Span::merge(token.span, end),
+                kind: ExprKind::SomeLit(SomeLitExpr {
+                    value: Box::new(value),
+                }),
+            }
+        }
+        TokenKind::Fn => {
+            // Closure literal (v0.0.6, §3.5): `fn(params) -> T { body }`.
+            // Top-level `fn` declarations are handled by decl.rs dispatch;
+            // in expression position this token can only start a closure.
+            parser.bump(); // `fn`
+            let params = decl::params(parser);
+            parser.expect_simple(&TokenKind::Arrow);
+            let ret = ty_parser::ty(parser);
+            let body = stmt::block(parser);
+            Expr {
+                span: Span::merge(token.span, body.span),
+                kind: ExprKind::ClosureLit(ClosureLitExpr { params, ret, body }),
+            }
+        }
+        TokenKind::Pipe => {
+            // Lone `|` lexes fine (catch delimiter); reaching PRIMARY means
+            // operator position — never valid. One targeted message instead
+            // of a generic expected-expression cascade.
+            parser.diagnostics.push(error::custom(
+                "`|` is not an operator (did you mean `||`, or is a `catch` block missing its `|`?)",
+                token.span,
+            ));
+            parser.bump();
+            Expr {
+                kind: ExprKind::Invalid,
+                span: token.span,
+            }
+        }
         TokenKind::Ident(name) => {
             // Consume the identifier, then its dotted continuation (the
             // QualifiedName shape — `p.x`, `math.Point`, bare `Point`).

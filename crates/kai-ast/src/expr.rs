@@ -1,3 +1,7 @@
+use crate::ident::Ident;
+use crate::param::Param;
+use crate::stmt::{Block, Stmt};
+use crate::ty::Ty;
 use kai_diagnostics::Span;
 
 /// Binary operators. Precedence lives in the parser; this enum only carries
@@ -127,6 +131,41 @@ pub struct IndexExpr {
     pub rbracket: Span,
 }
 
+/// `Some(expr)` — Optional construction (v0.0.6, §9.9a).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SomeLitExpr {
+    pub value: Box<Expr>,
+}
+
+/// `lhs ?? rhs` (v0.0.6, §9.9a) — right-associative; the right side only
+/// evaluates when the left side is `None` (lazy lowering).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoalesceExpr {
+    pub lhs: Box<Expr>,
+    pub rhs: Box<Expr>,
+}
+
+/// `base catch |err| { stmts.. tail }` (v0.0.6, §3.4) — Result-only error
+/// branch. The block is a CatchBlock: ordinary statements, then ONE
+/// mandatory trailing value expression without `;`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatchExpr {
+    pub base: Box<Expr>,
+    pub err_binding: Ident,
+    /// Statements before the trailing value expression.
+    pub stmts: Vec<Stmt>,
+    pub tail: Box<Expr>,
+}
+
+/// `fn(params) -> ret { body }` — closure literal (v0.0.6, §3.5). The value
+/// syntax keeps its `fn` head; only the closure TYPE dropped it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureLitExpr {
+    pub params: Vec<Param>,
+    pub ret: Ty,
+    pub body: Block,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     IntLit(IntLit),
@@ -144,13 +183,20 @@ pub enum ExprKind {
     ArrayLit(ArrayLitExpr),
     Index(IndexExpr),
     StrLit(StrLitExpr),
+    // v0.0.6 (§9.9a/§3.4/§3.5)
+    SomeLit(SomeLitExpr),
+    /// Bare `None` — the payload-less Optional constructor. It carries no
+    /// type information, so a context type must fix `T` (typecheck rule,
+    /// same pattern as the empty array literal).
+    NoneLit,
+    Coalesce(CoalesceExpr),
+    Catch(CatchExpr),
+    ClosureLit(ClosureLitExpr),
     /// Poisoned node produced only by parser error recovery (e.g. an
     /// expression nested past the recursion budget). Downstream phases treat
     /// it as an error marker, never as compilable code.
     Invalid,
 }
-
-use crate::ident::Ident;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {

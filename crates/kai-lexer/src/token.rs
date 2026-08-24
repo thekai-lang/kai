@@ -16,6 +16,16 @@ pub enum TokenKind {
     Public,
     For,
     In,
+    // v0.0.6 keywords. `Some`/`None` construct an Optional value (§9.9a);
+    // `catch` is the Result error-branch postfix operator. `Result` and
+    // `Optional` stay plain identifiers — they only ever name types, so
+    // they resolve like `int32` does.
+    SomeKw,
+    NoneKw,
+    Catch,
+    /// Bare `_`, carved out of `Ident` as of v0.0.6 (§9.9b): reserved
+    /// exclusively for the discard statement, never a binding name.
+    Underscore,
     Ident(String),
     IntLit(u64),
     FloatLit(f64),
@@ -42,6 +52,9 @@ pub enum TokenKind {
     // Logic
     AmpAmp,
     PipePipe,
+    /// Lone `|` — only valid as the `catch |err|` delimiter (v0.0.6); the
+    /// parser rejects it anywhere a binary operator was expected.
+    Pipe,
     Bang,
     // Punctuation
     Arrow,
@@ -55,6 +68,9 @@ pub enum TokenKind {
     Colon,
     LBracket,
     RBracket,
+    // v0.0.6: `??` coalesce and the `?` of `T?` type sugar.
+    QuestionQuestion,
+    Question,
     Eof,
 }
 
@@ -86,6 +102,10 @@ impl TokenKind {
             TokenKind::Public => "`public`".into(),
             TokenKind::For => "`for`".into(),
             TokenKind::In => "`in`".into(),
+            TokenKind::SomeKw => "`Some`".into(),
+            TokenKind::NoneKw => "`None`".into(),
+            TokenKind::Catch => "`catch`".into(),
+            TokenKind::Underscore => "`_`".into(),
             TokenKind::True | TokenKind::False => "boolean literal".into(),
             TokenKind::Ident(name) => format!("identifier `{name}`"),
             TokenKind::IntLit(value) => format!("integer literal `{value}`"),
@@ -109,6 +129,7 @@ impl TokenKind {
             TokenKind::Ge => "`>=`".into(),
             TokenKind::AmpAmp => "`&&`".into(),
             TokenKind::PipePipe => "`||`".into(),
+            TokenKind::Pipe => "`|`".into(),
             TokenKind::Bang => "`!`".into(),
             TokenKind::Arrow => "`->`".into(),
             TokenKind::Comma => "`,`".into(),
@@ -121,6 +142,8 @@ impl TokenKind {
             TokenKind::Colon => "`:`".into(),
             TokenKind::LBracket => "`[`".into(),
             TokenKind::RBracket => "`]`".into(),
+            TokenKind::QuestionQuestion => "`??`".into(),
+            TokenKind::Question => "`?`".into(),
             TokenKind::Eof => "end of file".into(),
         }
     }
