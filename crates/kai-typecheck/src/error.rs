@@ -226,11 +226,82 @@ pub(crate) fn assign_type_mismatch(place: &KaiType, found: KaiType, span: Span) 
     )
 }
 
-// -- v0.0.6 interim ------------------------------------------------------------
-// P1 (frontend) accepts the new surface; full typing rules land with P3.
-// Until then these nodes parse but typecheck rejects them explicitly instead
-// of crashing on unhandled variants.
+// -- v0.0.6 (§9.9a/§9.10) -------------------------------------------------------
 
-pub(crate) fn not_yet_typed(what: &str, span: Span) -> Diagnostic {
-    Diagnostic::error(format!("{what} is not typed yet (v0.0.6 typing lands next)"), span)
+pub(crate) fn none_needs_annotation(span: Span) -> Diagnostic {
+    Diagnostic::error("bare `None` requires a type annotation to fix its payload", span)
+}
+
+pub(crate) fn coalesce_on_non_optional(found: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("`??` needs an `Optional` on the left, found `{found}`"),
+        span,
+    )
+}
+
+pub(crate) fn coalesce_default_mismatch(expected: KaiType, found: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("`??` fallback must be `{expected}`, found `{found}`"),
+        span,
+    )
+}
+
+pub(crate) fn unwrap_or_receiver(found: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("`unwrap_or` expects an `Optional` or `Result` receiver, found `{found}`"),
+        span,
+    )
+}
+
+pub(crate) fn unwrap_or_default_mismatch(expected: KaiType, found: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("`unwrap_or` default must be `{expected}`, found `{found}`"),
+        span,
+    )
+}
+
+pub(crate) fn unwrap_or_arity(found: usize, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("`unwrap_or` takes exactly one argument, found {found}"),
+        span,
+    )
+}
+
+pub(crate) fn catch_on_non_result(found: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("`catch` handles `Result` values only, found `{found}` (Optionals use `??`)"),
+        span,
+    )
+}
+
+pub(crate) fn catch_tail_mismatch(expected: KaiType, found: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("catch block must produce `{expected}`, found `{found}`"),
+        span,
+    )
+}
+
+pub(crate) fn closure_needs_return(ret: KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("closure with return type `{ret}` must end in a value or return"),
+        span,
+    )
+}
+
+pub(crate) fn closure_capture_banned(name: &str, ty: &KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!(
+            "cannot capture `{name}`: `{ty}` is or contains a closure — reference cycles are rejected (§9.10)"
+        ),
+        span,
+    )
+}
+
+pub(crate) fn discard_tagged(ty: &KaiType, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!(
+            "discarding a `{ty}` silently hides its state — write `_ = expr;` to discard explicitly"
+        ),
+        span,
+    )
 }

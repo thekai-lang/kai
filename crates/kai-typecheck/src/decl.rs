@@ -181,7 +181,7 @@ fn bind_params(checker: &mut Checker, decl: &kai_ast::FnDecl) -> Vec<kai_tast::T
 
 /// A block definitely returns when its last statement is a `return`, or an
 /// `if/else` whose both arms definitely return (§9.4).
-fn definitely_returns(block: &TypedBlock) -> bool {
+pub(crate) fn definitely_returns(block: &TypedBlock) -> bool {
     match block.stmts.last() {
         Some(kai_tast::TypedStmt::Return(_)) => true,
         Some(kai_tast::TypedStmt::If(if_)) => {

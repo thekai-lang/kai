@@ -129,9 +129,41 @@ fn seed_expr(expr: &TypedExpr, max: &mut u32) {
                 seed_expr(a, max);
             }
         }
+        TypedExprKind::CallIndirect { callee, args } => {
+            seed_expr(callee, max);
+            for a in args {
+                seed_expr(a, max);
+            }
+        }
+        // v0.0.6: children may reference locals; the aggregate nodes
+        // themselves carry no LocalRef.
+        TypedExprKind::SomeLit(inner) => seed_expr(inner, max),
+        TypedExprKind::Coalesce { lhs, rhs }
+        | TypedExprKind::UnwrapOr {
+            receiver: lhs,
+            default: rhs,
+        } => {
+            seed_expr(lhs, max);
+            seed_expr(rhs, max);
+        }
+        TypedExprKind::Catch { base, stmts, tail, .. } => {
+            seed_expr(base, max);
+            for s in stmts {
+                seed_stmts(std::slice::from_ref(s), max);
+            }
+            seed_expr(tail, max);
+        }
+        // Closure bodies/captures are scoped to the literal; their ids were
+        // seeded while walking it (captures reference pre-existing locals).
+        TypedExprKind::ClosureLit(clo) => {
+            for cap in &clo.captures {
+                *max = (*max).max(cap.local.0);
+            }
+        }
         TypedExprKind::IntLit(_)
         | TypedExprKind::FloatLit(_)
         | TypedExprKind::BoolLit(_)
+        | TypedExprKind::NoneLit
         | TypedExprKind::StrLit { .. }
         | TypedExprKind::Invalid => {}
     }
@@ -175,6 +207,14 @@ impl HeapBearing {
         match ty {
             KaiType::String | KaiType::Array(_) => true,
             KaiType::Struct(id) => self.struct_heap[id.0 as usize],
+            // Tagged unions (§9.9a): heap-bearing iff the ACTIVE payload can
+            // be — for Result that means either branch.
+            KaiType::Optional(inner) => self.is(inner),
+            KaiType::Result { ok, err } => self.is(ok) || self.is(err),
+            // v0.13: closures are unconditionally heap-bearing regardless of
+            // capture — mirrors array's rule, never an optimization-driven
+            // exception.
+            KaiType::Closure { .. } => true,
             KaiType::Int32
             | KaiType::Int64
             | KaiType::Float64
@@ -191,8 +231,14 @@ fn is_owned_temp(expr: &TypedExpr) -> bool {
         TypedExprKind::StrLit { .. }
         | TypedExprKind::ArrayLit { .. }
         | TypedExprKind::StructLit { .. }
-        | TypedExprKind::Call { .. } => true,
+        | TypedExprKind::Call { .. }
+        // `Some(x)` builds a fresh tagged aggregate (§9.9a): its payload is
+        // retained at construction when heap-bearing.
+        | TypedExprKind::SomeLit(_) => true,
         // Everything else borrows: bindings, projections, scalars, poison.
+        // Coalesce/UnwrapOr/Catch forward a payload chosen at runtime —
+        // precise tag-guarded handling lands with the P4 commit; treated as
+        // borrows until then.
         _ => false,
     }
 }
@@ -558,6 +604,36 @@ fn walk_expr(heap: &HeapBearing, expr: &mut TypedExpr) {
                 walk_expr(heap, a);
             }
         }
+        // Interim like Call: the callee VALUE is walked; capture/env retain
+        // and indirect-call argument rules land with P4/P5.
+        TypedExprKind::CallIndirect { callee, args } => {
+            walk_expr(heap, callee);
+            for a in args.iter_mut() {
+                walk_expr(heap, a);
+            }
+        }
+        // -- v0.0.6 ------------------------------------------------------
+        // Interim descent: children keep their existing treatment; the
+        // tag-guarded payload rules land with the P4 commit.
+        TypedExprKind::SomeLit(value) => walk_expr(heap, value),
+        TypedExprKind::NoneLit => {}
+        TypedExprKind::Coalesce { lhs, rhs }
+        | TypedExprKind::UnwrapOr {
+            receiver: lhs,
+            default: rhs,
+        } => {
+            walk_expr(heap, lhs);
+            walk_expr(heap, rhs);
+        }
+        // Interim: catch statements are rewritten only by the P4 commit —
+        // walk_stmt needs the scope/fresh context that expressions don't
+        // carry. Base and tail still descend.
+        TypedExprKind::Catch { base, tail, .. } => {
+            walk_expr(heap, base);
+            walk_expr(heap, tail);
+        }
+        // Captures are retained INTO the environment at construction (P4).
+        TypedExprKind::ClosureLit(_) => {}
     }
 }
 

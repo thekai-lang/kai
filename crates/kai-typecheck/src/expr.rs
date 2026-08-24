@@ -5,12 +5,17 @@
 
 use crate::checker::Checker;
 use crate::error;
+use crate::scope::DeclareOutcome;
+use crate::stmt;
 use kai_ast::{
-    ArrayLitExpr, BinaryExpr, BinaryOp as AstBinaryOp, CallExpr, Expr, ExprKind, FieldAccessExpr,
-    Ident, IndexExpr, StructLitExpr, UnaryOp,
+    ArrayLitExpr, BinaryExpr, BinaryOp as AstBinaryOp, CallExpr, CatchExpr, CoalesceExpr, Expr,
+    ExprKind, FieldAccessExpr, Ident, IndexExpr, StructLitExpr, UnaryOp,
 };
 use kai_diagnostics::Span;
-use kai_tast::{BinaryOp, FunctionId, KaiType, StructId, TypedExpr, TypedExprKind};
+use kai_tast::{
+    BinaryOp, FunctionId, KaiType, LocalId, StructId, TypedCapture, TypedClosure, TypedExpr,
+    TypedExprKind,
+};
 
 /// Lower an AST expression to TAST. `expected` is a width hint for integer
 /// literals; it never enables implicit conversions.
@@ -40,15 +45,28 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
             KaiType::String,
         ),
         ExprKind::Index(indexed) => index_expr(checker, indexed),
-        // v0.0.6 surface parses (P1); typing rules arrive with the P3 commit.
-        ExprKind::SomeLit(_)
-        | ExprKind::NoneLit
-        | ExprKind::Coalesce(_)
-        | ExprKind::Catch(_)
-        | ExprKind::ClosureLit(_) => {
-            checker.error(error::not_yet_typed("this v0.0.6 expression", expr.span));
-            poisoned()
+        // v0.0.6 (§9.9a/§9.10)
+        ExprKind::SomeLit(some) => {
+            let value = lower(checker, &some.value, None);
+            let ty = KaiType::Optional(Box::new(value.ty.clone()));
+            TypedExpr::new(TypedExprKind::SomeLit(Box::new(value)), ty)
         }
+        ExprKind::NoneLit => {
+            // `None` carries no payload to infer from: a context type must
+            // fix T, exactly like the empty array literal (§9.7's rule).
+            match expected {
+                Some(KaiType::Optional(payload)) => {
+                    TypedExpr::new(TypedExprKind::NoneLit, KaiType::Optional(payload))
+                }
+                _ => {
+                    checker.error(error::none_needs_annotation(expr.span));
+                    poisoned()
+                }
+            }
+        }
+        ExprKind::Coalesce(c) => coalesce_expr(checker, c),
+        ExprKind::Catch(c) => catch_expr(checker, c),
+        ExprKind::ClosureLit(clo) => closure_literal(checker, clo),
         // Poisoned parser-recovery node. The program already failed upstream;
         // this defensive diagnostic keeps the phase contract explicit.
         ExprKind::Invalid => {
@@ -290,6 +308,17 @@ fn lhs_placeholder_ty(lhs: KaiType) -> KaiType {
 /// module. Functions and types share names freely — namespaces are separate
 /// — so a struct name is NOT a valid callee.
 fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
+    // `.unwrap_or(default)` on a tagged-union receiver is the builtin
+    // combinator (§9.9a) — resolved HERE, from an ordinary FieldAccess+Call
+    // shape, exactly as the grammar note promises. An import alias named
+    // `unwrap_or` still wins: module calls keep their resolution path.
+    if let ExprKind::FieldAccess(access) = &call.callee.kind
+        && access.field.name == "unwrap_or"
+        && !is_import_alias(checker, &access.base)
+    {
+        return unwrap_or_builtin(checker, access, call, span);
+    }
+
     let func_id = match &call.callee.kind {
         ExprKind::Ident(ident) => match checker.local_fns().get(&ident.name) {
             Some(&idx) => FunctionId(idx as u32),
@@ -299,12 +328,25 @@ fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
             }
         },
         ExprKind::FieldAccess(access) => {
+            if !is_import_alias(checker, &access.base)
+                && access.field.name != "unwrap_or"
+            {
+                // Maybe a closure stored in a field / reached by projection.
+                if let Some(t) = try_closure_call(checker, call, span) {
+                    return t;
+                }
+            }
             match qualified_callee(checker, access) {
                 Some(id) => id,
                 None => return poisoned(),
             }
         }
         _ => {
+            // Not a named function: maybe a closure VALUE. Typing supports
+            // the call; emission goes indirect (P5).
+            if let Some(t) = try_closure_call(checker, call, span) {
+                return t;
+            }
             checker.error(error::indirect_call(span));
             return poisoned();
         }
@@ -619,5 +661,349 @@ fn index_expr(checker: &mut Checker, indexed: &IndexExpr) -> TypedExpr {
             index: Box::new(index),
         },
         elem_ty,
+    )
+}
+
+// -- v0.0.6 (§9.9a/§9.10) -------------------------------------------------------
+
+/// `lhs ?? rhs` — lhs must be `Optional<T>`; the fallback unifies with the
+/// payload `T`, which is also the result type. Laziness is a lowering
+/// concern; typing only fixes the shapes.
+fn coalesce_expr(checker: &mut Checker, c: &CoalesceExpr) -> TypedExpr {
+    let lhs = lower(checker, &c.lhs, None);
+    let payload = match lhs.ty.clone() {
+        KaiType::Optional(t) => *t,
+        other => {
+            checker.error(error::coalesce_on_non_optional(other, c.lhs.span));
+            return poisoned();
+        }
+    };
+    let rhs = lower(checker, &c.rhs, Some(payload.clone()));
+    if rhs.ty != payload {
+        checker.error(error::coalesce_default_mismatch(
+            payload.clone(),
+            rhs.ty.clone(),
+            c.rhs.span,
+        ));
+    }
+    TypedExpr::new(
+        TypedExprKind::Coalesce {
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        },
+        payload,
+    )
+}
+
+/// `base catch |err| { stmts.. tail }` — base must be `Result<T, E>`; the
+/// binding views `E` (a borrow of the Err payload), the block must produce
+/// `T`. The binding lives in its own scope for exactly the catch block.
+fn catch_expr(checker: &mut Checker, c: &CatchExpr) -> TypedExpr {
+    let base = lower(checker, &c.base, None);
+    let (ok_ty, err_ty) = match base.ty.clone() {
+        KaiType::Result { ok, err } => (*ok, *err),
+        other => {
+            checker.error(error::catch_on_non_result(other, c.base.span));
+            return poisoned();
+        }
+    };
+
+    checker.locals.push_scope();
+    // Duplicate-in-scope is impossible in a fresh scope; shadowing an outer
+    // name is ordinary scoping and allowed.
+    checker
+        .locals
+        .declare(&c.err_binding.name, err_ty.clone(), false);
+    let Some(err_info) = checker.locals.lookup(&c.err_binding.name) else {
+        unreachable!("just declared")
+    };
+    let ret_hint = ok_ty.clone();
+    let stmts: Vec<_> = c
+        .stmts
+        .iter()
+        .filter_map(|s| stmt::lower_stmt(checker, s, &ret_hint))
+        .collect();
+    let tail = lower(checker, &c.tail, Some(ok_ty.clone()));
+    checker.locals.pop_scope();
+
+    if tail.ty != ok_ty {
+        checker.error(error::catch_tail_mismatch(
+            ok_ty.clone(),
+            tail.ty.clone(),
+            c.tail.span,
+        ));
+    }
+    TypedExpr::new(
+        TypedExprKind::Catch {
+            base: Box::new(base),
+            err_binding: err_info.id,
+            err_ty,
+            stmts,
+            tail: Box::new(tail),
+        },
+        ok_ty,
+    )
+}
+
+fn closure_literal(checker: &mut Checker, clo: &kai_ast::ClosureLitExpr) -> TypedExpr {
+    let boundary = checker.locals.next_id();
+
+    checker.locals.push_scope();
+    let mut params_typed = Vec::with_capacity(clo.params.len());
+    for param in &clo.params {
+        let ty = crate::ty::resolve(checker, &param.ty);
+        if let DeclareOutcome::Fresh(info) =
+            checker.locals.declare(&param.name.name, ty, param.mutable)
+        {
+            params_typed.push((info.id, info.ty.clone()));
+        }
+    }
+    let ret = crate::ty::resolve(checker, &clo.ret);
+    let body = stmt::lower_block(checker, &clo.body, &ret);
+    checker.locals.pop_scope();
+
+    if ret != KaiType::Unit && !crate::decl::definitely_returns(&body) {
+        checker.error(error::closure_needs_return(ret.clone(), clo.body.span));
+    }
+
+    // Capture analysis over the TYPED body: LocalRef ids below the boundary
+    // point outside this scope. Nested closures manage their own captures.
+    let mut refs = Vec::new();
+    collect_local_refs(&body, &mut refs);
+    let mut captures: Vec<TypedCapture> = Vec::new();
+    for id in refs {
+        if id.0 >= boundary || captures.iter().any(|c| c.local == id) {
+            continue;
+        }
+        let Some(info) = checker.locals.info_of(id) else {
+            continue;
+        };
+        if capture_poisoned(checker, &info.ty) {
+            checker.error(error::closure_capture_banned(
+                &checker.locals.name_of(id),
+                &info.ty,
+                clo.body.span,
+            ));
+            break;
+        }
+        captures.push(TypedCapture {
+            local: id,
+            ty: info.ty.clone(),
+        });
+    }
+
+    let ty = KaiType::Closure {
+        params: params_typed.iter().map(|(_, t)| t.clone()).collect(),
+        ret: Box::new(ret),
+    };
+    TypedExpr::new(
+        TypedExprKind::ClosureLit(Box::new(TypedClosure {
+            param_ids: params_typed.into_iter().map(|(id, _)| id).collect(),
+            body,
+            captures,
+        })),
+        ty,
+    )
+}
+
+/// Does this type contain a closure type through any member path? Structs
+/// consult the resolver's §9.10 poisoning table (transitively precomputed).
+pub(crate) fn capture_poisoned(checker: &Checker, ty: &KaiType) -> bool {
+    match ty {
+        KaiType::Closure { .. } => true,
+        KaiType::Array(elem) => capture_poisoned(checker, elem),
+        KaiType::Optional(inner) => capture_poisoned(checker, inner),
+        KaiType::Result { ok, err } => {
+            capture_poisoned(checker, ok) || capture_poisoned(checker, err)
+        }
+        KaiType::Struct(id) => checker
+            .resolution
+            .closure_bearing
+            .get(id.0 as usize)
+            .copied()
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// First-use-order LocalRef collection. Nested closures are NOT descended:
+/// their bodies belong to their own environments.
+fn collect_local_refs(block: &kai_tast::TypedBlock, out: &mut Vec<LocalId>) {
+    for s in &block.stmts {
+        collect_refs_stmt(s, out);
+    }
+}
+
+fn collect_refs_stmt(s: &kai_tast::TypedStmt, out: &mut Vec<LocalId>) {
+    use kai_tast::TypedStmt;
+    match s {
+        TypedStmt::Let(l) => collect_refs_expr(&l.init, out),
+        TypedStmt::Assign(a) => {
+            for step in &a.path {
+                if let kai_tast::TypedPlaceStep::Index(index) = step {
+                    collect_refs_expr(index, out);
+                }
+            }
+            collect_refs_expr(&a.value, out);
+        }
+        TypedStmt::Return(Some(e)) => collect_refs_expr(e, out),
+        TypedStmt::If(i) => {
+            collect_refs_expr(&i.cond, out);
+            collect_local_refs(&i.then_block, out);
+            if let Some(e) = &i.else_block {
+                collect_local_refs(e, out);
+            }
+        }
+        TypedStmt::For(f) => {
+            collect_refs_expr(&f.iterable, out);
+            collect_local_refs(&f.body, out);
+        }
+        TypedStmt::Block(b) => collect_local_refs(b, out),
+        TypedStmt::Expr(e) => collect_refs_expr(e, out),
+        // Ownership-pass markers: no user references inside.
+        TypedStmt::ReleaseLocal { .. } | TypedStmt::ReturnCleanup { .. } => {}
+        TypedStmt::Return(None) => {}
+    }
+}
+
+fn collect_refs_expr(e: &TypedExpr, out: &mut Vec<LocalId>) {
+    match &e.kind {
+        TypedExprKind::LocalRef(id) => {
+            if !out.contains(id) {
+                out.push(*id);
+            }
+        }
+        TypedExprKind::Neg(inner) | TypedExprKind::Not(inner) | TypedExprKind::Retain(inner)
+        | TypedExprKind::SomeLit(inner) => collect_refs_expr(inner, out),
+        TypedExprKind::Binary { lhs, rhs, .. }
+        | TypedExprKind::Coalesce { lhs, rhs } => {
+            collect_refs_expr(lhs, out);
+            collect_refs_expr(rhs, out);
+        }
+        TypedExprKind::FieldAccess { base, .. } => collect_refs_expr(base, out),
+        TypedExprKind::UnwrapOr { receiver, default } => {
+            collect_refs_expr(receiver, out);
+            collect_refs_expr(default, out);
+        }
+        TypedExprKind::Index { base, index } => {
+            collect_refs_expr(base, out);
+            collect_refs_expr(index, out);
+        }
+        TypedExprKind::StructLit { values, .. } | TypedExprKind::ArrayLit { elements: values } => {
+            for v in values {
+                collect_refs_expr(v, out);
+            }
+        }
+        TypedExprKind::Call { args, .. } => {
+            for a in args {
+                collect_refs_expr(a, out);
+            }
+        }
+        TypedExprKind::CallIndirect { callee, args } => {
+            collect_refs_expr(callee, out);
+            for a in args {
+                collect_refs_expr(a, out);
+            }
+        }
+        TypedExprKind::Catch {
+            base, stmts, tail, ..
+        } => {
+            collect_refs_expr(base, out);
+            for s in stmts {
+                collect_refs_stmt(s, out);
+            }
+            collect_refs_expr(tail, out);
+        }
+        // Nested closures own their captures; literals carry nothing.
+        TypedExprKind::ClosureLit(_) | TypedExprKind::NoneLit => {}
+        TypedExprKind::IntLit(_) | TypedExprKind::FloatLit(_) | TypedExprKind::BoolLit(_)
+        | TypedExprKind::StrLit { .. } | TypedExprKind::Invalid => {}
+    }
+}
+
+/// True when this expression is a bare identifier naming an IMPORT ALIAS in
+/// the current module — such bases go through qualified-call resolution,
+/// never the builtin path.
+fn is_import_alias(checker: &Checker, base: &Expr) -> bool {
+    match &base.kind {
+        ExprKind::Ident(ident) => checker.imports().contains_key(&ident.name),
+        _ => false,
+    }
+}
+
+/// Types `f(args)` where `f` evaluates to a closure VALUE. Returns `None`
+/// when the callee's type is not a closure (caller then reports its own
+/// diagnostic). Argument/result unification follows the signature exactly.
+fn try_closure_call(checker: &mut Checker, call: &CallExpr, span: Span) -> Option<TypedExpr> {
+    let callee_val = lower(checker, &call.callee, None);
+    let KaiType::Closure { params, ret } = callee_val.ty.clone() else {
+        return None;
+    };
+    if call.args.len() != params.len() {
+        checker.error(error::arg_count_mismatch(
+            &callee_val.ty.to_string(),
+            params.len(),
+            call.args.len(),
+            span,
+        ));
+        return Some(poisoned());
+    }
+    let mut args_typed = Vec::with_capacity(call.args.len());
+    for (position, (arg, param_ty)) in call.args.iter().zip(&params).enumerate() {
+        let value = lower(checker, arg, Some(param_ty.clone()));
+        if value.ty != *param_ty {
+            checker.error(error::arg_type_mismatch(
+                &callee_val.ty.to_string(),
+                param_ty.clone(),
+                value.ty.clone(),
+                position + 1,
+                arg.span,
+            ));
+        }
+        args_typed.push(value);
+    }
+    Some(TypedExpr::new_at(
+        TypedExprKind::CallIndirect {
+            callee: Box::new(callee_val),
+            args: args_typed,
+        },
+        *ret,
+        span,
+    ))
+}
+
+fn unwrap_or_builtin(
+    checker: &mut Checker,
+    access: &FieldAccessExpr,
+    call: &CallExpr,
+    span: Span,
+) -> TypedExpr {
+    if call.args.len() != 1 {
+        checker.error(error::unwrap_or_arity(call.args.len(), span));
+        return poisoned();
+    }
+    let receiver = lower(checker, &access.base, None);
+    let want = match receiver.ty.clone() {
+        KaiType::Optional(t) => *t,
+        KaiType::Result { ok, .. } => *ok,
+        other => {
+            checker.error(error::unwrap_or_receiver(other, access.base.span));
+            return poisoned();
+        }
+    };
+    let default = lower(checker, &call.args[0], Some(want.clone()));
+    if default.ty != want {
+        checker.error(error::unwrap_or_default_mismatch(
+            want.clone(),
+            default.ty.clone(),
+            call.args[0].span,
+        ));
+    }
+    TypedExpr::new(
+        TypedExprKind::UnwrapOr {
+            receiver: Box::new(receiver),
+            default: Box::new(default),
+        },
+        want,
     )
 }

@@ -27,12 +27,17 @@ pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
         },
         // `T[]`: the element type resolves like any other reference.
         Ty::Array(elem) => KaiType::Array(Box::new(resolve(checker, elem))),
-        // v0.0.6 types parse (P1); KaiType variants + unification land in P3.
-        // Reported without recursing so one bad annotation reports once.
-        Ty::Optional(_) | Ty::Result { .. } | Ty::Closure { .. } => {
-            let span = ty.span();
-            checker.error(error::not_yet_typed("this v0.0.6 type", span));
-            KaiType::Int32
-        }
+        // v0.0.6 (§9.9a): tagged unions and closures resolve structurally;
+        // there is no nominal generic table — the builtin names desugared
+        // at parse time and unknown inner types report per use.
+        Ty::Optional(inner) => KaiType::Optional(Box::new(resolve(checker, inner))),
+        Ty::Result { ok, err } => KaiType::Result {
+            ok: Box::new(resolve(checker, ok)),
+            err: Box::new(resolve(checker, err)),
+        },
+        Ty::Closure { params, ret } => KaiType::Closure {
+            params: params.iter().map(|p| resolve(checker, p)).collect(),
+            ret: Box::new(resolve(checker, ret)),
+        },
     }
 }

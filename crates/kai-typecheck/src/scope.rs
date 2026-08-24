@@ -28,6 +28,9 @@ pub enum DeclareOutcome {
 pub struct Locals {
     scopes: Vec<HashMap<String, LocalInfo>>,
     next_id: u32,
+    /// All bindings ever declared, by id — lets the closure-capture analysis
+    /// recover a referenced id's type without name lookups.
+    by_id: Vec<LocalInfo>,
 }
 
 impl Locals {
@@ -35,6 +38,7 @@ impl Locals {
         Self {
             scopes: vec![HashMap::new()],
             next_id: 0,
+            by_id: Vec::new(),
         }
     }
 
@@ -63,8 +67,39 @@ impl Locals {
             mutable,
         };
         self.next_id += 1;
+        self.by_id.push(info.clone());
         current.insert(name.to_owned(), info.clone());
         DeclareOutcome::Fresh(info)
+    }
+
+    /// The id the NEXT declaration would receive — a closure body records
+    /// this before lowering; any referenced id below it is an outer capture.
+    pub(crate) fn next_id(&self) -> u32 {
+        self.next_id
+    }
+
+    /// Binding info for a previously declared id (capture analysis).
+    pub(crate) fn info_of(&self, id: LocalId) -> Option<&LocalInfo> {
+        self.by_id.get(id.0 as usize)
+    }
+
+    /// Declared name of a binding id — diagnostics only (§9.10 capture
+    /// rejection names the offending variable).
+    pub(crate) fn name_of(&self, id: LocalId) -> String {
+        self.by_id
+            .get(id.0 as usize)
+            .map(|_| {
+                self.scopes
+                    .iter()
+                    .find_map(|scope| {
+                        scope
+                            .iter()
+                            .find(|(_, info)| info.id == id)
+                            .map(|(name, _)| name.clone())
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
     }
 
     /// Innermost binding visible from the current point, if any.

@@ -109,6 +109,56 @@ pub enum TypedExprKind {
     /// codegen emits a retain and forwards the pointer unchanged. Inserted
     /// only by the ownership pass; never constructed by the type checker.
     Retain(Box<TypedExpr>),
+    // -- v0.0.6 (§9.9a/§9.10) -------------------------------------------------
+    /// `Some(value)` — payload already unified; `self.ty` = `Optional(t)`.
+    SomeLit(Box<TypedExpr>),
+    /// Bare `None`. Carries no payload; `self.ty` was fixed by context.
+    NoneLit,
+    /// `lhs ?? rhs` — rhs evaluates ONLY when lhs is None (lazy lowering).
+    /// Both sides share the payload type; result type is that payload.
+    Coalesce { lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
+    /// `receiver.unwrap_or(default)` — the builtin combinator resolved by
+    /// the type checker from an ordinary FieldAccess+Call shape (§9.9a).
+    /// Receiver is `Optional<T>` or `Result<T, E>`; result is `T`.
+    UnwrapOr { receiver: Box<TypedExpr>, default: Box<TypedExpr> },
+    /// `base catch |err| { stmts.. tail }` — Result-only (§3.4). The err
+    /// binding is a BORROW of the Err payload (never retained/released as
+    /// an owner); it lives for the catch block only. Result type = ok type.
+    Catch {
+        base: Box<TypedExpr>,
+        err_binding: crate::symbol::LocalId,
+        err_ty: KaiType,
+        stmts: Vec<crate::stmt::TypedStmt>,
+        tail: Box<TypedExpr>,
+    },
+    /// Call through a closure VALUE (`f(x)` where `f: Closure{..}`, v0.0.6):
+    /// argument/result types already unified against the signature.
+    CallIndirect {
+        callee: Box<TypedExpr>,
+        args: Vec<TypedExpr>,
+    },
+    /// Closure literal (v0.0.6). The body lowers into its own scope; the
+    /// capture list holds every OUTER local referenced inside, in first-use
+    /// order. Heap env allocation + fat-pointer ABI are codegen's job.
+    ClosureLit(Box<TypedClosure>),
+}
+
+/// One captured outer binding of a closure literal (§9.10): retained into
+/// the environment at construction, released via the env destructor when
+/// the environment's refcount reaches zero.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedCapture {
+    pub local: crate::symbol::LocalId,
+    pub ty: KaiType,
+}
+
+/// A lowered closure literal: params are plain locals of the body scope;
+/// captures are the outer bindings it closes over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedClosure {
+    pub param_ids: Vec<crate::symbol::LocalId>,
+    pub body: crate::stmt::TypedBlock,
+    pub captures: Vec<TypedCapture>,
 }
 
 impl TypedExpr {

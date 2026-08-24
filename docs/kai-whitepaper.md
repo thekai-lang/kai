@@ -707,7 +707,7 @@ Captured heap values are retained into the closure environment. Releasing the cl
 **Closure reference cycles are rejected at compile time — a v0.0.6 invariant, not deferred.** Appendix A flagged self-referential closures as "known-unsound, must be flagged rather than silently accepted" while closures didn't exist yet; now that they do, that flag becomes an enforced rule, not a standing warning. The direct case (`let f = fn() { f(); };`) is already impossible under the existing initialization-order rule (§9.2: a variable cannot be read inside its own initializer) — but a cycle is still constructible indirectly, through a container the closure captures and is later stored back into:
 
 ```kai
-type Node = { action: (unit) -> unit; }
+type Node = { action: () -> unit; }
 
 var n = Node { action: someDefault };
 n.action = fn() -> unit { n.action(); };   // captures `n`, then is stored into n's own field
@@ -724,7 +724,7 @@ This is checked purely structurally, reusing the `TypeDecl` dependency graph alr
 This does **not** restrict closures from capturing heap-bearing values in general — that's the ordinary, expected case:
 
 ```kai
-fn make_greeter(name: string) -> (unit) -> unit {
+fn make_greeter(name: string) -> () -> unit {
     return fn() -> unit { io.println(name); };   // captures `string` — fine, `string` is not closure-bearing
 }
 ```

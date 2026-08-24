@@ -5,7 +5,7 @@ use kai_tast::KaiType;
 /// Kai value type -> LLVM type. Every new value-carrying `KaiType` variant
 /// must be mapped here exactly once.
 pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicTypeEnum<'ctx> {
-    match *ty {
+    match ty {
         KaiType::Int32 => ctx.context.i32_type().into(),
         KaiType::Int64 => ctx.context.i64_type().into(),
         KaiType::Float64 => ctx.context.f64_type().into(),
@@ -13,10 +13,31 @@ pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicTypeEnum<'ctx
         KaiType::Unit => unreachable!("unit has no LLVM value representation"),
         KaiType::Struct(id) => ctx.structs[id.0 as usize].into(),
         // v0.0.5: heap values are POINTERS to `{ rc, len, .. }` headers.
-        // Real header layouts land with the ownership runtime; until a
-        // program can carry these types (typecheck still rejects them),
-        // the pointer shape is all emission ever needs.
         KaiType::String | KaiType::Array(_) => ctx.context.ptr_type(inkwell::AddressSpace::default()).into(),
+        // v0.0.6 (§9.9a): tagged unions are INLINE aggregates —
+        // `{ i64 tag, payload }` / `{ i64 tag, ok, err }`. The tag is i64 to
+        // avoid padding surprises across heterogeneous payloads.
+        KaiType::Optional(inner) => {
+            let fields: Vec<BasicTypeEnum> =
+                vec![ctx.context.i64_type().into(), to_llvm(ctx, inner)];
+            ctx.context.struct_type(&fields, false).into()
+        }
+        KaiType::Result { ok, err } => {
+            // Non-overlapping payloads for v0.0.6 — correctness first; a
+            // union layout would need untagged bitcasts for zero gain here.
+            let fields: Vec<BasicTypeEnum> = vec![
+                ctx.context.i64_type().into(),
+                to_llvm(ctx, ok),
+                to_llvm(ctx, err),
+            ];
+            ctx.context.struct_type(&fields, false).into()
+        }
+        // Closures are fat pointers `{ fn_ptr, env_ptr }` (§9.10); the env
+        // header carries the refcount, so the value itself is two words.
+        KaiType::Closure { .. } => {
+            let ptr = ctx.context.ptr_type(inkwell::AddressSpace::default());
+            ctx.context.struct_type(&[ptr.into(), ptr.into()], false).into()
+        }
     }
 }
 

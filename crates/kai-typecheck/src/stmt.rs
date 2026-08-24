@@ -27,7 +27,11 @@ pub(crate) fn lower_block(
     TypedBlock { stmts }
 }
 
-fn lower_stmt(checker: &mut Checker, stmt: &Stmt, return_type: &KaiType) -> Option<TypedStmt> {
+pub(crate) fn lower_stmt(
+    checker: &mut Checker,
+    stmt: &Stmt,
+    return_type: &KaiType,
+) -> Option<TypedStmt> {
     match &stmt.kind {
         StmtKind::Return(value) => ret(checker, value.as_ref(), return_type, stmt.span),
         StmtKind::Let(b) => binding(checker, b.name.clone(), b.mutable, b.ty.as_ref(), &b.init),
@@ -38,7 +42,16 @@ fn lower_stmt(checker: &mut Checker, stmt: &Stmt, return_type: &KaiType) -> Opti
         // rules; only the binding is skipped. Interim P1 form — the
         // Optional/Result discard diagnostic joins in P3.
         StmtKind::Discard(value) => Some(TypedStmt::Expr(expr::lower(checker, value, None))),
-        StmtKind::Expr(e) => Some(TypedStmt::Expr(expr::lower(checker, e, None))),
+        StmtKind::Expr(e) => {
+            let typed = expr::lower(checker, e, None);
+            // §9.9a (v0.0.6): discarding an Optional/Result as a bare
+            // statement is a diagnostic — symmetrically for both. The sole
+            // escape hatch is the Discard statement below.
+            if typed.ty.is_tagged_union() {
+                checker.error(error::discard_tagged(&typed.ty, e.span));
+            }
+            Some(TypedStmt::Expr(typed))
+        },
         StmtKind::For(f) => for_stmt(checker, f),
     }
 }

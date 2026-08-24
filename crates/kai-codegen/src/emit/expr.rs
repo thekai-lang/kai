@@ -42,6 +42,16 @@ pub(crate) fn emit<'ctx>(
         // Poisoned recovery node; only reachable in programs that failed
         // upstream. `undef` keeps emission total without inventing behavior.
         TypedExprKind::Invalid => undef_of(ctx, &ty),
+        // v0.0.6 nodes reach here only after the P5 codegen commit; until
+        // then typecheck still rejects every program containing them, so
+        // `undef` is unreachable-in-practice and keeps the match total.
+        TypedExprKind::SomeLit(_)
+        | TypedExprKind::NoneLit
+        | TypedExprKind::Coalesce { .. }
+        | TypedExprKind::UnwrapOr { .. }
+        | TypedExprKind::Catch { .. }
+        | TypedExprKind::CallIndirect { .. }
+        | TypedExprKind::ClosureLit(_) => undef_of(ctx, &ty),
         TypedExprKind::Call { func, args } => call(ctx, frame, *func, args),
         TypedExprKind::FieldAccess {
             base,
