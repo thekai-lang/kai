@@ -685,7 +685,7 @@ fn corpus_flows_through_pipeline_without_rust_panics() {
     }
     // Every version's fixture set must actually be exercised.
     let seen: HashSet<&str> = checked.iter().filter_map(|s| s.split('/').next()).collect();
-    for ver in ["v0001", "v0002", "v0003", "v0004", "v0005"] {
+    for ver in ["v0001", "v0002", "v0003", "v0004", "v0005", "v0006"] {
         assert!(seen.contains(ver), "{ver} missing from corpus sweep");
     }
 }
@@ -810,4 +810,106 @@ fn cli_healthy_program_exits_normally() {
     assert!(out.stderr.is_empty(), "unexpected stderr");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// v0.0.6: Optional/Result/closures/discard (§9.9a/§9.9b).
+// ---------------------------------------------------------------------------
+
+fn v0006_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/v0006/main.kai")
+}
+
+#[test]
+fn v006_file_pipeline_matches_golden_ir() {
+    let ir = pipeline::compile_file(&v0006_entry()).expect("compilation should succeed");
+    assert_golden("v0006/main.expected.ll", &ir);
+}
+
+#[test]
+fn v006_jit_module_tree_returns_expected_value() {
+    // Some-forwarded `??` (10) + None fallback (5) + unwrap_or on the
+    // still-None Optional (2) + captured closure call (22) - 30, with a
+    // discarded tagged union.
+    assert_eq!(pipeline::jit_file(&v0006_entry()).unwrap(), 2);
+}
+
+/// §9.9a evidence at the IR level: `Optional<int32>` never touches the
+/// refcount runtime — the decision is compile-time keyed per instantiation.
+#[test]
+fn v006_scalar_optional_emits_zero_refcount_calls() {
+    let src = r#"fn main() -> int32 {
+    let a: int32? = Some(1);
+    let b: int32? = None;
+    return (a ?? 0) + (b ?? 2);
+}"#;
+    let ir = pipeline::compile(src).expect("compiles");
+    assert!(!ir.contains("kai_retain"), "scalar Optional must not retain");
+    assert!(!ir.contains("@kai_release"), "scalar Optional must not release");
+}
+
+/// §9.9a laziness made observable: the fallback's side effect must NOT run
+/// when the left side is Some.
+#[test]
+fn v006_coalesce_fallback_is_lazy() {
+    let src = r#"fn boom() -> int32 { return 100; }
+fn main() -> int32 {
+    let x: int32? = Some(7);
+    return x ?? boom();
+}"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 7);
+}
+
+#[test]
+fn v006_discard_of_tagged_union_requires_escape_hatch() {
+    assert_fails_at(
+        "fn f() -> int32? { return None; }
+fn main() -> int32 { f(); return 0; }",
+        "typecheck",
+        "`_ = expr;`",
+    );
+}
+
+#[test]
+fn v006_bare_none_requires_annotation() {
+    assert_fails_at(
+        "fn main() -> int32 { let x = None; return 0; }",
+        "typecheck",
+        "requires a type annotation",
+    );
+}
+
+#[test]
+fn v006_closure_cycle_capture_is_rejected() {
+    // §9.10's exact scenario shape: capturing a closure-bearing struct.
+    assert_fails_at(
+        "type Node = { action: () -> unit; }
+fn seed() -> () -> unit { return fn() -> unit { return; }; }
+fn main() -> int32 {
+    var n = Node { action: seed() };
+    n.action = fn() -> unit { let peek = n; return; };
+    return 0;
+}",
+        "typecheck",
+        "contains a closure",
+    );
+}
+
+#[test]
+fn v006_coalesce_needs_optional_lhs() {
+    assert_fails_at(
+        "fn main() -> int32 { let v: int32 = 1 ?? 2; return v; }",
+        "typecheck",
+        "`??` needs an `Optional`",
+    );
+}
+
+#[test]
+fn v006_let_underscore_never_parses() {
+    assert_fails_at(
+        "fn main() -> int32 { let _ = 1; return 0; }",
+        "parse",
+        "a variable name",
+    );
 }

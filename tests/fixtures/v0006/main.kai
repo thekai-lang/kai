@@ -1,0 +1,35 @@
+// v0.0.6 — Optional/Result/closures/discard (whitepaper v0.13, §9.9a/§9.9b).
+//
+// Deterministic value trail exercising every new surface form:
+//   b = 10            Some forwarded by `??`
+//   c = 5             None takes the lazily-evaluated fallback
+//   d = 2             `.unwrap_or` on the same Optional (still None)
+//   e = 22            closure captures `base`, indirect call
+//   f discarded via `_ =` — the sole legal discard of a tagged union
+// main returns 2.
+fn make_adder(base: int32) -> (int32) -> int32 {
+    return fn(x: int32) -> int32 { return base + x; };
+}
+
+fn nothing() -> int32? {
+    return None;
+}
+
+fn loud_fallback() -> int32 {
+    return 100;
+}
+
+fn main() -> int32 {
+    let a: int32? = Some(10);
+    let b: int32 = a ?? 0;
+    let raw: int32? = nothing();
+    let c: int32 = raw ?? 5;
+    let d: int32 = raw.unwrap_or(2);
+    let add: (int32) -> int32 = make_adder(20);
+    let e: int32 = add(d);
+    var f: string? = None;
+    f = Some("x");
+    _ = f;
+    return b + e - 30;
+    // 10 + (20+2) - 30 = 2
+}
