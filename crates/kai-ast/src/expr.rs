@@ -137,6 +137,18 @@ pub struct SomeLitExpr {
     pub value: Box<Expr>,
 }
 
+/// `Ok(expr)` — Result Ok construction (v0.14, §3.4), parallel to `Some`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OkLitExpr {
+    pub value: Box<Expr>,
+}
+
+/// `Err(expr)` — Result Err construction (v0.14, §3.4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErrLitExpr {
+    pub value: Box<Expr>,
+}
+
 /// `lhs ?? rhs` (v0.0.6, §9.9a) — right-associative; the right side only
 /// evaluates when the left side is `None` (lazy lowering).
 #[derive(Debug, Clone, PartialEq)]
@@ -183,12 +195,14 @@ pub enum ExprKind {
     ArrayLit(ArrayLitExpr),
     Index(IndexExpr),
     StrLit(StrLitExpr),
-    // v0.0.6 (§9.9a/§3.4/§3.5)
+    // v0.0.6 (§9.9a/§3.4/§3.5) + v0.14 Ok/Err
     SomeLit(SomeLitExpr),
     /// Bare `None` — the payload-less Optional constructor. It carries no
     /// type information, so a context type must fix `T` (typecheck rule,
     /// same pattern as the empty array literal).
     NoneLit,
+    OkLit(OkLitExpr),
+    ErrLit(ErrLitExpr),
     Coalesce(CoalesceExpr),
     Catch(CatchExpr),
     ClosureLit(ClosureLitExpr),

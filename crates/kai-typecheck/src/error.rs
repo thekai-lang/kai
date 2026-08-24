@@ -305,3 +305,17 @@ pub(crate) fn discard_tagged(ty: &KaiType, span: Span) -> Diagnostic {
         span,
     )
 }
+
+pub(crate) fn ok_needs_annotation(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        "bare `Ok` requires a type annotation to fix its error payload (like `None` and `[]`)",
+        span,
+    )
+}
+
+pub(crate) fn err_needs_annotation(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        "bare `Err` requires a type annotation to fix its ok payload (like `None` and `[]`)",
+        span,
+    )
+}

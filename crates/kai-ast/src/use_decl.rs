@@ -10,3 +10,21 @@ pub struct UseDecl {
     pub path: Vec<Ident>,
     pub span: Span,
 }
+
+impl UseDecl {
+    /// Dotted name (`a.b.c`) for diagnostics and module lookup.
+    /// Centralizes the `join(".")` previously duplicated in
+    /// `kai-driver` and `kai-resolver`.
+    pub fn dotted_name(&self) -> String {
+        self.path
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    /// Alias is the last segment (`c` in `a.b.c`).
+    pub fn alias(&self) -> Option<&Ident> {
+        self.path.last()
+    }
+}

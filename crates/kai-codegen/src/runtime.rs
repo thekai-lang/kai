@@ -79,7 +79,10 @@ pub unsafe extern "C" fn kai_string_new(data: *const u8, len: i64) -> *mut KaiHe
     let byte_len = usize::try_from(len).unwrap_or(0);
     let buf = alloc_bytes(byte_len);
     if byte_len > 0 {
-        debug_assert!(!data.is_null());
+        if data.is_null() {
+            eprintln!("kai runtime error: internal error — null string data with len>0");
+            std::process::abort();
+        }
         unsafe { std::ptr::copy_nonoverlapping(data, buf, byte_len) };
     }
     Box::into_raw(Box::new(KaiHeapHeader {
@@ -161,6 +164,10 @@ pub unsafe extern "C" fn kai_release(value: *mut KaiHeapHeader) {
     }
     let n = hdr.nbytes;
     if n > 0 {
+        if n as usize > isize::MAX as usize {
+            eprintln!("kai runtime error: internal error — nbytes overflow");
+            std::process::abort();
+        }
         // SAFETY: allocated in alloc_bytes with align 1 and this exact
         // size, recorded in `nbytes` at creation.
         unsafe {

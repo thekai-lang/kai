@@ -25,9 +25,11 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         "for" => Some(TokenKind::For),
         "in" => Some(TokenKind::In),
         // v0.0.6 keywords (§9.9a/§9.9b). `Some`/`None` construct an Optional;
-        // `catch` is a postfix operator on Result.
+        // `Ok`/`Err` construct a Result (§3.4, v0.14); `catch` is a postfix operator on Result.
         "Some" => Some(TokenKind::SomeKw),
         "None" => Some(TokenKind::NoneKw),
+        "Ok" => Some(TokenKind::OkKw),
+        "Err" => Some(TokenKind::ErrKw),
         "catch" => Some(TokenKind::Catch),
         _ => None,
     }

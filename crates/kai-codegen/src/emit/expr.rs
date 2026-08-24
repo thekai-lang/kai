@@ -58,6 +58,50 @@ pub(crate) fn emit<'ctx>(
                 .into_struct_value()
                 .into()
         }
+        TypedExprKind::OkLit(value) => {
+            let payload = emit(ctx, frame, value);
+            let struct_ty = crate::types::to_llvm(ctx, &ty).into_struct_type();
+            let agg = struct_ty.get_undef();
+            let with_tag = ctx
+                .builder
+                .build_insert_value(agg, i64_const(ctx, 0), 0, "ok.tag")
+                .expect("insert tag");
+            let with_ok = ctx
+                .builder
+                .build_insert_value(with_tag, payload, 1, "ok.payload")
+                .expect("insert ok");
+            let err_field = struct_ty
+                .get_field_type_at_index(2)
+                .expect("err field");
+            let zero = zero_of(ctx, err_field);
+            ctx.builder
+                .build_insert_value(with_ok, zero, 2, "ok.err.zero")
+                .expect("insert err zero")
+                .into_struct_value()
+                .into()
+        }
+        TypedExprKind::ErrLit(value) => {
+            let payload = emit(ctx, frame, value);
+            let struct_ty = crate::types::to_llvm(ctx, &ty).into_struct_type();
+            let agg = struct_ty.get_undef();
+            let with_tag = ctx
+                .builder
+                .build_insert_value(agg, i64_const(ctx, 1), 0, "err.tag")
+                .expect("insert tag");
+            let ok_field = struct_ty
+                .get_field_type_at_index(1)
+                .expect("ok field");
+            let zero = zero_of(ctx, ok_field);
+            let with_ok_zero = ctx
+                .builder
+                .build_insert_value(with_tag, zero, 1, "err.ok.zero")
+                .expect("insert ok zero");
+            ctx.builder
+                .build_insert_value(with_ok_zero, payload, 2, "err.payload")
+                .expect("insert err")
+                .into_struct_value()
+                .into()
+        }
         // `lhs ?? rhs` — the rhs evaluates ONLY when lhs is inactive (§9.9a
         // laziness). The result flows through an entry slot so both branches
         // join without a phi; ownership follows the active branch (the pass

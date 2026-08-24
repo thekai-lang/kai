@@ -6,8 +6,8 @@ use crate::error;
 use crate::parser::Parser;
 use crate::{decl, stmt, ty as ty_parser};
 use kai_ast::{
-    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, ClosureLitExpr, CatchExpr, CoalesceExpr, Expr,
-    ExprKind, FieldAccessExpr, FieldInit, FloatLit, IndexExpr, IntLit, SomeLitExpr, StrLitExpr,
+    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, ClosureLitExpr, CatchExpr, CoalesceExpr, ErrLitExpr, Expr,
+    ExprKind, FieldAccessExpr, FieldInit, FloatLit, IndexExpr, IntLit, OkLitExpr, SomeLitExpr, StrLitExpr,
     StructLitExpr, UnaryExpr, UnaryOp,
 };
 use kai_diagnostics::Span;
@@ -274,6 +274,32 @@ fn primary(parser: &mut Parser) -> Expr {
             Expr {
                 span: Span::merge(token.span, end),
                 kind: ExprKind::SomeLit(SomeLitExpr {
+                    value: Box::new(value),
+                }),
+            }
+        }
+        TokenKind::OkKw => {
+            // `Ok(expr)` — Result Ok construction (v0.14, §3.4).
+            parser.bump(); // `Ok`
+            parser.expect_simple(&TokenKind::LParen);
+            let value = expr(parser);
+            let end = parser.expect_simple(&TokenKind::RParen);
+            Expr {
+                span: Span::merge(token.span, end),
+                kind: ExprKind::OkLit(OkLitExpr {
+                    value: Box::new(value),
+                }),
+            }
+        }
+        TokenKind::ErrKw => {
+            // `Err(expr)` — Result Err construction (v0.14, §3.4).
+            parser.bump(); // `Err`
+            parser.expect_simple(&TokenKind::LParen);
+            let value = expr(parser);
+            let end = parser.expect_simple(&TokenKind::RParen);
+            Expr {
+                span: Span::merge(token.span, end),
+                kind: ExprKind::ErrLit(ErrLitExpr {
                     value: Box::new(value),
                 }),
             }

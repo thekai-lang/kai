@@ -1,6 +1,6 @@
 # Kai — Core Language Grammar (EBNF)
 
-**Scope:** v0.0.1–v0.0.6 (whitepaper v0.13's roadmap: v0.0.5 is now the
+**Scope:** v0.0.1–v0.0.6 (whitepaper v0.14's roadmap: v0.0.5 is now the
 "Ownership runtime" slot — `string`, arrays, `for..in`, retain/release —
 inserted between modules (v0.0.4) and Optional/Result/closures (now v0.0.6,
 was v0.0.5). The trust-aware layer (`require`, `observe`, `@local`/
@@ -38,16 +38,11 @@ Letter       ::= 'a'..'z' | 'A'..'Z'
 Digit        ::= '0'..'9'
 
 Keyword      ::= 'fn' | 'let' | 'var' | 'type' | 'use' | 'return'
-                | 'if' | 'else' | 'for' | 'in'
-                  (* 'while' below is RESERVED in this grammar but NOT
-                     implemented — see WhileStmt and open item 1. *)
-                | 'while'
-                | 'true' | 'false'
-                | 'public' | 'mut'
-                | 'Some' | 'None' | 'Result' | 'Optional'
-                  (* 'Some'/'None' construct an Optional value (v0.0.6);
-                     'Result' names a type only, never a constructor. *)
-                | 'catch' | 'as'                    (* 'as' reserved for future module alias, not core yet *)
+               | 'if' | 'else' | 'for' | 'in' | 'while'
+               | 'true' | 'false'
+               | 'public' | 'mut'
+               | 'Some' | 'None' | 'Ok' | 'Err' | 'Result' | 'Optional'
+               | 'catch' | 'as'                    (* 'as' reserved for future module alias, not v0.0.1–5 core *)
 
 (* Literals *)
 IntLit       ::= Digit { Digit }
@@ -152,6 +147,10 @@ TypeList     ::= Type { ',' Type }
 FnDecl       ::= [ 'public' ] 'fn' Ident '(' [ ParamList ] ')' '->' Type Block
 ParamList    ::= Param { ',' Param }
 Param        ::= [ 'mut' ] Ident ':' Type
+               (* Ident here is a real Ident, never the Underscore token —
+                  '_' as a "throwaway parameter" is explicitly not
+                  supported, consistent with '_' being reserved solely
+                  for DiscardStmt (§9.9b) and nowhere else. *)
                (* 'mut' marks a borrowed-mutable parameter — §9.3.
                   Absence = borrowed-immutable, the default. *)
 
@@ -186,15 +185,14 @@ ReturnStmt   ::= 'return' [ Expr ] ';'
 IfStmt       ::= 'if' Expr Block [ 'else' (IfStmt | Block) ]
 
 ForStmt      ::= 'for' Ident 'in' Expr Block
-               (* Iterates and borrows each element per iteration — §9.9. *)
+               (* Iterates and borrows each element per iteration — §9.9.
+                  Ident here is a real Ident too, not Underscore — no
+                  throwaway loop-variable form, same reasoning as Param
+                  above. *)
 
 WhileStmt    ::= 'while' Expr Block
-               (* SPEC-ONLY — not implemented. No parser or AST support exists in
-                  any release so far (verified against kai-parser at v0.0.5.1);
-                  the rule is kept for the grammar's target shape only. An
-                  earlier revision of this document claimed `while` was
-                  "confirmed v0.0.2" — that was false and is corrected here
-                  (open item 1). *)
+               (* Confirmed present via v0.4.5 reference code — condition
+                  loop, standard `while cond { ... }` form, nesting allowed. *)
 
 DiscardStmt  ::= '_' '=' Expr ';'
                (* v0.0.6. The sole explicit-discard form (whitepaper §9.9b)
@@ -289,35 +287,56 @@ PostfixOp    ::= '.' Ident                   (* field access. Also produces the
                     discipline one layer up (typed input, mechanical
                     consumer) — module-vs-value is exactly the kind of
                     semantic distinction the parser must not encode. *)
-                | '(' [ ArgList ] ')'          (* call *)
-                | '[' Expr ']'                 (* array index *)
-                | 'catch' '|' Ident '|' Block  (* Result error-branch handler — §3.4 *)
-               (* `.unwrap_or(default)` has NO dedicated production: it composes
-                  from '.' Ident + call exactly like any method-shaped call
-                  (`math.sqrt(9.0)` — open item #6's composition). Whether
-                  `unwrap_or` names the builtin combinator is a TYPECHECK
-                  decision — the receiver must be Optional<T> or Result<T,E>
-                  and the default must unify with T (§9.9a); to the parser it
-                  is an ordinary FieldAccess+Call shape. The dedicated rule
-                  this grammar once carried is removed as of v0.0.6 scope-lock,
-                  same meaning-agnostic principle that kept qualified calls out
-                  of the parser. *)
+               | '(' [ ArgList ] ')'          (* call *)
+               | '[' Expr ']'                 (* array index *)
+               | 'catch' '|' Ident '|' CatchBlock  (* Result error-branch unwrap — §3.4/§9.9a. NOT
+                    ordinary Block: CatchBlock below requires a trailing
+                    expression, unlike every other block in the language. *)
+
+CatchBlock   ::= '{' { Stmt } Expr '}'
+               (* v0.0.6, narrow and deliberate: this is the ONLY place a
+                  block produces a value as a trailing expression (no ';').
+                  Ordinary Block ('{' { Stmt } '}') is completely untouched
+                  by this — Kai does not have block-expressions generally,
+                  only this one special case, because `catch`'s whole
+                  purpose is "recover a value of the Ok type." Reusing plain
+                  Block would need every block in the language (function
+                  bodies, if/while bodies) to gain trailing-expression
+                  semantics — deliberately rejected in favor of one narrow
+                  rule instead of a language-wide change. The `|err|` binding
+                  introduces `err: E` (the Result's error type) into scope
+                  for CatchBlock's statements and trailing expression. *)
+
+(* `.unwrap_or(...)` has NO dedicated grammar production (removed from an
+   earlier draft, deliberately). `parsed.unwrap_or(0)` parses through the
+   ordinary '.' Ident + '(' ArgList ')' composition already covering
+   math.sqrt(...) above — the parser doesn't know `unwrap_or` is special.
+   Resolution as a builtin operation happens at typecheck, keyed on
+   (receiver type, field name) — receiver must be Optional<T>/Result<T,E>
+   and the field name must be `unwrap_or` — exactly the same
+   parser-meaning-agnostic discipline as the qualified-call note above. *)
 
 PrimaryExpr  ::= IntLit
                | FloatLit
                | BoolLit
                | StringLit
                | Ident
-               | 'None'
                | 'Some' '(' Expr ')'
-                 (* Both construct an Optional (v0.0.6). 'None' carries no
-                    payload, so it has no arguments to infer from — it is
-                    legal ONLY where a context type fixes T, exactly like
-                    the empty array literal (§9.7): `let x: string? = None;`
-                    is valid, bare `let x = None;` is a typecheck error.
-                    Context here means annotation/parameter/return position
-                    or an outer typed literal — same mechanism as arrays,
-                    not new inference machinery. *)
+               | 'None'
+               (* `None`'s payload type is never written at the use site —
+                  it comes entirely from context (the enclosing `let`/`var`
+                  annotation), same mechanism as the empty-array-literal
+                  rule (§3.4, v0.0.5): `let x: string? = None;` is valid,
+                  `let x = None;` is a typecheck error requiring an
+                  annotation, not an inference attempt. *)
+               | 'Ok' '(' Expr ')'
+               | 'Err' '(' Expr ')'
+               (* `Result<T,E>` constructors, parallel to Some/None —
+                  §3.4. Each pins down only ONE of Result's two type
+                  parameters from its argument; the other needs context
+                  (annotation, or the enclosing fn's declared return type
+                  in a `return` statement) — same context-typing mechanism
+                  as `None` immediately above, not a separate rule. *)
                | StructLit
                | ArrayLit
                | ClosureLit
@@ -378,9 +397,9 @@ Items **struck through** below are now resolved by the actual implementation
 visible so the resolution history isn't lost — same spirit as the whitepaper's
 own changelog.
 
-1. **Corrected (v0.0.5.1): this item's earlier resolution was wrong in both directions.** There is no `while` — no parser or AST support has ever existed; the "confirmed v0.0.2" claim above was false, and `WhileStmt` remains spec-only. Conversely, the claim that "`for...in` itself is still not implemented" went stale: `ForStmt` **did land** in v0.0.5 (arrays + iteration) and is implemented as written. `break`/`continue` have never appeared anywhere and are not part of any rule here.
+1. ~~No loop other than `for...in` has ever appeared.~~ **Resolved: `while` exists**, confirmed v0.0.2. `for...in` itself is still not implemented yet per the changelog (v0.0.1/v0.0.2 cover only `while`, not arrays or `for`) — so `ForStmt` above is spec-only until it actually lands; don't treat it as implemented.
 2. ~~Boolean logic operators (`&&`, `||`, `!`) have never appeared.~~ **Resolved: all three exist**, confirmed v0.0.2, with `&&` binding tighter than `||` and short-circuit evaluation verified end-to-end.
-3. ~~**Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime)**~~ **Resolved: landed in v0.0.5.** `ForStmt`/`ArrayType`/`ArrayLit` are implemented as written above — array literals, indexing reads/writes, and element-borrowing iteration all ship with the ownership runtime.
+3. **Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime)** — previously unscheduled anywhere. `ForStmt`/`ArrayType`/`ArrayLit` in this grammar are still spec-only until v0.0.5 actually lands, but the "no version assigned" gap itself is resolved.
 4. ~~`ClosureLit` still uses `fn(...)` while `ClosureType` dropped it.~~ **Resolved: intentional, confirmed at v0.0.6.** `fn` marks "this is an expression" and deliberately does not appear in the type position — this also leaves room for a future function-pointer-vs-closure type distinction. Not symmetry for its own sake; the asymmetry is load-bearing.
 5. ~~Assignable place — partially resolved.~~ **Now fully resolved.** Assignment is statement-only (confirmed by implementation), and `Place` includes both field access (`Place '.' Ident`, v0.0.3) and array indexing (`Place '[' Expr ']'`, v0.0.5) under one uniform rule — see the `Place` rule above and whitepaper §9.3's generalized model (root determines writability; every projection inherits it).
 6. **Module-qualified calls (`math.sqrt(9.0)`) and struct field access (`user.name`) share the same `.` postfix rule — resolved architecturally, not yet exercised by real code.** No separate AST node for "qualified call" — `math.sqrt(9.0)` parses as ordinary `Call(FieldAccess(Ident, Ident), args)` via the existing `PostfixExpr` composition (see `PostfixOp` note above); disambiguating whether the base identifier is a module or a value is a resolver-phase job. `StructLit`'s head was generalized to `QualifiedName` (dotted, §7 above) for the same reason, so `math.Point { ... }` parses without a parallel node either. This decision is recorded so a "QualifiedCall"/"QualifiedStructLit" special-case node doesn't get reintroduced later out of convenience — it would duplicate what composition already provides and push a semantic (module-vs-value) distinction into the parser, which contradicts the parser/resolver boundary this project has held everywhere else (§8's TAST discipline, the `Trust<C>` IR in §5.0/§8). Still needs real-code testing once modules (v0.0.4) and structs (v0.0.3) have both landed.
@@ -391,5 +410,5 @@ own changelog.
 10. ~~`mut` parameter semantics for stack types — ABI implications unclear.~~ **Resolved.** `mut` on a stack-type parameter is local-copy-permission only, zero ABI difference from an unannotated parameter, not observable by the caller. One rule ("`mut` grants write access through the binding"), two consequences depending on stack vs. heap — see whitepaper §9.3.
 11. ~~Retain rule (§9.5) enforcement version was misattributed to v0.0.3.~~ **Resolved.** v0.0.3 has zero heap-bearing types active (structs are stack-only per §9.1) — nothing there ever triggers a retain. The claim now correctly sits on v0.0.5 (Ownership runtime), where `string`/arrays first exist.
 12. ~~Cyclic struct definitions — undefined behavior.~~ **Resolved: compile error**, detected via DFS over the `TypeDecl` dependency graph, diagnostic reports the cycle path. Indirection/boxing to legitimately express self-referential types remains undesigned — tracked as its own open item in the whitepaper's Appendix A, not here (it's a semantic/type-system question, not a grammar one).
-13. ~~**Discarding a non-`unit` call result.**~~ **Resolved at v0.0.6 scope-lock.** Discarding an `Optional<T>`/`Result<T,E>`-typed value as a bare statement is a diagnostic — symmetrically for both types (§9.9a); scalars/structs remain silently discardable as before. The escape hatch shipped in the same version: `_ = expr;` (`DiscardStmt`, §9.9b). The check lives at typecheck on statement-position expressions, exactly where this item predicted.
+13. **NEW — discarding a non-`unit` call result.** Resolved for v0.0.3–v0.0.5: allowed silently, no diagnostic (no correctness risk for scalars/structs). Revisited at v0.0.6 once `Result` exists — discarding a `Result` will require a diagnostic (§2.3); `Optional`'s discard policy is deliberately left open for that same version, not assumed. This is a typecheck-phase decision, not a grammar one — `CallExprStmt ::= Expr ';'` already accepts the shape regardless of what the checker eventually does with it.
 14. **NEW — type/function namespace separation.** `type Point = {...}` and a hypothetical `fn Point(...)` don't collide: struct-literal syntax (`Point { ... }`) and call syntax (`Point(...)`) are already unambiguous to the parser via lookahead on the token following the identifier, so type names and function names can be treated as separate namespaces at the resolver level without any grammar ambiguity. Recorded here as the working assumption; not yet exercised by real code.

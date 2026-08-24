@@ -120,20 +120,8 @@ impl Loader {
         uses: &[kai_ast::UseDecl],
     ) -> Result<(), Vec<Diagnostic>> {
         for decl in uses {
-            let target = decl
-                .path
-                .iter()
-                .map(|segment| segment.name.as_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let expected = format!(
-                "{}.kai",
-                decl.path
-                    .iter()
-                    .map(|segment| segment.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("/")
-            );
+            let target = decl.dotted_name();
+            let expected = format!("{}.kai", target.replace('.', "/"));
 
             if let Some(&depth) = self.on_stack.get(&target) {
                 let mut chain: Vec<String> = self.chain[depth.min(self.chain.len())..].to_vec();

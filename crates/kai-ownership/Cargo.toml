@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-kai-tast = { path = "../kai-tast" }
+kai-tast = { workspace = true }
 
 [dev-dependencies]
-kai-diagnostics = { path = "../kai-diagnostics" }
+kai-diagnostics = { workspace = true }

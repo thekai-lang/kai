@@ -109,11 +109,15 @@ pub enum TypedExprKind {
     /// codegen emits a retain and forwards the pointer unchanged. Inserted
     /// only by the ownership pass; never constructed by the type checker.
     Retain(Box<TypedExpr>),
-    // -- v0.0.6 (§9.9a/§9.10) -------------------------------------------------
+    // -- v0.0.6 (§9.9a/§9.10) + v0.14 Ok/Err --------------------------------
     /// `Some(value)` — payload already unified; `self.ty` = `Optional(t)`.
     SomeLit(Box<TypedExpr>),
     /// Bare `None`. Carries no payload; `self.ty` was fixed by context.
     NoneLit,
+    /// `Ok(value)` — payload already unified; `self.ty` = `Result(ok, err)` where `ok` unified, `err` from context.
+    OkLit(Box<TypedExpr>),
+    /// `Err(value)` — payload already unified; `self.ty` = `Result(ok, err)` where `err` unified, `ok` from context.
+    ErrLit(Box<TypedExpr>),
     /// `lhs ?? rhs` — rhs evaluates ONLY when lhs is None (lazy lowering).
     /// Both sides share the payload type; result type is that payload.
     Coalesce { lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },

@@ -131,6 +131,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kai-test-support"
+version = "0.0.6"
+dependencies = [
+ "kai-ast",
+ "kai-diagnostics",
+ "kai-lexer",
+ "kai-parser",
+ "kai-resolver",
+ "kai-tast",
+]
+
+[[package]]
 name = "kai-typecheck"
 version = "0.0.6"
 dependencies = [

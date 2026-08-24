@@ -267,7 +267,8 @@ impl<'src> Lexer<'src> {
         while self.cursor.eat_if(is_word_continue).is_some() {}
         let end = self.cursor.pos();
         // Slice is safe: the word is ASCII by construction.
-        let word = std::str::from_utf8(self.cursor.slice(start, end)).expect("ascii word");
+        let word = std::str::from_utf8(self.cursor.slice(start, end))
+            .expect("internal error: non-ascii word slice — compiler bug");
         let kind = keywords::lookup(word).unwrap_or_else(|| TokenKind::Ident(word.to_owned()));
         Some(self.token(kind, start))
     }

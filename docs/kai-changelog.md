@@ -4,6 +4,21 @@ This file tracks **compiler implementation** releases (`vX.Y.Z`, what `kai build
 
 ---
 
+## v0.0.6.1 — Split & hardening patch (no new surface, whitepaper v0.14 alignment)
+
+Patch over v0.0.6 that pays down §8 debt before the trust layer (§5, v0.0.7+). Scope is hardening + file splits + `Ok`/`Err` constructors (whitepaper v0.14 §3.4 gap-closure); grammar already locked in EBNF, now landed in code.
+
+- **Hardening (P1/P2)** — `scope.rs:59`, `ownership/scopes.rs:18`, `resolver/tables.rs:133`, `codegen/runtime.rs:78,165` `expect`/`unsafe` paths now guard with `internal error: … — compiler bug` prefix or diagnostic; `Layout::from_size_align_unchecked` gains `isize::MAX` guard, `kai_string_new` null-data aborts; `lexer.rs:270` ascii word expect prefixed. Distinguishes compiler-bug panics from user diagnostics (§8 constraint 6, not §10 runtime traps).
+- **File splits (§8.4 — no file >500 LOC)** — `kai-ownership` monolith `lib.rs:1414` → `fresh.rs:136` + `heap.rs:93` + `scopes.rs:46` + `walk.rs:410` + `lib.rs:69` + `tests.rs:513`/`v0006_tests.rs:170` (logic under 500, tests file just over is tracked). `kai-ast` gains `UseDecl::dotted_name()`/`alias()` centralizing `join(".")` duplicated in `driver/modules.rs:123` and `resolver/tables.rs:126`; `Span::DUMMY` replaces 14 `Span::new(0,0)` sentinels. `kai-ownership/Cargo.toml:10` unified to `workspace = true`.
+- **Dedup crate** — new `kai-test-support:0.0.6` (workspace member) provides canonical `parse_ok`/`parse_with_diags`/`Span::DUMMY`/`assert_diag_contains` to replace 6 cloned `parse_src`/`check_src` helpers (`parser/lib.rs:39`, `resolver/lib.rs:291`, `typecheck/lib.rs:927` ×3). Full migration of per-crate `check_src` clones deferred to next patch, crate is the prescriptive path.
+- **`Ok`/`Err` constructors (whitepaper v0.14 §3.4, EBNF `PrimaryExpr`)** — `Ok(value)`/`Err(value)` parallel `Some`/`None`, each pins one `Result<T,E>` param from its arg, the other from context (annotation or `return` type) reusing `None`/`[]` context-typing. `lexer/token.rs:150` + `keywords.rs:59`, `ast/expr.rs:205`, `parser/expr.rs:439`, `tast/expr.rs:183`, `typecheck/expr.rs:1020`, `ownership/fresh.rs:136`/`heap.rs:93`/`walk.rs:410`, `codegen/types.rs:86`/`emit/expr.rs:1364` updated. Verified via JIT `Ok(42).unwrap_or(0) + Err("x").unwrap_or(7) == 49`. `catch` with `Ok`/`Err` payloads is wired; one `catch.join` terminator edge is tracked as known gap (existing v0.0.6 fixture 295 tests still green).
+- **Stdlib note** — synthetic `std.io` via synthetic module (without disk) was evaluated as shortcut for Hello World; **not landed** — deferred to manifest (`kai.toml`) design. README/whitepaper gap note retained: `std.io` stays deferred, `synthetic module` is implementation shortcut not final resolution, per audit follow-up.
+- **Docs alignment** — re-read `whitepaper v0.14` (878 lines) + `EBNF v0.14` (414 lines) + `project-structure.md:14`; `T?` is single canonical node (no desugar), `.unwrap_or` has no dedicated production, `catch` uses `CatchBlock` (only trailing-expression block), `_` barred from `Param`/`For` bindings (§9.9b).
+
+295 tests green (22 ownership, 62 typecheck, 54 codegen, etc.) + clippy `-D warnings` clean. Cargo workspace version stays `0.0.6` (semver has no fourth component); release identity is git tag `v0.0.6.1` + this section. Next: finish `kai-codegen/src/emit/expr.rs:1364` split (`tagged.rs`/`closure.rs`/`heap.rs`) and migrate remaining `parse_src` clones to `kai-test-support`.
+
+---
+
 ## v0.0.6 — Optionals, Results, closures, and the discard statement
 
 The first version where failure becomes a *type*: `Optional<T>` and `Result<T, E>` land as tagged unions with ownership applied only to the active payload, closures arrive as unconditionally heap-bearing values with retained captures, and silent discards of tagged unions become diagnostics behind one explicit escape hatch. Scope locked by whitepaper **v0.13** (§9.9a, §9.9b, §9.10); grammar surface was already drafted in the EBNF and completed here.

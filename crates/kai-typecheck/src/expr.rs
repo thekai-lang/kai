@@ -45,7 +45,7 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
             KaiType::String,
         ),
         ExprKind::Index(indexed) => index_expr(checker, indexed),
-        // v0.0.6 (§9.9a/§9.10)
+        // v0.0.6 (§9.9a/§9.10) + v0.14 Ok/Err
         ExprKind::SomeLit(some) => {
             let value = lower(checker, &some.value, None);
             let ty = KaiType::Optional(Box::new(value.ty.clone()));
@@ -60,6 +60,42 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
                 }
                 _ => {
                     checker.error(error::none_needs_annotation(expr.span));
+                    poisoned()
+                }
+            }
+        }
+        ExprKind::OkLit(ok) => {
+            // `Ok(value)` pins T from its arg, E from context (annotation or return type) — v0.14 §3.4.
+            let value = lower(checker, &ok.value, None);
+            let ok_ty = value.ty.clone();
+            match expected {
+                Some(KaiType::Result { ok: _, err }) => {
+                    let ty = KaiType::Result {
+                        ok: Box::new(ok_ty.clone()),
+                        err: err.clone(),
+                    };
+                    TypedExpr::new(TypedExprKind::OkLit(Box::new(value)), ty)
+                }
+                _ => {
+                    checker.error(error::ok_needs_annotation(expr.span));
+                    poisoned()
+                }
+            }
+        }
+        ExprKind::ErrLit(err_lit) => {
+            // `Err(value)` pins E from its arg, T from context.
+            let value = lower(checker, &err_lit.value, None);
+            let err_ty = value.ty.clone();
+            match expected {
+                Some(KaiType::Result { ok, err: _ }) => {
+                    let ty = KaiType::Result {
+                        ok: ok.clone(),
+                        err: Box::new(err_ty.clone()),
+                    };
+                    TypedExpr::new(TypedExprKind::ErrLit(Box::new(value)), ty)
+                }
+                _ => {
+                    checker.error(error::err_needs_annotation(expr.span));
                     poisoned()
                 }
             }
@@ -884,8 +920,12 @@ fn collect_refs_expr(e: &TypedExpr, out: &mut Vec<LocalId>) {
                 out.push(*id);
             }
         }
-        TypedExprKind::Neg(inner) | TypedExprKind::Not(inner) | TypedExprKind::Retain(inner)
-        | TypedExprKind::SomeLit(inner) => collect_refs_expr(inner, out),
+        TypedExprKind::Neg(inner)
+        | TypedExprKind::Not(inner)
+        | TypedExprKind::Retain(inner)
+        | TypedExprKind::SomeLit(inner)
+        | TypedExprKind::OkLit(inner)
+        | TypedExprKind::ErrLit(inner) => collect_refs_expr(inner, out),
         TypedExprKind::Binary { lhs, rhs, .. }
         | TypedExprKind::Coalesce { lhs, rhs } => {
             collect_refs_expr(lhs, out);

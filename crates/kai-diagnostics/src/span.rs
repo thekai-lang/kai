@@ -7,6 +7,8 @@ pub struct Span {
 }
 
 impl Span {
+    pub const DUMMY: Span = Span { start: 0, end: 0 };
+
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }

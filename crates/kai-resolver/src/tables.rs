@@ -124,13 +124,17 @@ pub(crate) fn build_multi(
 
     for (m_idx, module) in modules.iter().enumerate() {
         for decl in &module.program.use_decls {
-            let target = decl
-                .path
-                .iter()
-                .map(|segment| segment.name.as_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let alias = decl.path.last().expect("non-empty import path").clone();
+            let target = decl.dotted_name();
+            let Some(alias) = decl.path.last().cloned() else {
+                diagnostics.push(
+                    Diagnostic::error(
+                        "internal error: empty import path — compiler bug",
+                        decl.span,
+                    )
+                    .with_file(module.file),
+                );
+                continue;
+            };
 
             let Some(&target_idx) = name_to_index.get(target.as_str()) else {
                 diagnostics.push(

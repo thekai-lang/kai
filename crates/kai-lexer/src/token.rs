@@ -17,11 +17,13 @@ pub enum TokenKind {
     For,
     In,
     // v0.0.6 keywords. `Some`/`None` construct an Optional value (§9.9a);
-    // `catch` is the Result error-branch postfix operator. `Result` and
+    // `Ok`/`Err` construct a Result value (§3.4, v0.14); `catch` is the Result error-branch postfix operator. `Result` and
     // `Optional` stay plain identifiers — they only ever name types, so
     // they resolve like `int32` does.
     SomeKw,
     NoneKw,
+    OkKw,
+    ErrKw,
     Catch,
     /// Bare `_`, carved out of `Ident` as of v0.0.6 (§9.9b): reserved
     /// exclusively for the discard statement, never a binding name.
@@ -104,6 +106,8 @@ impl TokenKind {
             TokenKind::In => "`in`".into(),
             TokenKind::SomeKw => "`Some`".into(),
             TokenKind::NoneKw => "`None`".into(),
+            TokenKind::OkKw => "`Ok`".into(),
+            TokenKind::ErrKw => "`Err`".into(),
             TokenKind::Catch => "`catch`".into(),
             TokenKind::Underscore => "`_`".into(),
             TokenKind::True | TokenKind::False => "boolean literal".into(),

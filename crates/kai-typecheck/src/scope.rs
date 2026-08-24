@@ -56,7 +56,10 @@ impl Locals {
     /// Declares a binding in the current scope. Ids only advance for fresh
     /// bindings; duplicates resolve to the original id.
     pub fn declare(&mut self, name: &str, ty: KaiType, mutable: bool) -> DeclareOutcome {
-        let current = self.scopes.last_mut().expect("scope stack never empty");
+        let current = self
+            .scopes
+            .last_mut()
+            .expect("internal error: scope stack empty — compiler bug, not user code");
         if let Some(existing) = current.get(name).cloned() {
             return DeclareOutcome::Duplicate(existing);
         }
