@@ -2,6 +2,30 @@
 #![allow(unused_imports)]
 use super::*;
 
+/// §5.1.7 + §5.1.3: a `T @local(d)` value may flow into an argument
+/// position expecting the BARE inner type `T`. `@local` has zero runtime
+/// footprint (pure delegation — no header, no wrapping), so this is a
+/// compile-time marker drop on a read/borrow, never a representation
+/// change. Without it, every callee in the call graph would be forced to
+/// re-annotate its parameters with `@local` just because the caller happens
+/// to hold a tracked value — making "cheap" (§5.1) a lie.
+///
+/// Soundness is NOT lost: the modifier stays on the TAST node (no coercion),
+/// and the EFFECT checker runs after ownership with full call-graph effect
+/// knowledge — if the callee turns out escaping (declared OR inferred
+/// transitively), the boundary diagnostic fires there. Typecheck cannot
+/// make that call: effects do not exist yet at this phase (§8 ordering).
+pub(crate) fn local_read_as_plain(value_ty: &KaiType, param_ty: &KaiType) -> bool {
+    matches!(
+        value_ty,
+        KaiType::Temporal {
+            inner,
+            origin: kai_tast::TemporalOrigin::Local,
+            ..
+        } if inner.as_ref() == param_ty
+    )
+}
+
 pub(crate) fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> TypedExpr {
     // `.unwrap_or(default)` on a tagged-union receiver is the builtin
     // combinator (§9.9a) — resolved HERE, from an ordinary FieldAccess+Call
@@ -68,8 +92,10 @@ pub(crate) fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> T
     let mut args = Vec::with_capacity(call.args.len());
     for (position, (arg, param_ty)) in call.args.iter().zip(&sig.param_tys).enumerate() {
         let value = lower(checker, arg, Some(param_ty.clone()));
-        // The hint widens int literals; everything else must match exactly.
-        if value.ty != *param_ty {
+        // The hint widens int literals; everything else must match exactly —
+        // except the @local read-widening above (soundness deferred to the
+        // effect checker, which knows this callee's inferred effects).
+        if value.ty != *param_ty && !local_read_as_plain(&value.ty, param_ty) {
             checker.error(error::arg_type_mismatch(
                 &sig.name,
                 param_ty.clone(),
@@ -147,7 +173,7 @@ pub(crate) fn try_closure_call(checker: &mut Checker, call: &CallExpr, span: Spa
     let mut args_typed = Vec::with_capacity(call.args.len());
     for (position, (arg, param_ty)) in call.args.iter().zip(&params).enumerate() {
         let value = lower(checker, arg, Some(param_ty.clone()));
-        if value.ty != *param_ty {
+        if value.ty != *param_ty && !local_read_as_plain(&value.ty, param_ty) {
             checker.error(error::arg_type_mismatch(
                 &callee_val.ty.to_string(),
                 param_ty.clone(),
