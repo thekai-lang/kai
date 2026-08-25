@@ -51,4 +51,8 @@ pub fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static)
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod v0003_tests;
+#[cfg(test)]
+mod v0005_surface_tests;
+#[cfg(test)]
 mod v0006_tests;

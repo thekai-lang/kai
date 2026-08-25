@@ -270,7 +270,7 @@ pub(crate) fn emit<'ctx>(
                 ..
             } = &expr.ty
             {
-                crate::emit::ownership::wallclock_construct(ctx, inner, base)
+                crate::emit::wallclock::wallclock_construct(ctx, inner, base)
             } else {
                 base
             }

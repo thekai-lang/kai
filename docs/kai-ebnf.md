@@ -1,12 +1,13 @@
 # Kai — Core Language Grammar (EBNF)
 
-**Scope:** v0.0.1–v0.0.6 core language (unchanged, §1–§8 below), plus a new
-§9 covering the v0.0.7 trust-aware layer's syntax now that §5.1
-(`@local`/`@wallclock`) is locked (whitepaper v0.15). The rest of the
-trust-aware layer (`require`/`observe` statements are covered below;
-`reversible`, `compensate`, `dsl sql`, `dsl api`, `@override` remain excluded
-— those sections of §5 aren't locked yet, so their grammar isn't written
-until they are, same discipline as before.
+**Scope:** v0.0.1–v0.0.6 core language (unchanged, §1–§8 below), plus §9
+covering the v0.0.7 trust-aware layer's syntax (`@local`/`@wallclock`,
+locked in whitepaper v0.15 and refined through v0.17's §5.1.7) and §9a
+covering the v0.0.8 `require`/`observe` pair (syntax stable since v0.2;
+semantics NOT yet formalized). The rest of the trust-aware layer —
+`reversible`, `compensate`, `dsl sql`, `dsl api`, `@override` — remains
+excluded: those sections of §5 aren't locked yet, so their grammar isn't
+written until they are, same discipline as before.
 
 **Method:** every rule below is derived from an example that already exists in
 the whitepaper or the actual v0.0.1/v0.0.2 implementation. Nothing here is
@@ -37,11 +38,21 @@ Letter       ::= 'a'..'z' | 'A'..'Z'
 Digit        ::= '0'..'9'
 
 Keyword      ::= 'fn' | 'let' | 'var' | 'type' | 'use' | 'return'
-               | 'if' | 'else' | 'for' | 'in' | 'while'
-               | 'true' | 'false'
-               | 'public' | 'mut'
-               | 'Some' | 'None' | 'Ok' | 'Err' | 'Result' | 'Optional'
-               | 'catch' | 'as'                    (* 'as' reserved for future module alias, not v0.0.1–5 core *)
+                | 'if' | 'else' | 'for' | 'in' | 'while'
+                | 'true' | 'false'
+                | 'public' | 'mut'
+                | 'Some' | 'None' | 'Ok' | 'Err' | 'Result' | 'Optional'
+                | 'catch' | 'as'                    (* 'as' reserved for future module alias, not v0.0.1–5 core *)
+                (* v0.0.7 trust-aware layer (§9): temporal modifiers, effects
+                   contracts, and the §9a require/observe pair (v0.0.8
+                   semantics, syntax stable). `local`/`wallclock` lex as
+                   keywords but are only meaningful immediately after '@'. *)
+                | 'require' | 'observe'             (* v0.0.8 semantics — §9a *)
+                | 'effects'                         (* EffectsAnnotation, §9 *)
+                | 'escapes-local-context'           (* hyphenated: the lexer consumes `-local-context`
+                                                       as one continuation of the word `escapes`, so it is a
+                                                       single keyword token despite '-' not being an Ident char *)
+                | 'local' | 'wallclock'             (* only after '@', see TemporalModifier §9 *)
 
 (* Literals *)
 IntLit       ::= Digit { Digit }
@@ -72,9 +83,10 @@ EscapeSeq    ::= '\' ('n' | 't' | 'r' | '\' | '"' | '0')
 
 (* Operators and punctuation *)
 Op           ::= '+' | '-' | '*' | '/' | '%'
-               | '==' | '!=' | '<' | '>' | '<=' | '>='
-               | '&&' | '||' | '!'
-               | '=' | '+=' | '-=' | '*=' | '/='
+                | '==' | '!=' | '<' | '>' | '<=' | '>='
+                | '&&' | '||' | '!'
+                | '=' | '+=' | '-=' | '*=' | '/='
+                | '@'                               (* v0.0.7: temporal modifier prefix, §9 *)
                | '??' | '->' | '.' | ',' | ':' | ';'
                | '(' | ')' | '{' | '}' | '[' | ']'
                | '?'                                  (* postfix optional-type marker *)
@@ -400,11 +412,16 @@ Only §5.1 (temporal types), locked in whitepaper v0.15, gets grammar here. `req
 ```ebnf
 DurationLit  ::= DecimalInt DurationUnit
 DurationUnit ::= 'ms' | 's' | 'm' | 'h' | 'd'
-               (* Integer-only for v0.0.7 — 30m, 1h, 500ms valid; 1.5h,
-                  1hour, -30m, bare 30 with no unit are not. Lexical
-                  validity only: 0ms parses fine, whether it's a legal
-                  duration for a given temporal type is a typecheck
-                  question, not a lexer one — whitepaper §5.1.6. *)
+                (* Integer-only for v0.0.7 — 30m, 1h, 500ms valid; 1.5h,
+                   1hour, -30m, bare 30 with no unit are not. Lexical
+                   validity only: 0ms parses fine, whether it's a legal
+                   duration for a given temporal type is a typecheck
+                   question, not a lexer one — whitepaper §5.1.6.
+                   LEXING NOTE: DurationLit is ONE token — the lexer
+                   maximal-munches the unit suffix straight after the digit
+                   run (`ms` wins over `m`), and `DecimalInt` is the §1
+                   IntLit production (digits only). So `500ms` lexes as one
+                   DurationLit, never IntLit + Ident("ms"). *)
 
 TemporalModifier ::= '@local' '(' DurationLit ')'
                    | '@wallclock' '(' DurationLit ')'
@@ -443,9 +460,7 @@ FnDecl       ::= [ 'public' ] 'fn' Ident '(' [ ParamList ] ')' '->' Type
                   capability annotation goes between signature and body). *)
 ```
 
-**Not grammar, recorded here only as a pointer:** the boundary rule itself (`escapes-local-context` inference, the closure-capture reachability invariant, the SCC/fixpoint call-graph analysis) is entirely a type/effect-checker concern, per whitepaper §5.1.1's own layering principle — none of it belongs in this file. This section defines syntax only; consult whitepaper §5.1.1–§5.1.3 for what the syntax *means*.
-
-## 9a. `require`/`observe` grammar — syntax stable, semantics NOT yet formalized (v0.0.8)
+**Not grammar, recorded here only as a pointer:** the boundary rule itself (`escapes-local-context` inference, the closure-capture reachability invariant, the SCC/fixpoint call-graph analysis, and §5.1.3a's local-read narrowing — a `T @local(d)` value flowing to a plain-`T` argument position with propagation gated by the callee's effect set) is entirely a type/effect-checker concern, per whitepaper §5.1.1's own layering principle — none of it belongs in this file. This section defines syntax only; consult whitepaper §5.1.1–§5.1.3a (and §5.1.7 for the runtime representation) for what the syntax *means*.
 
 ```ebnf
 RequireStmt  ::= 'require' Expr ';'
@@ -459,18 +474,17 @@ ObserveStmt  ::= 'observe' Expr ';'
 
 **Status, explicitly:** this shape has been stable since whitepaper v0.2 and is unlikely to change, but §5.2's *semantics* — an `EffectKind` classification, a `Trust<C>` lowering table analogous to §5.1.2's effect-contract table, precise `Verification` timing, and `observe`'s history-sink decision (still an open Appendix A item) — have never been formalized to §5.1's level of rigor. **If v0.0.7's parser happens to accept this shape anyway** (because the grammar is simple enough to fall out of the existing `Stmt` production for free), the implementation must not silently treat it as semantically complete: either don't wire it into effect-checking at all yet, or emit an explicit `not yet implemented` diagnostic at the point it would otherwise need real semantics. Full formalization is a pre-v0.0.8 task, matching what §5.1.1–§5.1.6 just did for temporal types — same rigor, not a lighter pass just because the syntax is smaller.
 
-**Not grammar, recorded here only as a pointer:** the boundary rule itself (`escapes-local-context` inference, the closure-capture reachability invariant, the SCC/fixpoint call-graph analysis) is entirely a type/effect-checker concern, per whitepaper §5.1.1's own layering principle — none of it belongs in this file. This section defines syntax only; consult whitepaper §5.1.1–§5.1.3 for what the syntax *means*.
+---
 
-
+## Open items — grammar-level decisions not yet made anywhere in the whitepaper
 
 Items **struck through** below are now resolved by the actual implementation
-(v0.0.1/v0.0.2 changelog) and reflected in the rules above. They're kept
-visible so the resolution history isn't lost — same spirit as the whitepaper's
-own changelog.
+and reflected in the rules above. They're kept visible so the resolution
+history isn't lost — same spirit as the whitepaper's own changelog.
 
-1. ~~No loop other than `for...in` has ever appeared.~~ **Resolved: `while` exists**, confirmed v0.0.2. `for...in` itself is still not implemented yet per the changelog (v0.0.1/v0.0.2 cover only `while`, not arrays or `for`) — so `ForStmt` above is spec-only until it actually lands; don't treat it as implemented.
+1. ~~No loop other than `for...in` has ever appeared.~~ **Resolved: `while` exists** (v0.0.2) and **`for...in` landed at v0.0.5** with arrays/ownership — both rules above are implemented, not spec-only.
 2. ~~Boolean logic operators (`&&`, `||`, `!`) have never appeared.~~ **Resolved: all three exist**, confirmed v0.0.2, with `&&` binding tighter than `||` and short-circuit evaluation verified end-to-end.
-3. **Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime)** — previously unscheduled anywhere. `ForStmt`/`ArrayType`/`ArrayLit` in this grammar are still spec-only until v0.0.5 actually lands, but the "no version assigned" gap itself is resolved.
+3. ~~Arrays and `for` loops now have a scheduled version (v0.0.5, Ownership runtime).~~ **Resolved: v0.0.5 landed** — `ForStmt`/`ArrayType`/`ArrayLit`/indexing are implemented and tested (golden fixture `v0005`).
 4. ~~`ClosureLit` still uses `fn(...)` while `ClosureType` dropped it.~~ **Resolved: intentional, confirmed at v0.0.6.** `fn` marks "this is an expression" and deliberately does not appear in the type position — this also leaves room for a future function-pointer-vs-closure type distinction. Not symmetry for its own sake; the asymmetry is load-bearing.
 5. ~~Assignable place — partially resolved.~~ **Now fully resolved.** Assignment is statement-only (confirmed by implementation), and `Place` includes both field access (`Place '.' Ident`, v0.0.3) and array indexing (`Place '[' Expr ']'`, v0.0.5) under one uniform rule — see the `Place` rule above and whitepaper §9.3's generalized model (root determines writability; every projection inherits it).
 6. **Module-qualified calls (`math.sqrt(9.0)`) and struct field access (`user.name`) share the same `.` postfix rule — resolved architecturally, not yet exercised by real code.** No separate AST node for "qualified call" — `math.sqrt(9.0)` parses as ordinary `Call(FieldAccess(Ident, Ident), args)` via the existing `PostfixExpr` composition (see `PostfixOp` note above); disambiguating whether the base identifier is a module or a value is a resolver-phase job. `StructLit`'s head was generalized to `QualifiedName` (dotted, §7 above) for the same reason, so `math.Point { ... }` parses without a parallel node either. This decision is recorded so a "QualifiedCall"/"QualifiedStructLit" special-case node doesn't get reintroduced later out of convenience — it would duplicate what composition already provides and push a semantic (module-vs-value) distinction into the parser, which contradicts the parser/resolver boundary this project has held everywhere else (§8's TAST discipline, the `Trust<C>` IR in §5.0/§8). Still needs real-code testing once modules (v0.0.4) and structs (v0.0.3) have both landed.

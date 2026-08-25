@@ -68,4 +68,6 @@ fn resolve_fn(heap: &HeapBearing, decl: &mut kai_tast::TypedFnDecl, fresh: &mut 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod scope_tests;
+#[cfg(test)]
 mod v0006_tests;
