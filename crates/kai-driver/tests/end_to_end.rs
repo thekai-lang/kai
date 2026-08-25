@@ -1032,3 +1032,60 @@ fn v007_boundary_ok_compiles() {
     // wallclock @wallclock passed to escapes should NOT be flagged, and should show cascade for wallclock in main
     assert!(ir.contains("call void @good"), "good should be called");
 }
+
+/// §5.1.1 boundary rule — the negative path is THE reason @local/@wallclock
+/// exists. Three crossing shapes must ALL be rejected, each by its own layer:
+///
+/// 1. `@local` → escaping fn taking `@local` — types line up, so the EFFECT
+///    checker's reachability invariant fires with the dedicated boundary
+///    diagnostic (covered by `v007_boundary_fail_is_effect_error`).
+/// 2. `@local` → escaping fn taking plain `T` — exact-type rule rejects at
+///    TYPECHECK before the effect phase ever runs (a plain param can't name a
+///    temporal value; there is no implicit strip of the modifier, mirroring
+///    "no implicit conversions" everywhere else in Kai).
+/// 3. Transitive: an intermediate fn that calls an escaper INHERITS
+///    {escapes-local-context} via the §5.1.2 fixpoint without declaring it,
+///    so passing `@local` into IT is also rejected — at both hops.
+#[test]
+fn v007_boundary_local_to_plain_string_rejected_at_typecheck() {
+    // The literal §5.1.1 scenario shape: escaping fn takes a plain string.
+    let src = "fn escapes(t: string) -> unit effects { escapes-local-context } { return; }\n\
+               fn bad(t: string @local(30m)) -> unit { escapes(t); return; }\n\
+               fn main() -> int32 { return 0; }";
+    let failure = pipeline::compile(src).unwrap_err();
+    assert_eq!(
+        failure.phase, "typecheck",
+        "plain-string escapee must reject @local at typecheck (exact-type rule):\n{src}"
+    );
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("expected `string`, found `string @local(30m)`")),
+        "expected the type mismatch to name the temporal type, got {:?}",
+        failure.diagnostics
+    );
+}
+
+#[test]
+fn v007_boundary_transitive_inference_rejects_whole_chain() {
+    // `middle` never declares effects, but it CALLS an escaper — §5.1.2's
+    // transitive inference must mark it {escapes-local-context}, so BOTH the
+    // inner hop AND main→middle are rejected. One silent hop would make the
+    // whole guarantee decorative.
+    let src = "fn inner_escape(t: string @local(30m)) -> unit effects { escapes-local-context } { return; }\n\
+               fn middle(t: string @local(30m)) -> unit { inner_escape(t); return; }\n\
+               fn main() -> int32 { let tok: string @local(30m) = \"hi\"; middle(tok); return 0; }";
+    let failure = pipeline::compile(src).unwrap_err();
+    assert_eq!(failure.phase, "effect");
+    let hits = failure
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("escapes-local-context"))
+        .count();
+    assert!(
+        hits >= 2,
+        "both hops (inner_escape + inferred middle) must be flagged, got {hits}:\n{:?}",
+        failure.diagnostics
+    );
+}
