@@ -56,24 +56,34 @@ pub(crate) fn closure_fat_ty<'ctx>(ctx: &Ctx<'ctx>) -> inkwell::types::StructTyp
     ty
 }
 
-/// Wallclock header (§5.1.7): `{ i64 rc, i64 instant (UTC micros since epoch), payload }`
+/// Wallclock header (§5.1.7): `{ i64 rc, i64 instant, ptr dtor, i64 nbytes, <inner> payload }`
 /// Unconditionally heap-allocated, like array (§9.1), regardless of inner type.
-/// `instant` is compact integer, NOT RFC3339 string — wire format is serialization only (§5.1.5).
+/// `instant` is compact integer UTC micros since epoch, NOT RFC3339 string — wire format is serialization only (§5.1.5).
+/// Payload is stored INLINE at GEP index 4; the runtime prefix (`KaiWallclockHeader`) is 32 bytes.
 pub(crate) fn wallclock_header_ty<'ctx>(
     ctx: &Ctx<'ctx>,
     inner: &KaiType,
 ) -> inkwell::types::StructType<'ctx> {
     let inner_llvm = to_llvm(ctx, inner);
     // Use inner type's string form for unique name, like array does
-    let name = format!("KaiWallclock.{}", inner_llvm.to_string().replace(|c: char| !c.is_alphanumeric(), "_"));
+    let name = format!(
+        "KaiWallclock.{}",
+        inner_llvm
+            .to_string()
+            .replace(|c: char| !c.is_alphanumeric(), "_")
+    );
     if let Some(existing) = ctx.module.get_struct_type(&name) {
         return existing;
     }
     let ty = ctx.context.opaque_struct_type(&name);
     let i64_ty = ctx.context.i64_type().into();
-    ty.set_body(&[i64_ty, i64_ty, inner_llvm], false);
+    let ptr_ty = ctx.context.ptr_type(Default::default()).into();
+    ty.set_body(&[i64_ty, i64_ty, ptr_ty, i64_ty, inner_llvm], false);
     ty
 }
+
+/// GEP index of the inline payload inside `%KaiWallclock.*`.
+pub(crate) const WALLCLOCK_PAYLOAD_IDX: u32 = 4;
 
 /// Function signature type: `void` for unit returns, by-value parameters
 /// (§9.3 — callees see copies, so mutation stays local).

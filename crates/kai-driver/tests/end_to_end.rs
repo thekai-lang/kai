@@ -987,14 +987,28 @@ fn v007_wallclock_cascade_has_two_releases() {
     // string @wallclock(30m) is unconditionally heap (header + inner string) → two-step cascade
     // This is the "silently correct for int32 @wallclock, silently wrong for string @wallclock" case (§5.1.7)
     let ir = pipeline::compile_file(&v007_wallclock_entry()).expect("wallclock should compile");
-    // main's `let w: string @wallclock` must release inner string header then wallclock header
-    let wallclock_releases = ir.matches("call void @kai_release").count();
+    // Construction must allocate the WALLCLOCK header around the inner string —
+    // a bare kai_string_new stored into the slot made release type-confuse
+    // KaiString as KaiWallclock (memory corruption, not just a leak).
     assert!(
-        wallclock_releases >= 2,
-        "wallclock string should have at least 2 releases (inner + header), got {wallclock_releases} in IR:\n{ir}"
+        ir.contains("call ptr @kai_wallclock_new"),
+        "construction must wrap the inner in a wallclock header:\n{ir}"
     );
-    // Specifically, main should have wallclock payload + header releases
-    assert!(ir.contains("wallclock.payload"), "wallclock payload handling missing in IR:\n{ir}");
+    assert!(
+        ir.contains("declare ptr @kai_wallclock_new"),
+        "wallclock constructor missing from declarations:\n{ir}"
+    );
+    // The generated payload dtor cascades into the heap-bearing inner
+    // (release inner first), then the runtime frees the header itself.
+    assert!(
+        ir.contains("kai.dtor.wall_"),
+        "payload dtor missing — cascade would silently skip the inner:\n{ir}"
+    );
+    // main's scope exit releases through the dedicated wallclock releaser.
+    assert!(
+        ir.contains("call void @kai_wallclock_release"),
+        "header release missing:\n{ir}"
+    );
 }
 
 fn v007_boundary_fail_entry() -> PathBuf {

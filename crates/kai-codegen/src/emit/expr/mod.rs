@@ -257,7 +257,24 @@ pub(crate) fn emit<'ctx>(
         TypedExprKind::StructLit { struct_id, values } => {
             heap::struct_lit(ctx, frame, *struct_id, values)
         }
-        TypedExprKind::StrLit { value } => heap::string_lit(ctx, value),
+        TypedExprKind::StrLit { value } => {
+            let base = heap::string_lit(ctx, value);
+            // `let w: string @wallclock(d) = "...";` (§5.1.7): the literal is
+            // the INNER representation; construction must allocate the
+            // unconditionally-heap wallclock HEADER around it — storing the
+            // bare string pointer here made every later release type-confuse
+            // a KaiString as a KaiWallclock.
+            if let KaiType::Temporal {
+                inner,
+                origin: kai_tast::TemporalOrigin::Wallclock,
+                ..
+            } = &expr.ty
+            {
+                crate::emit::ownership::wallclock_construct(ctx, inner, base)
+            } else {
+                base
+            }
+        }
         TypedExprKind::ArrayLit { elements } => {
             let elem = match &expr.ty {
                 KaiType::Array(elem) => elem.as_ref().clone(),
@@ -273,41 +290,52 @@ pub(crate) fn emit<'ctx>(
         // op; heap-bearing structs get per-field retains at their source
         // place, then a bitwise copy flows onward.
         TypedExprKind::Retain(inner) => match &expr.ty {
-            KaiType::Temporal { inner: t_inner, .. } => match t_inner.as_ref() {
-                KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+            KaiType::Temporal { inner: t_inner, origin, .. } => match origin {
+                // §5.1.7: @wallclock co-ownership rides the HEADER refcount
+                // (single rc covering the whole aggregate — the dtor
+                // cascades into the inner exactly once at rc==0). Retaining
+                // only the inner here would leave two bindings sharing one
+                // header with rc still 1 → double header release.
+                kai_tast::TemporalOrigin::Wallclock => {
                     let value = emit(ctx, frame, inner);
-                    // Temporal @local is zero-cost (same as inner), @wallclock is heap but currently same as inner for codegen
-                    let env = if matches!(t_inner.as_ref(), KaiType::Closure { .. }) {
-                        let agg = value.into_struct_value();
-                        ctx.builder
-                            .build_extract_value(agg, 1, "clo.env")
-                            .expect("env member")
-                    } else {
-                        value
-                    };
-                    crate::emit::ownership::retain_header(ctx, env);
+                    crate::emit::ownership::retain_header(ctx, value);
                     value
                 }
-                KaiType::Struct(_) | KaiType::Optional(_) | KaiType::Result { .. } => {
-                    let value = emit(ctx, frame, inner);
-                    let agg_ty = to_llvm(ctx, &expr.ty);
-                    let tmp = crate::emit::alloca_in_entry(
-                        ctx,
-                        crate::emit::current_function(ctx),
-                        agg_ty,
-                        "retain.tmp",
-                    );
-                    let _ = ctx.builder.build_store(tmp, value);
-                    if matches!(t_inner.as_ref(), KaiType::Struct(_)) {
-                        crate::emit::ownership::retain_struct_copy(ctx, t_inner, tmp);
-                    } else {
-                        crate::emit::ownership::retain_tagged_copy(ctx, t_inner, tmp);
+                kai_tast::TemporalOrigin::Local => match t_inner.as_ref() {
+                    KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                        let value = emit(ctx, frame, inner);
+                        let env = if matches!(t_inner.as_ref(), KaiType::Closure { .. }) {
+                            let agg = value.into_struct_value();
+                            ctx.builder
+                                .build_extract_value(agg, 1, "clo.env")
+                                .expect("env member")
+                        } else {
+                            value
+                        };
+                        crate::emit::ownership::retain_header(ctx, env);
+                        value
                     }
-                    ctx.builder
-                        .build_load(agg_ty, tmp, "retained.v")
-                        .expect("load retained")
-                }
-                other => unreachable!("retain of non-heap temporal inner {other:?}"),
+                    KaiType::Struct(_) | KaiType::Optional(_) | KaiType::Result { .. } => {
+                        let value = emit(ctx, frame, inner);
+                        let agg_ty = to_llvm(ctx, &expr.ty);
+                        let tmp = crate::emit::alloca_in_entry(
+                            ctx,
+                            crate::emit::current_function(ctx),
+                            agg_ty,
+                            "retain.tmp",
+                        );
+                        let _ = ctx.builder.build_store(tmp, value);
+                        if matches!(t_inner.as_ref(), KaiType::Struct(_)) {
+                            crate::emit::ownership::retain_struct_copy(ctx, t_inner, tmp);
+                        } else {
+                            crate::emit::ownership::retain_tagged_copy(ctx, t_inner, tmp);
+                        }
+                        ctx.builder
+                            .build_load(agg_ty, tmp, "retained.v")
+                            .expect("load retained")
+                    }
+                    other => unreachable!("retain of non-heap temporal-local inner {other:?}"),
+                },
             },
             KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
                 let value = emit(ctx, frame, inner);
