@@ -29,6 +29,10 @@ impl<'src> Cursor<'src> {
         self.src.get(self.pos + 1).copied()
     }
 
+    pub fn peek_n(&self, n: usize) -> Option<u8> {
+        self.src.get(self.pos + n).copied()
+    }
+
     pub fn bump(&mut self) -> Option<u8> {
         let byte = self.peek()?;
         self.pos += 1;

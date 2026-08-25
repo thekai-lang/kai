@@ -56,14 +56,14 @@ dependencies = [
 
 [[package]]
 name = "kai-ast"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-diagnostics",
 ]
 
 [[package]]
 name = "kai-codegen"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "inkwell",
  "kai-diagnostics",
@@ -72,15 +72,16 @@ dependencies = [
 
 [[package]]
 name = "kai-diagnostics"
-version = "0.0.6"
+version = "0.0.7"
 
 [[package]]
 name = "kai-driver"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-ast",
  "kai-codegen",
  "kai-diagnostics",
+ "kai-effects",
  "kai-lexer",
  "kai-ownership",
  "kai-parser",
@@ -90,15 +91,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kai-effects"
+version = "0.0.7"
+dependencies = [
+ "kai-ast",
+ "kai-diagnostics",
+ "kai-tast",
+]
+
+[[package]]
 name = "kai-lexer"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-diagnostics",
 ]
 
 [[package]]
 name = "kai-ownership"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-diagnostics",
  "kai-tast",
@@ -106,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "kai-parser"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-ast",
  "kai-diagnostics",
@@ -115,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "kai-resolver"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-ast",
  "kai-diagnostics",
@@ -125,14 +135,14 @@ dependencies = [
 
 [[package]]
 name = "kai-tast"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-diagnostics",
 ]
 
 [[package]]
 name = "kai-test-support"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-ast",
  "kai-diagnostics",
@@ -144,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "kai-typecheck"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "kai-ast",
  "kai-diagnostics",

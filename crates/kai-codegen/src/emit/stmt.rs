@@ -19,6 +19,14 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
                 emit(ctx, frame, inner);
             }
         }
+        TypedStmt::Require(e) => {
+            // v0.0.8 semantics not yet formalized (§5.2) — parsed but not effect-checked.
+            // Evaluate condition for now (bool, already typechecked), no runtime effect.
+            let _ = expr::emit(ctx, frame, e);
+        }
+        TypedStmt::Observe(e) => {
+            let _ = expr::emit(ctx, frame, e);
+        }
         TypedStmt::Expr(e) => {
             // Value discarded; calls make this meaningful in v0.0.3.
             let _ = expr::emit(ctx, frame, e);

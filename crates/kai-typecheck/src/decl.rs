@@ -144,12 +144,24 @@ fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> Typ
 
     ensure_returns_on_all_paths(checker, decl, &ret, &body);
 
+    let declared_effects = decl.effects.as_ref().map(|set| {
+        let effects = set
+            .0
+            .iter()
+            .map(|e| match e {
+                kai_ast::EffectName::EscapesLocalContext => kai_tast::Effect::EscapesLocalContext,
+            })
+            .collect();
+        kai_tast::EffectSet(effects)
+    });
     TypedFnDecl {
         id,
         name: decl.name.name.clone(),
         module: module_path(checker, checker.current_module),
         params,
         ret,
+        declared_effects,
+        inferred_effects: kai_tast::EffectSet::default(),
         body,
     }
 }

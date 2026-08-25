@@ -319,3 +319,23 @@ pub(crate) fn err_needs_annotation(span: Span) -> Diagnostic {
         span,
     )
 }
+
+pub(crate) fn require_not_yet_implemented(span: Span) -> Diagnostic {
+    Diagnostic::error("`require` is parsed but not yet implemented — v0.0.8 (semantics not yet formalized, §5.2)", span)
+}
+
+pub(crate) fn observe_not_yet_implemented(span: Span) -> Diagnostic {
+    Diagnostic::error("`observe` is parsed but not yet implemented — v0.0.8 (semantics not yet formalized, §5.2)", span)
+}
+
+pub(crate) fn temporal_zero_duration(span: Span) -> Diagnostic {
+    Diagnostic::error("temporal duration must be non-zero (e.g. `30m`, not `0m`)", span)
+}
+
+#[allow(dead_code)]
+pub(crate) fn effect_mismatch(declared: &str, inferred: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!("declared effects {declared} do not cover inferred effects {inferred} (inferred ⊆ declared must hold, §5.1.2)"),
+        span,
+    )
+}

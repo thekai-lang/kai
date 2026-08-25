@@ -1,5 +1,5 @@
 use super::*;
-use kai_tast::{FunctionId, KaiType, TypedBlock, TypedExpr, TypedExprKind, TypedFnDecl,
+use kai_tast::{EffectSet, FunctionId, KaiType, TypedBlock, TypedExpr, TypedExprKind, TypedFnDecl,
     TypedProgram, TypedStmt, TypedStruct};
 
 fn bare(id: u32, name: &str, module: &str, ret: KaiType, value: i64) -> TypedFnDecl {
@@ -61,6 +61,8 @@ fn qualified_struct_type_names_follow_the_same_rule() {
             ty: KaiType::Struct(kai_tast::StructId(0)),
         }],
         ret: KaiType::Unit,
+        declared_effects: None,
+        inferred_effects: EffectSet::default(),
         body: TypedBlock {
             stmts: vec![TypedStmt::Return(None)],
         },

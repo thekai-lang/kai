@@ -73,7 +73,37 @@ pub enum TokenKind {
     // v0.0.6: `??` coalesce and the `?` of `T?` type sugar.
     QuestionQuestion,
     Question,
+    // v0.0.7: temporal modifiers, DurationLit, effects
+    At, // '@' for @local/@wallclock
+    DurationLit { value: u64, unit: DurationUnit },
+    Require,
+    Observe,
+    Effects,
+    EscapesLocalContext,
+    LocalKw,     // 'local' after '@'
+    WallclockKw, // 'wallclock' after '@'
     Eof,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DurationUnit {
+    Ms,
+    S,
+    M,
+    H,
+    D,
+}
+
+impl DurationUnit {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DurationUnit::Ms => "ms",
+            DurationUnit::S => "s",
+            DurationUnit::M => "m",
+            DurationUnit::H => "h",
+            DurationUnit::D => "d",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +178,14 @@ impl TokenKind {
             TokenKind::RBracket => "`]`".into(),
             TokenKind::QuestionQuestion => "`??`".into(),
             TokenKind::Question => "`?`".into(),
+            TokenKind::At => "`@`".into(),
+            TokenKind::DurationLit { value, unit } => format!("duration literal `{}{}`", value, unit.as_str()),
+            TokenKind::Require => "`require`".into(),
+            TokenKind::Observe => "`observe`".into(),
+            TokenKind::Effects => "`effects`".into(),
+            TokenKind::EscapesLocalContext => "`escapes-local-context`".into(),
+            TokenKind::LocalKw => "`local`".into(),
+            TokenKind::WallclockKw => "`wallclock`".into(),
             TokenKind::Eof => "end of file".into(),
         }
     }

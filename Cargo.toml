@@ -12,10 +12,11 @@ members = [
     "crates/kai-codegen",
     "crates/kai-driver",
     "crates/kai-test-support",
+    "crates/kai-effects",
 ]
 
 [workspace.package]
-version = "0.0.6"
+version = "0.0.7"
 edition = "2024"
 
 [workspace.dependencies]
@@ -29,6 +30,7 @@ kai-typecheck = { path = "crates/kai-typecheck" }
 kai-diagnostics = { path = "crates/kai-diagnostics" }
 kai-codegen = { path = "crates/kai-codegen" }
 kai-test-support = { path = "crates/kai-test-support" }
+kai-effects = { path = "crates/kai-effects" }
 inkwell = { version = "0.10.0", features = ["llvm22-1", "target-x86"] }
 
 [profile.dev]

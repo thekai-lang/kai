@@ -75,7 +75,7 @@ fn type_error_reports_literal_range() {
 
 #[test]
 fn lex_error_reports_unknown_character() {
-    assert_fails_at("fn main() -> int32 { return 0 @ 1; }", "lex", "@");
+    assert_fails_at("fn main() -> int32 { return 0 $ 1; }", "lex", "$");
 }
 
 // ---------------------------------------------------------------------------
@@ -642,12 +642,13 @@ fn v005_jit_module_tree_returns_expected_value() {
 fn corpus_flows_through_pipeline_without_rust_panics() {
     use std::collections::HashSet;
 
-    const PHASES: [&str; 6] = [
+    const PHASES: [&str; 7] = [
         "lex",
         "parse",
         "resolve",
         "typecheck",
         "ownership",
+        "effect",
         "codegen",
     ];
 
@@ -685,7 +686,7 @@ fn corpus_flows_through_pipeline_without_rust_panics() {
     }
     // Every version's fixture set must actually be exercised.
     let seen: HashSet<&str> = checked.iter().filter_map(|s| s.split('/').next()).collect();
-    for ver in ["v0001", "v0002", "v0003", "v0004", "v0005", "v0006"] {
+    for ver in ["v0001", "v0002", "v0003", "v0004", "v0005", "v0006", "v0007"] {
         assert!(seen.contains(ver), "{ver} missing from corpus sweep");
     }
 }
@@ -911,5 +912,62 @@ fn v006_let_underscore_never_parses() {
         "fn main() -> int32 { let _ = 1; return 0; }",
         "parse",
         "a variable name",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// v0.0.7: @local/@wallclock, effects, DurationLit (whitepaper v0.15 §5.1)
+// ---------------------------------------------------------------------------
+
+fn v0007_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v0007/main.kai")
+}
+
+#[test]
+fn v007_file_pipeline_matches_golden_ir() {
+    let ir = pipeline::compile_file(&v0007_entry()).expect("compilation should succeed");
+    assert_golden("v0007/main.expected.ll", &ir);
+}
+
+#[test]
+fn v007_jit_temporal_flow_returns_42() {
+    assert_eq!(pipeline::jit_file(&v0007_entry()).unwrap(), 42);
+}
+
+#[test]
+fn v007_duration_zero_is_type_error() {
+    assert_fails_at(
+        "fn main() -> int32 { let x: string @local(0ms) = \"hi\"; return 0; }",
+        "typecheck",
+        "non-zero",
+    );
+}
+
+#[test]
+fn v007_effects_contract_verified() {
+    // inferred {escapes} ⊆ declared {} must fail (§5.1.2)
+    let src = "fn bad(t: string) -> unit effects {} { return; }\nfn caller(t: string) -> unit { bad(t); }\nfn main() -> int32 { return 0; }";
+    // This specific `bad` has no direct escapes, so it would not fail — we test a function that declares empty but body calls an escaping function via transitive
+    let src2 = "fn esc(t: string) -> unit effects { escapes-local-context } { return; }\nfn bad2(t: string) -> unit effects {} { esc(t); }\nfn main() -> int32 { return 0; }";
+    assert_fails_at(src2, "effect", "declared effects");
+}
+
+#[test]
+fn v007_local_passed_to_escapes_is_effect_error() {
+    let src = "fn esc(t: string @local(30m)) -> unit effects { escapes-local-context } { return; }\nfn main() -> int32 { let tok: string @local(30m) = \"hi\"; esc(tok); return 0; }";
+    assert_fails_at(src, "effect", "escapes-local-context");
+}
+
+#[test]
+fn v007_require_observe_parsed_but_not_implemented() {
+    assert_fails_at(
+        "fn main() -> int32 { require true; return 0; }",
+        "typecheck",
+        "not yet implemented",
+    );
+    assert_fails_at(
+        "fn main() -> int32 { observe true; return 0; }",
+        "typecheck",
+        "not yet implemented",
     );
 }

@@ -1,3 +1,32 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DurationUnit {
+    Ms,
+    S,
+    M,
+    H,
+    D,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurationLit {
+    pub value: u64,
+    pub unit: DurationUnit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemporalOrigin {
+    Local,
+    Wallclock,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Effect {
+    EscapesLocalContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EffectSet(pub Vec<Effect>);
+
 /// Concrete, resolved types. This enum is the single source of truth for what
 /// a value is; surface names and aliases (`int`) never reach codegen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +56,15 @@ pub enum KaiType {
     /// `{ fn_ptr, env_ptr }` and UNCONDITIONALLY heap-bearing regardless of
     /// what they capture (mirrors array's rule).
     Closure { params: Vec<KaiType>, ret: Box<KaiType> },
+    /// `T @local(d)` / `T @wallclock(d)` (v0.0.7, §5.1): temporal wrapper.
+    /// The inner type's heap/stack semantics are unchanged; the wrapper adds
+    /// the `Origin` and `Duration` for effect checking. `T @wallclock` is
+    /// always heap-bearing due to embedded timestamp (RFC3339 string).
+    Temporal {
+        inner: Box<KaiType>,
+        origin: TemporalOrigin,
+        duration: DurationLit,
+    },
 }
 
 impl KaiType {
@@ -67,9 +105,38 @@ impl std::fmt::Display for KaiType {
                 let names: Vec<String> = params.iter().map(|p| p.to_string()).collect();
                 write!(f, "({}) -> {ret}", names.join(", "))
             }
+            KaiType::Temporal { inner, origin, duration } => {
+                let origin_str = match origin {
+                    TemporalOrigin::Local => "local",
+                    TemporalOrigin::Wallclock => "wallclock",
+                };
+                let unit_str = match duration.unit {
+                    DurationUnit::Ms => "ms",
+                    DurationUnit::S => "s",
+                    DurationUnit::M => "m",
+                    DurationUnit::H => "h",
+                    DurationUnit::D => "d",
+                };
+                write!(f, "{inner} @{origin_str}({}{unit_str})", duration.value)
+            }
             // The struct NAME needs the declaration table, which lives with
             // the type checker; generic display keeps this enum standalone.
             KaiType::Struct(_) => write!(f, "struct"),
         }
+    }
+}
+
+impl std::fmt::Display for Effect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Effect::EscapesLocalContext => write!(f, "escapes-local-context"),
+        }
+    }
+}
+
+impl std::fmt::Display for EffectSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parts: Vec<String> = self.0.iter().map(|e| e.to_string()).collect();
+        write!(f, "{{{}}}", parts.join(", "))
     }
 }

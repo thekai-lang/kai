@@ -52,10 +52,20 @@ fn skips_line_comments() {
 
 #[test]
 fn reports_unknown_character_and_continues() {
-    let out = lex("fn @ main");
+    let out = lex("fn $ main");
     assert_eq!(out.diagnostics.len(), 1);
-    assert_eq!(out.diagnostics[0].message, "unexpected character `@`");
+    assert_eq!(out.diagnostics[0].message, "unexpected character `$`");
     assert!(out.tokens.iter().any(|t| t.kind == TokenKind::Fn));
+}
+
+#[test]
+fn at_sign_is_temporal_prefix() {
+    let out = lex("@local @wallclock");
+    assert!(out.diagnostics.is_empty());
+    assert_eq!(
+        kinds(&out.tokens),
+        vec![&TokenKind::At, &TokenKind::LocalKw, &TokenKind::At, &TokenKind::WallclockKw, &TokenKind::Eof]
+    );
 }
 
 #[test]

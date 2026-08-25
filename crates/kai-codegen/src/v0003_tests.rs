@@ -1,5 +1,5 @@
 use super::*;
-use kai_tast::{
+use kai_tast::{EffectSet, 
     FieldStep, FunctionId, KaiType, LocalId, StructId, TypedBlock, TypedExpr, TypedExprKind,
     TypedFnDecl, TypedParam, TypedPlaceStep, TypedProgram, TypedStmt, TypedStruct,
     TypedStructField,
@@ -82,6 +82,8 @@ fn jit_params_are_copies_and_field_places_write_locally() {
             ty: KaiType::Struct(StructId(0)),
         }],
         ret: KaiType::Unit,
+        declared_effects: None,
+        inferred_effects: EffectSet::default(),
         body: TypedBlock {
             stmts: vec![
                 TypedStmt::Assign(kai_tast::TypedAssign {
@@ -105,6 +107,8 @@ fn jit_params_are_copies_and_field_places_write_locally() {
         module: String::new(),
         params: Vec::new(),
         ret: KaiType::Int32,
+        declared_effects: None,
+        inferred_effects: EffectSet::default(),
         body: TypedBlock {
             stmts: vec![
                 TypedStmt::Let(kai_tast::TypedLet {
@@ -172,6 +176,8 @@ fn jit_call_argument_flows_into_result() {
             },
         ],
         ret: KaiType::Int32,
+        declared_effects: None,
+        inferred_effects: EffectSet::default(),
         body: TypedBlock {
             stmts: vec![TypedStmt::Return(Some(TypedExpr::new(
                 TypedExprKind::Binary {
@@ -195,6 +201,8 @@ fn jit_call_argument_flows_into_result() {
         module: String::new(),
         params: Vec::new(),
         ret: KaiType::Int32,
+        declared_effects: None,
+        inferred_effects: EffectSet::default(),
         body: TypedBlock {
             stmts: vec![TypedStmt::Return(Some(TypedExpr::new(
                 TypedExprKind::Call {

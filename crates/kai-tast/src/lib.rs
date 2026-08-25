@@ -15,4 +15,6 @@ pub use stmt::{
     FieldStep, TypedAssign, TypedBlock, TypedFor, TypedIf, TypedLet, TypedPlaceStep, TypedStmt,
 };
 pub use symbol::{FunctionId, LocalId, StructId};
-pub use ty::KaiType;
+pub use ty::{
+    DurationLit, DurationUnit, Effect, EffectSet, KaiType, TemporalOrigin,
+};

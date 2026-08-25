@@ -1,6 +1,28 @@
 use crate::ident::Ident;
 use kai_diagnostics::Span;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DurationUnit {
+    Ms,
+    S,
+    M,
+    H,
+    D,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurationLit {
+    pub value: u64,
+    pub unit: DurationUnit,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemporalOrigin {
+    Local,
+    Wallclock,
+}
+
 /// Syntactic type reference. Primitives are plain names here (`int32`);
 /// resolution to concrete types happens in the type checker, never the parser.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +41,13 @@ pub enum Ty {
     /// `(params) -> ret` (v0.0.6) — closure/function type. Note the value
     /// syntax keeps its `fn` head (`ClosureLit`); only the TYPE dropped it.
     Closure { params: Vec<Ty>, ret: Box<Ty> },
+    /// `T @local(d)` / `T @wallclock(d)` (v0.0.7, §5.1). Postfix temporal
+    /// modifier, same position as `T?` and `T[]` (§9).
+    Temporal {
+        inner: Box<Ty>,
+        origin: TemporalOrigin,
+        duration: DurationLit,
+    },
 }
 
 impl Ty {
@@ -29,6 +58,7 @@ impl Ty {
             Ty::Optional(inner) => inner.span(),
             Ty::Result { ok, .. } => ok.span(),
             Ty::Closure { params, ret } => params.first().map_or(ret.span(), |p| p.span()),
+            Ty::Temporal { inner, .. } => inner.span(),
         }
     }
 }

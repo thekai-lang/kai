@@ -1,13 +1,12 @@
 # Kai — Core Language Grammar (EBNF)
 
-**Scope:** v0.0.1–v0.0.6 (whitepaper v0.14's roadmap: v0.0.5 is now the
-"Ownership runtime" slot — `string`, arrays, `for..in`, retain/release —
-inserted between modules (v0.0.4) and Optional/Result/closures (now v0.0.6,
-was v0.0.5). The trust-aware layer (`require`, `observe`, `@local`/
-`@wallclock`, `reversible`, `compensate`, `dsl sql`, `dsl api`, `@override`)
-is now v0.0.7+ and deliberately excluded — it needs its own grammar
-extension once §5's syntax is locked further, and mixing it in now would let
-grammar work run ahead of the section that's still being revised.
+**Scope:** v0.0.1–v0.0.6 core language (unchanged, §1–§8 below), plus a new
+§9 covering the v0.0.7 trust-aware layer's syntax now that §5.1
+(`@local`/`@wallclock`) is locked (whitepaper v0.15). The rest of the
+trust-aware layer (`require`/`observe` statements are covered below;
+`reversible`, `compensate`, `dsl sql`, `dsl api`, `@override` remain excluded
+— those sections of §5 aren't locked yet, so their grammar isn't written
+until they are, same discipline as before.
 
 **Method:** every rule below is derived from an example that already exists in
 the whitepaper or the actual v0.0.1/v0.0.2 implementation. Nothing here is
@@ -169,6 +168,8 @@ Stmt         ::= LetStmt
                | ForStmt
                | WhileStmt
                | DiscardStmt
+               | RequireStmt      (* v0.0.8, §9a — syntax only, semantics pending formalization *)
+               | ObserveStmt      (* v0.0.8, §9a — syntax only, semantics pending formalization *)
                | ExprStmt
 
 LetStmt      ::= 'let' Ident [ ':' Type ] '=' Expr ';'
@@ -387,10 +388,80 @@ ClosureLit   ::= 'fn' '(' [ ParamList ] ')' '->' Type Block
 | `UseDecl`, `ModulePath`, qualified `PostfixOp` (`.` access as module call) | v0.0.4 |
 | `ArrayType`, `ArrayLit`, array indexing, `ForStmt`, `string` (`StringLit`, plain literals — no interpolation, deferred), string `==`/`!=` as content comparison | v0.0.5 (Ownership runtime — retain/release actually exercised here for the first time) |
 | `OptionalType`, `ResultType`, `CoalesceExpr`, `unwrap_or` (both `Optional`/`Result`), `catch` (`Result`-only), `ClosureType`, `ClosureLit`, `DiscardStmt`, closure-cycle rejection | v0.0.6 |
+| `DurationLit`, `@local`/`@wallclock` type modifiers, `EffectsAnnotation` | v0.0.7 |
+| `RequireStmt`, `ObserveStmt` (syntax only — semantics not yet formalized, §9a) | v0.0.8 |
 
 ---
 
-## Open items — grammar-level decisions not yet made anywhere in the whitepaper
+## 9. Trust-aware layer grammar — v0.0.7 (`@local`/`@wallclock` only)
+
+Only §5.1 (temporal types), locked in whitepaper v0.15, gets grammar here. `require`/`observe` (§5.2) grammar is defined separately below (§9a) — its **syntax** has been stable since v0.2, but per roadmap §7, `require`/`observe` is **v0.0.8** scope, not v0.0.7; it's kept separate so a reader doesn't infer v0.0.7 implements it. `reversible`/`compensate` (§5.3) and `dsl sql`/`dsl api` (§5.4) stay excluded entirely until those sections go through the same lock-then-grammar sequence §5.1 just did.
+
+```ebnf
+DurationLit  ::= DecimalInt DurationUnit
+DurationUnit ::= 'ms' | 's' | 'm' | 'h' | 'd'
+               (* Integer-only for v0.0.7 — 30m, 1h, 500ms valid; 1.5h,
+                  1hour, -30m, bare 30 with no unit are not. Lexical
+                  validity only: 0ms parses fine, whether it's a legal
+                  duration for a given temporal type is a typecheck
+                  question, not a lexer one — whitepaper §5.1.6. *)
+
+TemporalModifier ::= '@local' '(' DurationLit ')'
+                   | '@wallclock' '(' DurationLit ')'
+               (* Postfix type modifier, same position/style as `T?` and
+                  `T[]` — attaches to a Type, e.g. `Token @local(30m)`. *)
+
+Type         ::= ... | Type TemporalModifier
+               (* Extends the core-language Type rule (§4 above) — a
+                  temporal modifier can apply to any type, matching the
+                  postfix-modifier pattern already established for
+                  Optional (`?`) and Array (`[]`). *)
+
+EffectName   ::= 'escapes-local-context'
+               (* Only effect defined at v0.0.7. §5's roadmap (io,
+                  blocking, etc.) will extend this set later — EffectName
+                  is deliberately an open alternation, not closed, so
+                  adding a new effect kind never requires touching this
+                  rule's shape, only adding an alternative. *)
+
+EffectSet    ::= EffectName { ',' EffectName }
+
+EffectsAnnotation ::= 'effects' '{' [ EffectSet ] '}'
+               (* Optional, appears after the return type and before the
+                  function body — whitepaper §5.1.2. `effects {}` is a
+                  legal (empty) declaration, distinct from omitting the
+                  annotation entirely: omitted = effects are purely
+                  inferred, present = a declared contract the inferred
+                  set must be a subset of (checked, never trusted). *)
+
+FnDecl       ::= [ 'public' ] 'fn' Ident '(' [ ParamList ] ')' '->' Type
+                 [ EffectsAnnotation ] Block
+               (* Extends the core FnDecl (§5 above) with the optional
+                  effects contract. Placement after the return type and
+                  before the body mirrors `reversible`'s position in the
+                  worked examples elsewhere in the whitepaper (an effect/
+                  capability annotation goes between signature and body). *)
+```
+
+**Not grammar, recorded here only as a pointer:** the boundary rule itself (`escapes-local-context` inference, the closure-capture reachability invariant, the SCC/fixpoint call-graph analysis) is entirely a type/effect-checker concern, per whitepaper §5.1.1's own layering principle — none of it belongs in this file. This section defines syntax only; consult whitepaper §5.1.1–§5.1.3 for what the syntax *means*.
+
+## 9a. `require`/`observe` grammar — syntax stable, semantics NOT yet formalized (v0.0.8)
+
+```ebnf
+RequireStmt  ::= 'require' Expr ';'
+               (* Correctness Trust — whitepaper §5.2. Violation always
+                  panics; no confidence score, no soft form. *)
+
+ObserveStmt  ::= 'observe' Expr ';'
+               (* Signal, not Trust (§5.0, §5.2) — never panics, tracked
+                  as informational history only, not debt. *)
+```
+
+**Status, explicitly:** this shape has been stable since whitepaper v0.2 and is unlikely to change, but §5.2's *semantics* — an `EffectKind` classification, a `Trust<C>` lowering table analogous to §5.1.2's effect-contract table, precise `Verification` timing, and `observe`'s history-sink decision (still an open Appendix A item) — have never been formalized to §5.1's level of rigor. **If v0.0.7's parser happens to accept this shape anyway** (because the grammar is simple enough to fall out of the existing `Stmt` production for free), the implementation must not silently treat it as semantically complete: either don't wire it into effect-checking at all yet, or emit an explicit `not yet implemented` diagnostic at the point it would otherwise need real semantics. Full formalization is a pre-v0.0.8 task, matching what §5.1.1–§5.1.6 just did for temporal types — same rigor, not a lighter pass just because the syntax is smaller.
+
+**Not grammar, recorded here only as a pointer:** the boundary rule itself (`escapes-local-context` inference, the closure-capture reachability invariant, the SCC/fixpoint call-graph analysis) is entirely a type/effect-checker concern, per whitepaper §5.1.1's own layering principle — none of it belongs in this file. This section defines syntax only; consult whitepaper §5.1.1–§5.1.3 for what the syntax *means*.
+
+
 
 Items **struck through** below are now resolved by the actual implementation
 (v0.0.1/v0.0.2 changelog) and reflected in the rules above. They're kept
@@ -410,5 +481,5 @@ own changelog.
 10. ~~`mut` parameter semantics for stack types — ABI implications unclear.~~ **Resolved.** `mut` on a stack-type parameter is local-copy-permission only, zero ABI difference from an unannotated parameter, not observable by the caller. One rule ("`mut` grants write access through the binding"), two consequences depending on stack vs. heap — see whitepaper §9.3.
 11. ~~Retain rule (§9.5) enforcement version was misattributed to v0.0.3.~~ **Resolved.** v0.0.3 has zero heap-bearing types active (structs are stack-only per §9.1) — nothing there ever triggers a retain. The claim now correctly sits on v0.0.5 (Ownership runtime), where `string`/arrays first exist.
 12. ~~Cyclic struct definitions — undefined behavior.~~ **Resolved: compile error**, detected via DFS over the `TypeDecl` dependency graph, diagnostic reports the cycle path. Indirection/boxing to legitimately express self-referential types remains undesigned — tracked as its own open item in the whitepaper's Appendix A, not here (it's a semantic/type-system question, not a grammar one).
-13. **NEW — discarding a non-`unit` call result.** Resolved for v0.0.3–v0.0.5: allowed silently, no diagnostic (no correctness risk for scalars/structs). Revisited at v0.0.6 once `Result` exists — discarding a `Result` will require a diagnostic (§2.3); `Optional`'s discard policy is deliberately left open for that same version, not assumed. This is a typecheck-phase decision, not a grammar one — `CallExprStmt ::= Expr ';'` already accepts the shape regardless of what the checker eventually does with it.
+13. ~~Discarding a non-`unit` call result.~~ **Resolved.** Allowed silently for v0.0.3–v0.0.5 (no correctness risk for scalars/structs). From v0.0.6, both `Result` **and** `Optional` require a diagnostic when discarded silently — symmetric, not `Result`-only (whitepaper §9.9a, implemented v0.0.6.2, 295 passing tests). `_ = expr;` (§9.9b) is the sole escape hatch. This remains a typecheck-phase rule, not a grammar one — `CallExprStmt ::= Expr ';'` accepts the shape regardless; the checker decides.
 14. **NEW — type/function namespace separation.** `type Point = {...}` and a hypothetical `fn Point(...)` don't collide: struct-literal syntax (`Point { ... }`) and call syntax (`Point(...)`) are already unambiguous to the parser via lookahead on the token following the identifier, so type names and function names can be treated as separate namespaces at the resolver level without any grammar ambiguity. Recorded here as the working assumption; not yet exercised by real code.

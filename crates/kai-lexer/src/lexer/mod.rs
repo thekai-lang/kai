@@ -75,6 +75,7 @@ impl<'src> Lexer<'src> {
             b'[' => Some(self.token(TokenKind::LBracket, start)),
             b']' => Some(self.token(TokenKind::RBracket, start)),
             b'"' => self.scan_string(start),
+            b'@' => Some(self.token(TokenKind::At, start)),
             b'-' => Some(self.scan_minus(start)),
             b'0'..=b'9' => Some(self.scan_number(byte, start)),
             b'a'..=b'z' | b'A'..=b'Z' => self.scan_word(start),
@@ -160,11 +161,34 @@ impl<'src> Lexer<'src> {
     /// consumed by the scan loop.
     fn scan_word(&mut self, start: usize) -> Option<Token> {
         while self.cursor.eat_if(is_word_continue).is_some() {}
-        let end = self.cursor.pos();
-        // Slice is safe: the word is ASCII by construction.
-        let word = std::str::from_utf8(self.cursor.slice(start, end))
-            .expect("internal error: non-ascii word slice — compiler bug");
-        let kind = keywords::lookup(word).unwrap_or_else(|| TokenKind::Ident(word.to_owned()));
+        // Special handling for hyphenated keyword `escapes-local-context` (§5.1.2, EBNF §9)
+        // `is_word_continue` stops at `-`, so `escapes` would be split. Check for `-local-context` suffix and consume as one token.
+        let mut end = self.cursor.pos();
+        let mut word = std::str::from_utf8(self.cursor.slice(start, end))
+            .expect("internal error: non-ascii word slice — compiler bug")
+            .to_owned();
+        if word == "escapes" && self.cursor.peek() == Some(b'-') {
+            // Peek ahead for `-local-context` (15 chars: `-local-context`)
+            let suffix = "-local-context";
+            let mut matches = true;
+            for (i, ch) in suffix.bytes().enumerate() {
+                if self.cursor.peek_n(i) != Some(ch) {
+                    matches = false;
+                    break;
+                }
+            }
+            if matches {
+                // Consume `-local-context` (15 bytes inc leading `-`)
+                for _ in 0..suffix.len() {
+                    self.cursor.bump();
+                }
+                end = self.cursor.pos();
+                word = std::str::from_utf8(self.cursor.slice(start, end))
+                    .expect("internal error: non-ascii word slice — compiler bug")
+                    .to_owned();
+            }
+        }
+        let kind = keywords::lookup(&word).unwrap_or_else(|| TokenKind::Ident(word.clone()));
         Some(self.token(kind, start))
     }
 

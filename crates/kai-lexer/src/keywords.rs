@@ -31,6 +31,13 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         "Ok" => Some(TokenKind::OkKw),
         "Err" => Some(TokenKind::ErrKw),
         "catch" => Some(TokenKind::Catch),
+        // v0.0.7 keywords (§5.1 temporal, §5.2 require/observe syntax stable)
+        "require" => Some(TokenKind::Require),
+        "observe" => Some(TokenKind::Observe),
+        "effects" => Some(TokenKind::Effects),
+        "escapes-local-context" => Some(TokenKind::EscapesLocalContext),
+        "local" => Some(TokenKind::LocalKw),
+        "wallclock" => Some(TokenKind::WallclockKw),
         _ => None,
     }
 }

@@ -16,6 +16,10 @@ pub enum TypedStmt {
     For(crate::stmt::TypedFor),
     /// Bare nested block; exists purely for scoping semantics.
     Block(TypedBlock),
+    /// `require expr;` (v0.0.8, §5.2) — Correctness Trust, always panics. Parsed in v0.0.7 but not yet effect-checked.
+    Require(TypedExpr),
+    /// `observe expr;` (v0.0.8, §5.2) — Signal, never panics.
+    Observe(TypedExpr),
     Expr(TypedExpr),
     /// Ownership marker (§9.4): the local's heap-bearing value leaves scope
     /// here — codegen emits a release of its current content. Inserted by

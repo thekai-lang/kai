@@ -1,5 +1,5 @@
 use super::*;
-    use kai_tast::{BinaryOp, StructId, TypedStruct, TypedStructField};
+    use kai_tast::{EffectSet, BinaryOp, StructId, TypedStruct, TypedStructField};
 
     // ---------- hand-built TAST helpers ----------
 
@@ -49,6 +49,8 @@ use super::*;
             module: String::new(),
             params,
             ret: ret_ty,
+            declared_effects: None,
+            inferred_effects: EffectSet::default(),
             body,
         }
     }

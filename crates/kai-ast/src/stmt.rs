@@ -53,6 +53,10 @@ pub enum StmtKind {
     /// value simply isn't bound. This is also the legal way to discard an
     /// `Optional`/`Result` without triggering the §9.9a diagnostic.
     Discard(Expr),
+    /// `require expr;` (v0.0.8, §9a §5.2) — Correctness Trust, always panics. Parsed in v0.0.7 but not yet effect-checked (diagnostic "not yet implemented").
+    Require(Expr),
+    /// `observe expr;` (v0.0.8, §9a §5.2) — Signal, never panics.
+    Observe(Expr),
     Expr(Expr),
 }
 

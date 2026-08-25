@@ -1,0 +1,23 @@
+// v0.0.7 — @local/@wallclock temporal, effects annotation (whitepaper v0.15 §5.1)
+fn produce(t: string @local(30m)) -> string @local(30m) {
+    return t;
+}
+
+fn consume(t: string @local(30m)) -> int32 {
+    return 42;
+}
+
+fn maybe_escape(t: string) -> unit effects { escapes-local-context } {
+    return;
+}
+
+fn caller(t: string @local(30m)) -> int32 {
+    return consume(t);
+}
+
+fn main() -> int32 {
+    let tok: string @local(30m) = "hello";
+    let out: string @local(30m) = produce(tok);
+    let v = caller(out);
+    return v;
+}

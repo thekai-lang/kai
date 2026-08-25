@@ -17,11 +17,11 @@ pub use expr::{
     ExprKind, FieldAccessExpr, FieldInit, FloatLit, IndexExpr, IntLit, OkLitExpr, SomeLitExpr, StrLitExpr,
     StructLitExpr, UnaryExpr, UnaryOp,
 };
-pub use fn_decl::FnDecl;
+pub use fn_decl::{EffectName, EffectSet, FnDecl};
 pub use ident::Ident;
 pub use param::Param;
 pub use program::Program;
 pub use stmt::{AssignStmt, Block, ForStmt, IfStmt, LetStmt, Stmt, StmtKind};
-pub use ty::Ty;
+pub use ty::{DurationLit, DurationUnit, TemporalOrigin, Ty};
 pub use type_decl::{FieldDecl, TypeDecl};
 pub use use_decl::UseDecl;

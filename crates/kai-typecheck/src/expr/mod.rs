@@ -50,12 +50,30 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         ExprKind::FieldAccess(access) => struct_lit::field_access(checker, access),
         ExprKind::StructLit(lit) => struct_lit::struct_lit(checker, lit, expr.span),
         ExprKind::ArrayLit(lit) => array::array_lit(checker, lit, expected.as_ref(), expr.span),
-        ExprKind::StrLit(lit) => TypedExpr::new(
-            TypedExprKind::StrLit {
-                value: lit.value.clone(),
-            },
-            KaiType::String,
-        ),
+        ExprKind::StrLit(lit) => {
+            // If expected is `string @local(d)` or `@wallclock(d)`, produce Temporal type for the literal
+            // (the literal's creation point is where the temporal duration starts, §5.1).
+            if let Some(KaiType::Temporal { inner, origin, duration }) = expected.clone()
+                && *inner == KaiType::String
+            {
+                return TypedExpr::new(
+                    TypedExprKind::StrLit {
+                        value: lit.value.clone(),
+                    },
+                    KaiType::Temporal {
+                        inner,
+                        origin,
+                        duration,
+                    },
+                );
+            }
+            TypedExpr::new(
+                TypedExprKind::StrLit {
+                    value: lit.value.clone(),
+                },
+                KaiType::String,
+            )
+        }
         ExprKind::Index(indexed) => array::index_expr(checker, indexed),
         // v0.0.6 (§9.9a/§9.10) + v0.14 Ok/Err
         ExprKind::SomeLit(some) => {

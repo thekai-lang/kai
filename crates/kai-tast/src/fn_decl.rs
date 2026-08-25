@@ -1,7 +1,7 @@
 use crate::stmt::{TypedBlock, TypedStmt};
 use crate::symbol::FunctionId;
 use crate::symbol::LocalId;
-use crate::ty::KaiType;
+use crate::ty::{EffectSet, KaiType};
 
 /// A parameter, already bound to its local slot by the type checker. `mut`
 /// is compile-time only (§9.3): it never changes the ABI.
@@ -25,6 +25,10 @@ pub struct TypedFnDecl {
     pub module: String,
     pub params: Vec<TypedParam>,
     pub ret: KaiType,
+    /// `effects { ... }` declared contract (§5.1.2): `None` = omitted (purely inferred), `Some(empty)` = `effects {}`.
+    pub declared_effects: Option<EffectSet>,
+    /// Inferred effects `effect(f) = direct_effects(f) ∪ ⋃ effect(g)` (§5.1.2), least-fixed-point over SCCs.
+    pub inferred_effects: EffectSet,
     pub body: TypedBlock,
 }
 

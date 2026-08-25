@@ -1,5 +1,5 @@
 //! Pipeline orchestration:
-//! lex -> parse -> resolve -> typecheck -> ownership -> codegen.
+//! lex -> parse -> resolve -> typecheck -> ownership -> effects -> codegen.
 //! Each phase runs only after the previous one produced no diagnostics; the
 //! first failing phase's diagnostics are reported and compilation stops.
 //!
@@ -149,6 +149,10 @@ fn lower_modules(modules: &[kai_driver_modules::LoadedModule]) -> Result<TypedPr
     let mut program = kai_typecheck::check_with(&merged, &resolution)
         .map_err(fail("typecheck"))?;
     kai_ownership::resolve(&mut program);
+    let effect_diags = kai_effects::analyze(&mut program);
+    if !effect_diags.is_empty() {
+        return Err(fail("effect")(effect_diags));
+    }
     Ok(program)
 }
 
@@ -181,6 +185,10 @@ fn lower(source: &str) -> Result<TypedProgram, Failure> {
     let mut program =
         kai_typecheck::check_with(&ast, &resolution).map_err(fail("typecheck"))?;
     kai_ownership::resolve(&mut program);
+    let effect_diags = kai_effects::analyze(&mut program);
+    if !effect_diags.is_empty() {
+        return Err(fail("effect")(effect_diags));
+    }
     Ok(program)
 }
 

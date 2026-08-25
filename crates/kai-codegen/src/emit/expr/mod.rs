@@ -273,6 +273,42 @@ pub(crate) fn emit<'ctx>(
         // op; heap-bearing structs get per-field retains at their source
         // place, then a bitwise copy flows onward.
         TypedExprKind::Retain(inner) => match &expr.ty {
+            KaiType::Temporal { inner: t_inner, .. } => match t_inner.as_ref() {
+                KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                    let value = emit(ctx, frame, inner);
+                    // Temporal @local is zero-cost (same as inner), @wallclock is heap but currently same as inner for codegen
+                    let env = if matches!(t_inner.as_ref(), KaiType::Closure { .. }) {
+                        let agg = value.into_struct_value();
+                        ctx.builder
+                            .build_extract_value(agg, 1, "clo.env")
+                            .expect("env member")
+                    } else {
+                        value
+                    };
+                    crate::emit::ownership::retain_header(ctx, env);
+                    value
+                }
+                KaiType::Struct(_) | KaiType::Optional(_) | KaiType::Result { .. } => {
+                    let value = emit(ctx, frame, inner);
+                    let agg_ty = to_llvm(ctx, &expr.ty);
+                    let tmp = crate::emit::alloca_in_entry(
+                        ctx,
+                        crate::emit::current_function(ctx),
+                        agg_ty,
+                        "retain.tmp",
+                    );
+                    let _ = ctx.builder.build_store(tmp, value);
+                    if matches!(t_inner.as_ref(), KaiType::Struct(_)) {
+                        crate::emit::ownership::retain_struct_copy(ctx, t_inner, tmp);
+                    } else {
+                        crate::emit::ownership::retain_tagged_copy(ctx, t_inner, tmp);
+                    }
+                    ctx.builder
+                        .build_load(agg_ty, tmp, "retained.v")
+                        .expect("load retained")
+                }
+                other => unreachable!("retain of non-heap temporal inner {other:?}"),
+            },
             KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
                 let value = emit(ctx, frame, inner);
                 // Closures retain through their ENV header (§9.10); the code

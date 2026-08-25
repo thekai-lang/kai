@@ -84,6 +84,7 @@ mod tests {
             },
             params: Vec::<Param>::new(),
             ret,
+            effects: None,
             body: Block {
                 stmts: vec![Stmt {
                     kind: StmtKind::Return(None),

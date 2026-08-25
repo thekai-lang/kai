@@ -62,7 +62,10 @@ fn seed_stmts(stmts: &[TypedStmt], max: &mut u32) {
                 seed_stmts(&f.body.stmts, max);
             }
             TypedStmt::Block(b) => seed_stmts(&b.stmts, max),
-            TypedStmt::Expr(e) | TypedStmt::Return(Some(e)) => seed_expr(e, max),
+            TypedStmt::Expr(e)
+            | TypedStmt::Require(e)
+            | TypedStmt::Observe(e)
+            | TypedStmt::Return(Some(e)) => seed_expr(e, max),
             TypedStmt::Return(None)
             | TypedStmt::ReleaseLocal { .. }
             | TypedStmt::ReturnCleanup { .. } => {}

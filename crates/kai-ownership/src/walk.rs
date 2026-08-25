@@ -137,6 +137,20 @@ pub(crate) fn walk_stmt(
         TypedStmt::Block(block) => {
             vec![TypedStmt::Block(walk_block(heap, block, scopes, fresh))]
         }
+        TypedStmt::Require(mut e) => {
+            let mut out = Vec::new();
+            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
+            walk_expr(heap, &mut e, scopes, fresh);
+            out.push(TypedStmt::Require(e));
+            out
+        }
+        TypedStmt::Observe(mut e) => {
+            let mut out = Vec::new();
+            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
+            walk_expr(heap, &mut e, scopes, fresh);
+            out.push(TypedStmt::Observe(e));
+            out
+        }
         TypedStmt::Expr(mut e) => {
             let mut out = Vec::new();
             if heap.is(&e.ty) && is_owned_temp(&e) {

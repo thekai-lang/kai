@@ -289,6 +289,7 @@ pub(crate) fn detect_cycles(
                     out.extend(ty_edges(err, table));
                     out
                 }
+                Ty::Temporal { inner, .. } => ty_edges(inner, table),
             }
         }
 
@@ -409,6 +410,7 @@ pub(crate) fn compute_closure_bearing(
                 ty_poisons(ok, module_idx, resolution, decls, state, out)
                     || ty_poisons(err, module_idx, resolution, decls, state, out)
             }
+            Ty::Temporal { inner, .. } => ty_poisons(inner, module_idx, resolution, decls, state, out),
             // Field type names resolve through the OWNING module's table —
             // unqualified references never cross modules (§3.6).
             Ty::Named(ident) => match resolution.module_types[module_idx].get(&ident.name) {

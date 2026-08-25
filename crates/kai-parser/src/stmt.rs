@@ -41,7 +41,31 @@ fn stmt(parser: &mut Parser) -> Stmt {
         // this dispatch is unambiguous. Note `let _ = ...` needs no special
         // case: binding() demands an Ident and finds Underscore instead.
         TokenKind::Underscore => discard(parser),
+        TokenKind::Require => require_stmt(parser),
+        TokenKind::Observe => observe_stmt(parser),
         _ => expr_or_assign(parser),
+    }
+}
+
+fn require_stmt(parser: &mut Parser) -> Stmt {
+    let start = parser.span_here();
+    parser.bump(); // `require`
+    let expr = expr::expr(parser);
+    let end = parser.expect_simple(&TokenKind::Semi);
+    Stmt {
+        span: Span::merge(start, end),
+        kind: StmtKind::Require(expr),
+    }
+}
+
+fn observe_stmt(parser: &mut Parser) -> Stmt {
+    let start = parser.span_here();
+    parser.bump(); // `observe`
+    let expr = expr::expr(parser);
+    let end = parser.expect_simple(&TokenKind::Semi);
+    Stmt {
+        span: Span::merge(start, end),
+        kind: StmtKind::Observe(expr),
     }
 }
 
@@ -92,7 +116,9 @@ pub(crate) fn catch_block(parser: &mut Parser) -> (Vec<Stmt>, Expr, Span) {
             | TokenKind::Var
             | TokenKind::If
             | TokenKind::For
-            | TokenKind::LBrace => {
+            | TokenKind::LBrace
+            | TokenKind::Require
+            | TokenKind::Observe => {
                 let s = stmt(parser);
                 stmts.push(s);
             }

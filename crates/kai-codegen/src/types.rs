@@ -35,6 +35,8 @@ pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicTypeEnum<'ctx
         // Closures are fat pointers `{ fn_ptr, env_ptr }` (§9.10) — always
         // the shared NAMED shape so signatures and literals unify.
         KaiType::Closure { .. } => closure_fat_ty(ctx).into(),
+        // Temporal (§5.1): @local is zero-cost (same as inner), @wallclock currently same as inner (timestamp handling deferred, but heap-bearing).
+        KaiType::Temporal { inner, .. } => to_llvm(ctx, inner),
     }
 }
 

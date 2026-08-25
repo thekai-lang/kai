@@ -1,12 +1,14 @@
 # Kai
 ### A trust-aware programming language
 
-**Status:** Draft v0.14 — pre-implementation specification
+**Status:** Draft v0.16 — pre-implementation specification
 **Purpose:** Freeze scope before writing any compiler code. Nothing described here is authoritative until it appears in this document. Feature ideas that arise during implementation go into an `IDEAS.md` backlog, not into the compiler.
 
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
 
 **Changelog**
+- **v0.16** — Post-implementation audit cleanup, no semantic changes to already-shipped behavior. Struck a stale Appendix A note that still framed `Optional`'s discard policy as undecided — it was resolved symmetrically with `Result` at v0.13 (§9.9a) and has been implemented and tested since v0.0.6.2 (295 passing tests); the note simply hadn't been updated to match. (Grammar doc: same cleanup for the matching stale open item, and `require`/`observe`'s grammar — stable since v0.2 — separated out of the v0.0.7 section into its own v0.0.8 section, since roadmap §7 already scoped it there and bundling it with §5.1's newly-locked material risked implying its semantics were formalized to the same rigor, which they are not yet.)
+- **v0.15** — §5.1 fully formalized ahead of v0.0.7 implementation, closing both remaining Appendix A blockers. Boundary defined mechanically as an effect (`escapes-local-context`) rather than a keyword list, with an explicit construct table (§5.1.1). Effect inference specified as transitive over the call graph, least-fixed-point over SCCs for cycles, attached to the function/closure (never inferred from a parameter type) (§5.1.2). Declared `effects { ... }` annotations specified as a verified contract (`inferred ⊆ declared`, checked, never blindly trusted) — and shown to independently reduce to the `Trust<C>` shape (§5.0), which the document records as validation of that abstraction rather than coincidence. Closures locked as first-class call/effect-graph nodes carrying a `{ effects, captures }` summary (§5.1.3), with an explicit, deliberately bounded v0.0.7 scope (direct call, known closure invocation, closure-as-argument, closure-returned-or-stored, conservative union for dynamic dispatch) and one general reachability invariant replacing the earlier "direct arguments only" framing. `@wallclock → @local` fixed as having no conversion path at all in v0.0.7, not merely "non-implicit." Wire format locked: canonical RFC 3339, UTC-only, microsecond precision, mandatory `Z` suffix (§5.1.5). `DurationLit` grammar locked: integer-only, fixed unit suffixes (`ms`/`s`/`m`/`h`/`d`), lexical validity kept separate from semantic (duration-value) validity (§5.1.6).
 - **v0.14** — `Ok(value)`/`Err(value)` locked as `Result<T,E>`'s language-level constructors, parallel to `Some`/`None` (§3.4) — closes a real gap where `Result` was receive-only (usable as a stdlib return type) but never constructible in user code, which would have undercut it being genuinely symmetric to `Optional` (§9.9a already made the *representation* symmetric; construction needed to match). Each constructor infers only one of the two type parameters from its argument; the other requires context (annotation or enclosing `fn`'s declared return type), reusing the same context-typing mechanism as `None` and empty array literals rather than inventing a separate rule. §3.4 also tightened: `??` is explicitly lazy (short-circuit, matching `&&`/`||`'s existing discipline); `T?`/`Optional<T>` clarified as parsing directly to one canonical type node with no desugaring pass between them; `catch`'s block clarified as the language's only trailing-expression block, deliberately not a general block-expression feature; explicit non-goal note that Optional/Result/closures are the only parametric typing in the language, not evidence of a general user-facing generics mechanism. Grammar: `.unwrap_or(...)`'s dedicated production removed (resolved at typecheck via receiver-type + field-name, same parser-meaning-agnostic discipline as qualified calls); `catch` now uses a dedicated `CatchBlock` production instead of ordinary `Block`; `_` explicitly barred from `Param` and `ForStmt`'s binding position, not just `let`/`var`.
 - **v0.13** — v0.0.6 scope locked (§9.9a, §9.9b, §9.10): `Optional<T>`/`Result<T,E>` represented as tagged payloads, ownership applying only to the active branch and only when its instantiated type is heap-bearing — one mechanism, generalizing the per-field (§9.8) and per-element (§9.9) pattern rather than a separate implementation per type. `T?` fixed as canonical sugar for `Optional<T>` (no second semantic form); `Result<T,E>` gets no postfix sugar. `.unwrap_or()` now explicit for both `Optional` and `Result`; `catch` stays `Result`-only. Discarding `Optional`/`Result` as a bare statement is now a diagnostic symmetrically for both types (previously `Result`-only, `Optional` was an open Appendix A question) — shipped alongside its escape hatch in the same version: `_ = expr;`, the sole explicit-discard statement, with `_` carved out of the `Ident` grammar entirely (reserved, never a normal binding name). Closures fixed as unconditionally heap-bearing regardless of capture (mirrors array's existing unconditional-heap rule) — never an optimization-driven exception. Closure reference cycles are rejected at v0.0.6, not deferred: a closure may not capture any value whose type is or transitively contains a closure type, checked structurally by extending the existing `TypeDecl` cyclic-struct DFS (§3.3) rather than building new alias analysis — deliberately conservative over unsound.
 - **v0.12** — Two small v0.0.5 gaps closed ahead of implementation (§3.4): empty array literals require an explicit type annotation (`let arr: int32[] = [];` — no inference from nothing, consistent with the existing explicit-over-implicit stance on literal widening); string escape sequences fixed to `\n \t \r \\ \" \0`, with an unrecognized escape producing a lex-phase diagnostic naming the bad sequence — `\$` deliberately excluded since `${` isn't special until interpolation itself lands (still deferred, Appendix A).
@@ -307,7 +309,151 @@ fn useSession(session: Token @local(30m)) -> unit {
 }
 ```
 
-**Rule, enforced statically:** the moment a value typed `@local` would cross a boundary the compiler cannot trace through control flow — being sent to a queue, serialized, passed across a thread/task boundary, or stored beyond the current call graph — using it as `@local` is a compile error. It must be `@wallclock` at that point instead, which carries its own embedded timestamp and is checked against the real clock at the point of use, not against compiler-traced position. This turns the false-safety risk into a build-time rule rather than a silent gap: you cannot accidentally treat a value that left the process's traceable flow as if the compiler were still watching it.
+#### 5.1.1 The boundary, defined mechanically — not by keyword list
+
+> A **compiler-untraceable boundary** is any operation after which the compiler cannot statically prove that the continuation executes within the same local temporal context as the originating computation.
+
+This is expressed as an **effect**, `escapes-local-context`, on the *operation*, not as a hardcoded list of "async-sounding" constructs — a queue happening to use a worker thread internally doesn't matter; what matters is whether the compiler can still prove context continuity through it.
+
+| Construct | Boundary? |
+|---|---|
+| Ordinary function call | No — `@local` unaffected |
+| Inline/block expression | No |
+| `spawn` a task | Yes |
+| Queue send / enqueue | Yes |
+| Channel send consumable by another task | Yes |
+| Thread-pool hand-off | Yes |
+| IPC / network send | Yes |
+| Persistent storage | Yes |
+| Synchronous channel with a compiler-proven same-context consumer | No |
+| `await` | Depends — boundary only if the continuation's context isn't provably preserved |
+
+```
+Γ ⊢ e : T @local
+Γ ⊢ op : escapes-local-context
+────────────────────────────────
+Γ ⊢ op(e) : T @wallclock
+```
+
+New primitives that cause an escape are handled by giving them the `escapes-local-context` effect — the boundary *definition* never needs to change, only the set of things tagged with it. This is the same design instinct as `Trust<C>` itself (§5.0): one abstract mechanism, extensible by tagging new instances, not by amending the mechanism's own definition each time.
+
+#### 5.1.2 Effect inference — transitive over the call graph, attached to the function
+
+The `escapes-local-context` effect is not just a property of primitives — it propagates transitively through every function (and closure, §5.1.3) that calls something carrying it, directly or indirectly:
+
+```
+effect(f) = direct_effects(f) ∪ ⋃ effect(g), for every g called by f
+```
+
+Without this, abstraction silently breaks the boundary rule: a wrapper function that merely forwards a `@local` value into `queue.send` would otherwise look "safe" to any caller, because the effect would appear to stop at the primitive. Cycles in the call graph (mutual/direct recursion) are resolved as a least-fixed-point problem over the graph's strongly-connected components — a `Set<Effect>` per function from the start, not a bare boolean, since §5's roadmap (`io`, `blocking`, and others) will add more effect kinds later and a boolean would need to be redesigned the moment it does.
+
+**The effect is a property of the function's signature, never inferred from a parameter's type.** A function can escape without returning anything (`fn log(t: Token @local(30m)) { queue.send(t); }`), and can eventually carry more than one effect simultaneously — trying to infer escaping-ness from a return type would be both incomplete and the wrong place to attach it:
+
+```
+enqueue_job : (Token @local(30m)) → Unit ! escapes-local-context
+```
+
+**Declared effect annotations are a verified contract, not a trusted assertion — and this makes them a `Trust<C>` instance in their own right (§5.0):**
+
+```kai
+fn enqueue_job(t: Token @local(30m)) effects { escapes-local-context } {
+    queue.send(t);
+}
+```
+
+| Trust field | Effect contract |
+|---|---|
+| Claim | this function's actual effects are a subset of its declared `effects { ... }` set |
+| Origin | the `effects { ... }` annotation the programmer wrote |
+| Verification | compile-time, `inferred_effects(f) ⊆ declared_effects(f)` |
+| Decay | the function body changes (e.g. a wrapper that didn't escape starts calling `queue.send`) while the annotation is left stale |
+| Violation | compile error — `inferred ⊄ declared` |
+
+A declaration may be more conservative than what's strictly inferred (declaring `escapes-local-context` on a function whose body doesn't currently need it is allowed — the language permits over-declaring), but never less: `fn f(...) effects {} { queue.send(...); }` is a compile error, not silent trust in the annotation. This is exactly why the annotation exists as an *addition* to inference rather than a replacement for it — annotations matter most at public-API boundaries, where a caller depends on the effect set staying stable even as the implementation changes underneath it; without verification, that stability claim would be exactly the kind of unconditionally-trusted assumption §5.0 exists to rule out.
+
+That this effect-contract mechanism independently reduces to the same five-field `Trust<C>` shape, having been designed from scratch for a completely different concern (temporal boundaries, not schemas or invariants), is a real validation of §5.0's abstraction — not a coincidence engineered after the fact.
+
+#### 5.1.3 Closures are first-class nodes in the effect/call graph — no second boundary rule
+
+A closure is analyzed exactly like any other function value — it has a body, it can be assigned an effect set, and it participates in the same call-graph inference as `fn` declarations. No separate "closure boundary rule" exists; treating closures as ordinary graph nodes is the direct consequence of the model already established, not an exception to it.
+
+What closures add is **capture provenance**: a closure's summary must track not just its effects but which `@local` values it captured, since a `@local` value can escape through an environment without ever appearing as a direct call argument:
+
+```kai
+fn schedule(t: Token @local(30m)) {
+    let job = fn() -> unit { queue.send(t); };   // t captured, not passed as an argument
+    dispatcher.run(job);
+}
+```
+
+```
+ClosureSummary {
+    effects:  Set<Effect>
+    captures: Set<(VarId, Type)>
+}
+
+job: effects = { escapes-local-context }, captures = { t: Token @local(30m) }
+```
+
+The boundary rule generalizes accordingly — it's about *reachability*, not just direct arguments:
+
+> **No `@local` value may become reachable from a value whose execution may cross an `escapes-local-context` boundary without first being converted to `@wallclock`.**
+
+This single invariant covers direct arguments and closure captures uniformly — it's strictly stronger and more general than an "arguments only" version would be, and is the form the rule takes going forward.
+
+**Function values that are returned or stored carry their summary with them, as part of the value's type — this is flow-sensitive tracking of a summary, not arbitrary higher-order flow analysis:**
+
+```kai
+fn make_job(t: Token @local(30m)) -> Job {
+    return fn() { queue.send(t); };   // Job's type now carries effects={escapes-local-context}, captures={t: @local}
+}
+
+let job = make_job(t);
+store.push(job);   // store.push is a boundary; job's carried summary is what's checked
+```
+
+**Scope explicitly bounded for v0.0.7** — this is deliberately not a general points-to/escape analysis:
+
+- Direct call → call-graph edge.
+- Statically known closure invocation → closure node, analyzed like any function.
+- Closure passed as an argument → its effect/capture summary travels with the argument.
+- Closure returned or stored → its summary travels with the value's type.
+- Fully dynamic dispatch (closure selected at runtime, target unknowable statically) → conservative union over all possible targets:
+  ```
+  effects(f)  = ⋃ effects(target)  for every possible target
+  captures(f) = ⋃ captures(target) for every possible target
+  ```
+  This can produce false positives (rejecting a program that would, at runtime, only ever hit a non-escaping branch) but never a false negative — consistent with §3.3's cyclic-struct precedent and §9.10's closure-cycle rule: conservative-and-decidable beats sound-but-expensive or unsound-but-cheap.
+
+#### 5.1.4 `@wallclock` → `@local`: no conversion path in v0.0.7
+
+Not "implicit is disallowed, explicit is available" — there is **no conversion mechanism at all** in this direction for v0.0.7. A `@wallclock` value has already lost the local execution-context provenance that would be needed to reconstruct a `@local` claim; adding an explicit-but-legal conversion operator is a separate, larger design question (does it ever make sense? under what conditions?) that this version doesn't need to answer. `@local → @wallclock` at a boundary crossing remains the only direction that exists.
+
+#### 5.1.5 `@wallclock` wire format
+
+Conservative and canonical for v0.0.7: **RFC 3339 / ISO-8601, UTC only, fixed microsecond precision, `Z` suffix mandatory** — no local offsets.
+
+```
+2026-08-24T19:42:31.123456Z   ✅
+2026-08-25T02:42:31+07:00     ❌ (local offset — rejected)
+```
+
+Contract:
+```
+serialize(t)          → canonical UTF-8 RFC 3339 UTC string, microsecond precision
+deserialize(serialize(t)) == t     (for every t representable at this precision)
+```
+
+Two producers representing the same instant always serialize to the identical byte string — canonical form makes equality testable as string equality, not a timestamp-aware comparison. Microsecond precision is a deliberate ceiling for v0.0.7 (sufficient for practical event ordering without an absurdly long nanosecond representation); if nanosecond precision is ever needed, that's a versioned wire-format change, not an ambiguity baked into v0.0.7's format.
+
+#### 5.1.6 `DurationLit`
+
+```
+DurationLit  ::= DecimalInt DurationUnit
+DurationUnit ::= 'ms' | 's' | 'm' | 'h' | 'd'
+```
+
+Integer-only, deliberately, for v0.0.7 — `30m`, `1h`, `500ms`, `2s`, `7d` are valid; `1.5h`, `1hour`, `-30m`, and a bare `30` with no unit are not. Fractional durations are a grammar extension to add explicitly later if needed, not a lexical ambiguity to leave lurking now. **Lexical validity and semantic validity are deliberately separate**: `0ms` parses fine (the grammar has no opinion on it) — whether `@local(0ms)` is a legal *duration for a temporal type* is a typecheck/semantic question, not a lexer concern.
 
 ### 5.2 Correctness and observation — `require` and `observe`
 
@@ -459,7 +605,7 @@ Strict ordering. A version does not start until the previous one has a working, 
 | v0.0.4 | `use` / module system, `public fn`/`public type` | Circular import detection tested; project root = entry-file directory (deterministic, not CWD); module resolution/qualified calls/visibility tested entirely via user-defined modules, no stdlib dependency |
 | v0.0.5 | **Ownership runtime** — `string` (plain literals only, no interpolation), array literals + indexing, array element write, `for..in`, retain/release enforcement | Ownership-transfer retain rule (§9.5) actually exercised and tested for `return`/struct-literal/array-literal, now that heap-bearing types (`string`, arrays) exist to trigger it; `for..in` borrows each element per iteration (§9.9); `Place` generalized to array indexing (§9.3) — writability gated by root (`var`/`mut` param) uniformly with struct fields; replacement-into-owned-slot ordering (retain new before release old) tested against self-aliasing (`arr[0] = arr[0]`); the two-axis invariant (writability vs. mutation-visibility, §9.3) tested as an explicit matrix: `var`/`let` array roots, `mut`/plain array parameters, and a stack-only `mut` struct parameter side by side, confirming `arr[i]` visibility tracks the root's type category and never the element type; string `==`/`!=` tested as content comparison — same-content literals from different allocation paths (literal, constructed, retained, returned) all compare equal (§9.7); empty array literal without annotation rejected at typecheck; unrecognized string escape rejected at lex phase with a specific diagnostic |
 | v0.0.6 | `Optional`, `Result`, closures, `_ = expr;` discard statement, `Ok`/`Err`/`Some`/`None` constructors | Tagged-union ownership (§9.9a) — active-payload-only, heap-bearing-only retain/release, one mechanism for both types; `T?`/`Optional<T>` parse to one canonical node, no desugar pass; `??` short-circuits (lazy RHS); `Ok`/`Err` construct `Result` with context-typing for the unconstrained type parameter (same mechanism as `None`/empty-array); `.unwrap_or()` works on both `Optional`/`Result` (no dedicated grammar production — resolved at typecheck via receiver type + field name), `catch` stays `Result`-only via the dedicated `CatchBlock` (the only trailing-expression block in the language); discarding `Optional`/`Result` as a bare statement is a diagnostic, `_ = expr;` is the sole escape hatch, `_` never valid as a normal binding/param/loop-variable name (§9.9b); closures unconditionally heap-bearing regardless of capture (§9.10); closure-cycle rejection enforced via closure-bearing-type poisoning over the existing `TypeDecl` DFS graph (§9.10, extends §3.3); no user-facing generic syntax anywhere — Optional/Result/closures are the only parametric machinery, and it's built-in |
-| v0.0.7 | `@local`, `@wallclock`, temporal flow analysis, cross-boundary rule | Compile error enforced when `@local` crosses a compiler-untraceable boundary (§5.1) |
+| v0.0.7 | `@local`, `@wallclock`, `DurationLit`, `escapes-local-context` effect inference, `effects { ... }` contract annotation | Boundary table (§5.1.1) enforced; effect inference transitive over call/closure graph with SCC/fixpoint cycle handling (§5.1.2); declared-effect contract verified (`inferred ⊆ declared`), never trusted blindly; closures as first-class graph nodes with capture-provenance summaries (§5.1.3), covering direct call, statically-known closure invocation, closure-as-argument, closure-returned-or-stored, and conservative union-of-targets for dynamic dispatch; `@wallclock`→`@local` has no conversion path; wire format round-trips (`deserialize(serialize(t)) == t`) |
 | v0.0.8 | `require`, `observe` | `require` violation always panics per §10.3, recorded to debt ledger before exit; `observe` never panics, tracked as Signal only, not debt |
 | v0.0.9 | `reversible` (transactional + `compensate`) | Automatic invertibility for arithmetic mutations; mandatory unwind on panic per §10.4, distinguishing rollback from compensation |
 | v0.0.10 | `dsl sql` + snapshot mechanism | `kai sync` for at least one DB (e.g. Postgres) |
@@ -870,9 +1016,9 @@ These are known unresolved design questions. They are *not* to be decided ad-hoc
 - Conflict resolution when two overrides on the same field disagree over time — last-write-wins with a flagged history, or hard block until reconciled?
 - Where does `observe`'s history report to — local file, opt-in telemetry, or pluggable sink? Needs a decision before v0.0.8.
 - Severity heuristics for `kai debt` — fully compiler-inferred, fully config-driven, or hybrid (default + override)? Leaning hybrid; needs a concrete default rule set written down before v0.0.12.
-- **Precise definition of "compiler-untraceable boundary"** for §5.1's `@local`→`@wallclock` rule. Queue sends and explicit serialization are clear cases; less clear: does spawning an async task count, does an in-process channel count, does a thread pool hand-off count? Needs an exact, exhaustive list (or a structural rule the compiler can apply generally) before v0.0.7.
-- **`@wallclock` serialization format.** The embedded timestamp needs a concrete wire representation once a `Token @wallclock(...)` is serialized (for the queue-send case in §5.1) — needs a decision before v0.0.7, likely tied to whatever `dsl api`/`dsl sql` end up using for payload encoding.
+- ~~Precise definition of "compiler-untraceable boundary"~~ **Resolved (§5.1.1–§5.1.3).** Defined mechanically as the `escapes-local-context` effect — loss of statically provable execution-context continuity — not a hardcoded construct list; inferred transitively over the call/closure graph (least fixed point over SCCs), verified against optional `effects { ... }` contract annotations.
+- ~~`@wallclock` serialization format.~~ **Resolved (§5.1.5).** Canonical RFC 3339, UTC only, fixed microsecond precision, mandatory `Z` suffix — no local offsets. `deserialize(serialize(t)) == t` invariant.
 - **Boxing/indirection mechanism — undesigned.** §3.3 rejects cyclic struct definitions outright (compile error, no exception), but Kai has no way to legitimately express a self-referential type (linked list, tree, recursive enum) once one is actually wanted. Needs a design before any real program that needs such a structure can be written — likely a `Box<T>`-equivalent introducing one level of heap indirection, but the mechanism, its interaction with the ownership model (§9), and which version it belongs to are all open.
-- **Discarding an `Optional`** — deferred to the same version as `Result` (v0.0.6) rather than decided now. In principle it's lower-risk than discarding a `Result` (no error channel gets silently swallowed), but "lower risk" isn't the same as "decided" — needs an explicit allow/warn/reject call at v0.0.6, not an assumption carried over from the `Result` decision.
+- ~~Discarding an `Optional`~~ **Resolved at v0.13, implemented v0.0.6.2.** Symmetric with `Result` — both require a diagnostic when discarded silently (§9.9a); `_ = expr;` is the escape hatch. `Optional` carries real semantic information (`None` vs `Some`) once it exists, making silent discard exactly as dangerous as swallowing a `Result`'s error channel — not lower-risk after all. Verified: 295 passing tests, `crates/kai-typecheck/src/expr/tagged.rs`.
 - **Reference cycles — general case, still open.** §9.10's closure-cycle rule handles the closure-specific case conservatively via type-level poisoning, but the general cycle-collection question (§9.12) remains open: pure RC (§9) still leaks on any cycle the poisoning rule doesn't happen to reject (e.g. two plain structs holding `Optional<Box<...>>`-style references to each other, once such indirection exists — see the boxing/indirection item above, still undesigned). Candidate directions unchanged from before: a `weak` reference kind, or a narrow opt-in cycle collector. Needs a decision before general self-referential data structures are considered supported.
 - **Decay taxonomy — proposed, not yet adopted.** §5.0 defines Decay as a required field of `Trust⟨C⟩` but does not currently classify *kinds* of Decay; each Trust instance just names its own mechanism in prose. A candidate taxonomy worth evaluating: `temporal` (time passes — Temporal Trust), `external` (an outside authority changes — Contract Trust), `stateful` (in-process world state changes — Correctness Trust), `invalidation` (a specific event revokes the claim — candidate fit for Reversibility, though its Decay is currently left as "—" in §5.0's table and may not need one at all). If this holds up under scrutiny, it sharpens Trust's definition from "a claim with a confidence level" to "a claim with a defined expiration mechanism," which is a stronger and more specific claim than the current draft makes. This is deliberately not promoted into §5.0 yet — it needs to be checked against each of the four instances (including the Transactional/Compensatable split) before it's treated as load-bearing, not just descriptive.

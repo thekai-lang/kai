@@ -13,19 +13,83 @@ use kai_lexer::TokenKind;
 /// `??` lexes as a single token, so a doubled suffix can never re-enter here.
 pub fn ty(parser: &mut Parser) -> Ty {
     let mut base = base_ty(parser);
-    while parser.peek().kind == TokenKind::LBracket
-        && matches!(parser.peek_ahead_kind(), Some(TokenKind::RBracket))
-    {
-        parser.bump(); // `[`
-        let close = parser.expect_simple(&TokenKind::RBracket);
-        let _ = close;
-        base = Ty::Array(Box::new(base));
-    }
-    if parser.eat_simple(&TokenKind::Question) {
-        // One semantic form: the sugar folds away before typecheck (§9.9a).
-        base = Ty::Optional(Box::new(base));
+    loop {
+        if parser.peek().kind == TokenKind::LBracket
+            && matches!(parser.peek_ahead_kind(), Some(TokenKind::RBracket))
+        {
+            parser.bump(); // `[`
+            let close = parser.expect_simple(&TokenKind::RBracket);
+            let _ = close;
+            base = Ty::Array(Box::new(base));
+            continue;
+        }
+        if parser.eat_simple(&TokenKind::Question) {
+            // One semantic form: the sugar folds away before typecheck (§9.9a).
+            base = Ty::Optional(Box::new(base));
+            continue;
+        }
+        if parser.peek().kind == TokenKind::At {
+            base = temporal_ty(parser, base);
+            continue;
+        }
+        break;
     }
     base
+}
+
+fn temporal_ty(parser: &mut Parser, inner: Ty) -> Ty {
+    let at_span = parser.expect_simple(&TokenKind::At);
+    let origin = match parser.peek().kind.clone() {
+        TokenKind::LocalKw => {
+            parser.bump();
+            kai_ast::TemporalOrigin::Local
+        }
+        TokenKind::WallclockKw => {
+            parser.bump();
+            kai_ast::TemporalOrigin::Wallclock
+        }
+        _ => {
+            let found = parser.peek().clone();
+            parser.diagnostics.push(error::expected("`local` or `wallclock`", &found));
+            kai_ast::TemporalOrigin::Local
+        }
+    };
+    parser.expect_simple(&TokenKind::LParen);
+    let duration = duration_lit(parser);
+    let end = parser.expect_simple(&TokenKind::RParen);
+    let _span = kai_diagnostics::Span::merge(at_span, end);
+    Ty::Temporal {
+        inner: Box::new(inner),
+        origin,
+        duration,
+    }
+}
+
+fn duration_lit(parser: &mut Parser) -> kai_ast::DurationLit {
+    let tok = parser.peek().clone();
+    match tok.kind {
+        TokenKind::DurationLit { value, unit } => {
+            parser.bump();
+            let span = tok.span;
+            let ast_unit = match unit {
+                kai_lexer::token::DurationUnit::Ms => kai_ast::DurationUnit::Ms,
+                kai_lexer::token::DurationUnit::S => kai_ast::DurationUnit::S,
+                kai_lexer::token::DurationUnit::M => kai_ast::DurationUnit::M,
+                kai_lexer::token::DurationUnit::H => kai_ast::DurationUnit::H,
+                kai_lexer::token::DurationUnit::D => kai_ast::DurationUnit::D,
+            };
+            kai_ast::DurationLit { value, unit: ast_unit, span }
+        }
+        _ => {
+            parser.diagnostics.push(error::expected("a duration literal (e.g. `30m`)", &tok));
+            // Recover with 0m
+            kai_ast::DurationLit {
+                value: 0,
+                unit: kai_ast::DurationUnit::M,
+                span: tok.span,
+            }
+        }
+    }
 }
 
 fn base_ty(parser: &mut Parser) -> Ty {

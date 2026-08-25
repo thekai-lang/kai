@@ -1,5 +1,5 @@
 use super::*;
-use kai_tast::{
+use kai_tast::{EffectSet, 
     FunctionId, KaiType, TypedBlock, TypedExpr, TypedExprKind, TypedFnDecl, TypedProgram,
     TypedStmt,
 };
@@ -14,6 +14,8 @@ fn minimal_program() -> TypedProgram {
             module: String::new(),
             params: Vec::new(),
             ret: KaiType::Int32,
+            declared_effects: None,
+            inferred_effects: EffectSet::default(),
             body: TypedBlock {
                 stmts: vec![TypedStmt::Return(Some(ret_expr))],
             },
@@ -44,6 +46,8 @@ fn negative_literal_keeps_bit_pattern() {
             module: String::new(),
             params: Vec::new(),
             ret: KaiType::Int32,
+            declared_effects: None,
+            inferred_effects: EffectSet::default(),
             body: TypedBlock {
                 stmts: vec![TypedStmt::Return(Some(expr))],
             },
@@ -60,6 +64,8 @@ pub(crate) fn fn_decl(id: u32, name: &str, ret: KaiType, stmts: Vec<TypedStmt>) 
         module: String::new(),
         params: Vec::new(),
         ret,
+        declared_effects: None,
+        inferred_effects: EffectSet::default(),
         body: TypedBlock { stmts },
     }
 }
@@ -68,7 +74,7 @@ pub(crate) fn fn_decl(id: u32, name: &str, ret: KaiType, stmts: Vec<TypedStmt>) 
 /// the entry block, even when the binding itself lives in a nested block.
 #[test]
 fn allocas_live_in_entry_block_only() {
-    use kai_tast::{LocalId, TypedIf, TypedLet};
+    use kai_tast::{EffectSet, LocalId, TypedIf, TypedLet};
 
     let let_in_branch = TypedStmt::Let(TypedLet {
         local: LocalId(0),

@@ -42,6 +42,11 @@ impl HeapBearing {
             // be — for Result that means either branch.
             KaiType::Optional(inner) => self.is(inner),
             KaiType::Result { ok, err } => self.is(ok) || self.is(err),
+            // Temporal (§5.1): @wallclock is heap-bearing (embedded RFC3339 timestamp), @local is zero-cost.
+            KaiType::Temporal { inner, origin, .. } => match origin {
+                kai_tast::TemporalOrigin::Wallclock => true,
+                kai_tast::TemporalOrigin::Local => self.is(inner),
+            },
             // v0.13: closures are unconditionally heap-bearing regardless of
             // capture — mirrors array's rule, never an optimization-driven
             // exception.

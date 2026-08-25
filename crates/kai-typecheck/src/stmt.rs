@@ -42,6 +42,23 @@ pub(crate) fn lower_stmt(
         // rules; only the binding is skipped. Interim P1 form — the
         // Optional/Result discard diagnostic joins in P3.
         StmtKind::Discard(value) => Some(TypedStmt::Expr(expr::lower(checker, value, None))),
+        StmtKind::Require(expr) => {
+            let typed = expr::lower(checker, expr, None);
+            if typed.ty != KaiType::Bool {
+                checker.error(error::condition_not_bool(typed.ty.clone(), expr.span));
+            }
+            // Parsed in v0.0.7, semantics not yet formalized (§5.2, v0.0.8). Diagnostic instead of silent.
+            checker.error(error::require_not_yet_implemented(stmt.span));
+            Some(TypedStmt::Require(typed))
+        }
+        StmtKind::Observe(expr) => {
+            let typed = expr::lower(checker, expr, None);
+            if typed.ty != KaiType::Bool {
+                checker.error(error::condition_not_bool(typed.ty.clone(), expr.span));
+            }
+            checker.error(error::observe_not_yet_implemented(stmt.span));
+            Some(TypedStmt::Observe(typed))
+        }
         StmtKind::Expr(e) => {
             let typed = expr::lower(checker, e, None);
             // §9.9a (v0.0.6): discarding an Optional/Result as a bare

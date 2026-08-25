@@ -1,9 +1,9 @@
 use super::*;
-use kai_tast::{BinaryOp, KaiType, TypedExpr, TypedExprKind, TypedProgram};
+use kai_tast::{EffectSet, BinaryOp, KaiType, TypedExpr, TypedExprKind, TypedProgram};
 
 /// `main` returning one expression — the smallest vehicle for a check.
 fn returns(expr: TypedExpr) -> TypedProgram {
-    use kai_tast::{FunctionId, TypedBlock, TypedFnDecl, TypedStmt};
+    use kai_tast::{EffectSet, FunctionId, TypedBlock, TypedFnDecl, TypedStmt};
     TypedProgram {
         structs: Vec::new(),
         fns: vec![TypedFnDecl {
@@ -12,6 +12,8 @@ fn returns(expr: TypedExpr) -> TypedProgram {
             module: String::new(),
             params: Vec::new(),
             ret: expr.ty.clone(),
+            declared_effects: None,
+            inferred_effects: EffectSet::default(),
             body: TypedBlock {
                 stmts: vec![TypedStmt::Return(Some(expr))],
             },
@@ -39,7 +41,7 @@ fn bin(op: BinaryOp, lhs: i64, rhs: i64) -> TypedExpr {
 #[test]
 fn indexed_reads_carry_bounds_guards() {
     // `[10][0]`: in-bounds read still emits the guard; JIT survives it.
-    use kai_tast::{KaiType as Kt};
+    use kai_tast::{EffectSet, KaiType as Kt};
     let arr_ty = Kt::Array(Box::new(Kt::Int32));
     let read = TypedExpr::new(
         TypedExprKind::Index {

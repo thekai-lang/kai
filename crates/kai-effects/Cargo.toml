@@ -1,0 +1,9 @@
+[package]
+name = "kai-effects"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kai-ast = { workspace = true }
+kai-tast = { workspace = true }
+kai-diagnostics = { workspace = true }

@@ -39,5 +39,30 @@ pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
             params: params.iter().map(|p| resolve(checker, p)).collect(),
             ret: Box::new(resolve(checker, ret)),
         },
+        Ty::Temporal { inner, origin, duration } => {
+            if duration.value == 0 {
+                checker.error(error::temporal_zero_duration(duration.span));
+            }
+            let inner_ty = resolve(checker, inner);
+            let unit = match duration.unit {
+                kai_ast::DurationUnit::Ms => kai_tast::DurationUnit::Ms,
+                kai_ast::DurationUnit::S => kai_tast::DurationUnit::S,
+                kai_ast::DurationUnit::M => kai_tast::DurationUnit::M,
+                kai_ast::DurationUnit::H => kai_tast::DurationUnit::H,
+                kai_ast::DurationUnit::D => kai_tast::DurationUnit::D,
+            };
+            let origin_ty = match origin {
+                kai_ast::TemporalOrigin::Local => kai_tast::TemporalOrigin::Local,
+                kai_ast::TemporalOrigin::Wallclock => kai_tast::TemporalOrigin::Wallclock,
+            };
+            KaiType::Temporal {
+                inner: Box::new(inner_ty),
+                origin: origin_ty,
+                duration: kai_tast::DurationLit {
+                    value: duration.value,
+                    unit,
+                },
+            }
+        }
     }
 }

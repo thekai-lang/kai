@@ -78,6 +78,7 @@ fn fn_decl(parser: &mut Parser) -> FnDecl {
     let params = params(parser);
     parser.expect_simple(&TokenKind::Arrow);
     let ret = ty::ty(parser);
+    let effects = effects_annotation(parser);
     let body = stmt::block(parser);
     let span = Span::merge(start, body.span);
 
@@ -86,9 +87,46 @@ fn fn_decl(parser: &mut Parser) -> FnDecl {
         name,
         params,
         ret,
+        effects,
         body,
         span,
     }
+}
+
+fn effects_annotation(parser: &mut Parser) -> Option<kai_ast::EffectSet> {
+    if !matches!(parser.peek().kind, TokenKind::Effects) {
+        return None;
+    }
+    parser.bump(); // `effects`
+    parser.expect_simple(&TokenKind::LBrace);
+    let mut effects = Vec::new();
+    if parser.peek().kind != TokenKind::RBrace {
+        loop {
+            match parser.peek().kind.clone() {
+                TokenKind::EscapesLocalContext => {
+                    let tok = parser.bump();
+                    effects.push(kai_ast::EffectName::EscapesLocalContext);
+                    let _ = tok;
+                }
+                _ => {
+                    let found = parser.peek().clone();
+                    parser.diagnostics.push(crate::error::expected(
+                        "`escapes-local-context` or `}`",
+                        &found,
+                    ));
+                    parser.bump();
+                }
+            }
+            if !parser.eat_simple(&TokenKind::Comma) {
+                break;
+            }
+            if matches!(parser.peek().kind, TokenKind::RBrace | TokenKind::Eof) {
+                break;
+            }
+        }
+    }
+    parser.expect_simple(&TokenKind::RBrace);
+    Some(kai_ast::EffectSet(effects))
 }
 
 /// `( [ [mut] name : Type { , [mut] name : Type } ] )`
