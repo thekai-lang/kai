@@ -971,3 +971,50 @@ fn v007_require_observe_parsed_but_not_implemented() {
         "not yet implemented",
     );
 }
+
+fn v007_wallclock_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v0007/wallclock.kai")
+}
+
+#[test]
+fn v007_wallclock_matches_golden_ir() {
+    let ir = pipeline::compile_file(&v007_wallclock_entry()).expect("wallclock should compile");
+    assert_golden("v0007/wallclock.expected.ll", &ir);
+}
+
+#[test]
+fn v007_wallclock_cascade_has_two_releases() {
+    // string @wallclock(30m) is unconditionally heap (header + inner string) → two-step cascade
+    // This is the "silently correct for int32 @wallclock, silently wrong for string @wallclock" case (§5.1.7)
+    let ir = pipeline::compile_file(&v007_wallclock_entry()).expect("wallclock should compile");
+    // main's `let w: string @wallclock` must release inner string header then wallclock header
+    let wallclock_releases = ir.matches("call void @kai_release").count();
+    assert!(
+        wallclock_releases >= 2,
+        "wallclock string should have at least 2 releases (inner + header), got {wallclock_releases} in IR:\n{ir}"
+    );
+    // Specifically, main should have wallclock payload + header releases
+    assert!(ir.contains("wallclock.payload"), "wallclock payload handling missing in IR:\n{ir}");
+}
+
+fn v007_boundary_fail_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v0007/boundary_fail.kai")
+}
+
+fn v007_boundary_ok_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v0007/boundary_ok.kai")
+}
+
+#[test]
+fn v007_boundary_fail_is_effect_error() {
+    let err = pipeline::compile_file(&v007_boundary_fail_entry()).unwrap_err();
+    assert_eq!(err.phase, "effect");
+    assert!(err.diagnostics.iter().any(|d| d.message.contains("escapes-local-context")));
+}
+
+#[test]
+fn v007_boundary_ok_compiles() {
+    let ir = pipeline::compile_file(&v007_boundary_ok_entry()).expect("boundary_ok should compile");
+    // wallclock @wallclock passed to escapes should NOT be flagged, and should show cascade for wallclock in main
+    assert!(ir.contains("call void @good"), "good should be called");
+}

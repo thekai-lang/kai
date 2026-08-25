@@ -1,0 +1,14 @@
+// Boundary enforcement negative case (§5.1.1-§5.1.3)
+// escapes() has escapes-local-context, bad() takes @local and calls escapes(t) without conversion → must be effect error
+fn escapes(t: string @local(30m)) -> unit effects { escapes-local-context } {
+    return;
+}
+fn bad(t: string @local(30m)) -> unit {
+    escapes(t);
+    return;
+}
+fn main() -> int32 {
+    let tok: string @local(30m) = "hi";
+    bad(tok);
+    return 0;
+}

@@ -1,0 +1,12 @@
+// Wallclock two-step cascade test (§5.1.7)
+// string @wallclock(30m) is unconditionally heap (header + inner string)
+// Release must be: release inner string header, then release wallclock header
+// Bare header-release is silently correct for int32 @wallclock, silently wrong for string @wallclock — this fixture covers the latter
+fn expire_check(t: string @wallclock(30m)) -> unit {
+    return;
+}
+fn main() -> int32 {
+    let w: string @wallclock(30m) = "hello";
+    expire_check(w);
+    return 0;
+}

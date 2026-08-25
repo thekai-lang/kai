@@ -1,0 +1,13 @@
+// Boundary enforcement positive case — wallclock is allowed to cross
+fn escapes(t: string @wallclock(30m)) -> unit effects { escapes-local-context } {
+    return;
+}
+fn good(t: string @wallclock(30m)) -> unit {
+    escapes(t);
+    return;
+}
+fn main() -> int32 {
+    let w: string @wallclock(30m) = "hi";
+    good(w);
+    return 0;
+}
