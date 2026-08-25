@@ -27,6 +27,11 @@ pub(crate) fn heap_bearing(ctx: &Ctx<'_>, ty: &KaiType) -> bool {
         // (v0.13), the environment header always exists.
         KaiType::Optional(inner) => heap_bearing(ctx, inner),
         KaiType::Result { ok, err } => heap_bearing(ctx, ok) || heap_bearing(ctx, err),
+        // Temporal (§5.1.7): Wallclock unconditionally heap (header with instant), Local delegates to inner.
+        KaiType::Temporal { inner, origin, .. } => match origin {
+            kai_tast::TemporalOrigin::Wallclock => true,
+            kai_tast::TemporalOrigin::Local => heap_bearing(ctx, inner),
+        },
         KaiType::Closure { .. } => true,
         _ => false,
     }
@@ -58,6 +63,55 @@ pub(crate) fn emit_release_slot<'ctx>(
     value_ptr: inkwell::values::PointerValue<'ctx>,
 ) {
     match ty {
+        KaiType::Temporal { inner, origin, .. } => match origin {
+            kai_tast::TemporalOrigin::Wallclock => {
+                // Wallclock header is heap-allocated with instant + payload.
+                // Two-step: cascade to inner if heap-bearing, then release header.
+                // §5.1.7 "bare unconditional header-release is silently correct for int32 @wallclock, silently wrong for string @wallclock"
+                let hdr = ctx
+                    .builder
+                    .build_load(
+                        ctx.context.ptr_type(Default::default()),
+                        value_ptr,
+                        "wallclock.hdr",
+                    )
+                    .expect("load wallclock header")
+                    .into_pointer_value();
+                if heap_bearing(ctx, inner) {
+                    let header_ty = crate::types::wallclock_header_ty(ctx, inner);
+                    let payload_ptr = ctx
+                        .builder
+                        .build_struct_gep(header_ty, hdr, 2, "wallclock.payload.p")
+                        .expect("wallclock payload gep");
+                    match inner.as_ref() {
+                        KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                            let loaded = ctx
+                                .builder
+                                .build_load(crate::types::to_llvm(ctx, inner), payload_ptr, "wallclock.payload.v")
+                                .expect("load wallclock payload");
+                            if matches!(inner.as_ref(), KaiType::String | KaiType::Array(_)) {
+                                let inner_hdr = loaded.into_pointer_value();
+                                call_void(ctx, crate::runtime::release_fn(ctx), &[inner_hdr.into()]);
+                            } else {
+                                let env = ctx
+                                    .builder
+                                    .build_extract_value(loaded.into_struct_value(), 1, "clo.env")
+                                    .expect("env")
+                                    .into_pointer_value();
+                                call_void(ctx, crate::runtime::release_fn(ctx), &[env.into()]);
+                            }
+                        }
+                        _ => {
+                            emit_release_slot(ctx, inner, payload_ptr);
+                        }
+                    }
+                }
+                call_void(ctx, crate::runtime::release_fn(ctx), &[hdr.into()]);
+            }
+            kai_tast::TemporalOrigin::Local => {
+                emit_release_slot(ctx, inner, value_ptr);
+            }
+        },
         KaiType::String | KaiType::Array(_) => {
             let hdr = ctx
                 .builder

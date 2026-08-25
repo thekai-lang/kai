@@ -49,9 +49,15 @@ entry:
   %call2 = call i32 @caller(ptr %tmp1)
   store i32 %call2, ptr %v, align 4
   %tmp3 = load i32, ptr %v, align 4
+  %rel.hdr = load ptr, ptr %out, align 8
+  call void @kai_release(ptr %rel.hdr)
+  %rel.hdr4 = load ptr, ptr %tok, align 8
+  call void @kai_release(ptr %rel.hdr4)
   ret i32 %tmp3
 }
 
 declare void @kai_retain(ptr)
 
 declare ptr @kai_string_new(ptr, i64)
+
+declare void @kai_release(ptr)

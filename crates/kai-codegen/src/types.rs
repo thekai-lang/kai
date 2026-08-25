@@ -35,8 +35,11 @@ pub(crate) fn to_llvm<'ctx>(ctx: &Ctx<'ctx>, ty: &KaiType) -> BasicTypeEnum<'ctx
         // Closures are fat pointers `{ fn_ptr, env_ptr }` (§9.10) — always
         // the shared NAMED shape so signatures and literals unify.
         KaiType::Closure { .. } => closure_fat_ty(ctx).into(),
-        // Temporal (§5.1): @local is zero-cost (same as inner), @wallclock currently same as inner (timestamp handling deferred, but heap-bearing).
-        KaiType::Temporal { inner, .. } => to_llvm(ctx, inner),
+        // Temporal (§5.1.7): @local pure delegation (zero-cost, same as inner), @wallclock unconditionally heap (header with compact instant)
+        KaiType::Temporal { inner, origin, .. } => match origin {
+            kai_tast::TemporalOrigin::Local => to_llvm(ctx, inner),
+            kai_tast::TemporalOrigin::Wallclock => ctx.context.ptr_type(Default::default()).into(),
+        },
     }
 }
 
@@ -50,6 +53,25 @@ pub(crate) fn closure_fat_ty<'ctx>(ctx: &Ctx<'ctx>) -> inkwell::types::StructTyp
     let ptr = ctx.context.ptr_type(Default::default());
     let ty = ctx.context.opaque_struct_type(name);
     ty.set_body(&[ptr.into(), ptr.into()], false);
+    ty
+}
+
+/// Wallclock header (§5.1.7): `{ i64 rc, i64 instant (UTC micros since epoch), payload }`
+/// Unconditionally heap-allocated, like array (§9.1), regardless of inner type.
+/// `instant` is compact integer, NOT RFC3339 string — wire format is serialization only (§5.1.5).
+pub(crate) fn wallclock_header_ty<'ctx>(
+    ctx: &Ctx<'ctx>,
+    inner: &KaiType,
+) -> inkwell::types::StructType<'ctx> {
+    let inner_llvm = to_llvm(ctx, inner);
+    // Use inner type's string form for unique name, like array does
+    let name = format!("KaiWallclock.{}", inner_llvm.to_string().replace(|c: char| !c.is_alphanumeric(), "_"));
+    if let Some(existing) = ctx.module.get_struct_type(&name) {
+        return existing;
+    }
+    let ty = ctx.context.opaque_struct_type(&name);
+    let i64_ty = ctx.context.i64_type().into();
+    ty.set_body(&[i64_ty, i64_ty, inner_llvm], false);
     ty
 }
 
@@ -78,9 +100,14 @@ pub(crate) fn zero_of<'ctx>(
 ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
     match ty {
         KaiType::Unit => None,
+        KaiType::Temporal { origin: kai_tast::TemporalOrigin::Wallclock, .. } => {
+            // Wallclock is heap pointer, zero is null
+            Some(ctx.context.ptr_type(Default::default()).const_zero().into())
+        }
         other => Some(match to_llvm(ctx, other) {
             inkwell::types::BasicTypeEnum::IntType(int_ty) => int_ty.const_zero().into(),
             inkwell::types::BasicTypeEnum::FloatType(float_ty) => float_ty.const_zero().into(),
+            inkwell::types::BasicTypeEnum::PointerType(ptr_ty) => ptr_ty.const_zero().into(),
             inkwell::types::BasicTypeEnum::StructType(struct_ty) => struct_ty.const_zero().into(),
             _ => unreachable!("bool is an int type"),
         }),
