@@ -20,12 +20,92 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
             }
         }
         TypedStmt::Require(e) => {
-            // v0.0.8 semantics not yet formalized (§5.2) — parsed but not effect-checked.
-            // Evaluate condition for now (bool, already typechecked), no runtime effect.
-            let _ = expr::emit(ctx, frame, e);
+            // v0.0.8 (§5.2.1 + §10.3): evaluate exactly once, synchronously;
+            // on violation record to the pre-ledger sink FIRST (§10.3
+            // sequencing), then panic with the raw source-text condition.
+            // String-API builds skip only the record — the panic itself is
+            // unconditional behavior, not part of the documented no-op.
+            let cond_value = expr::emit(ctx, frame, e);
+            let cond = cond_value.into_int_value();
+            let current: BasicBlock = ctx.builder.get_insert_block().expect("insert position");
+            let function = current.get_parent().expect("function");
+            let ok_bb = ctx.context.append_basic_block(function, "require.ok");
+            let viol_bb = ctx.context.append_basic_block(function, "require.viol");
+
+            let _ = ctx
+                .builder
+                .build_conditional_branch(cond, ok_bb, viol_bb)
+                .expect("require branch");
+
+            ctx.builder.position_at_end(viol_bb);
+            if let Some(record) = signal_record(ctx, frame, e.span, "debt.log") {
+                let args = [
+                    record.sink.into(),
+                    record.location.into(),
+                    record.condition.into(),
+                ];
+                ctx.builder
+                    .build_call(
+                        crate::runtime::observe::debt_record_fn(ctx),
+                        &args,
+                        "debt.rec",
+                    )
+                    .expect("kai_debt_record call");
+            }
+            let cond_text = condition_text(ctx, &frame.module, e.span);
+            let msg = format!("requirement violated: {cond_text}");
+            let msg_global = ctx
+                .builder
+                .build_global_string_ptr(&msg, "kai.require.msg")
+                .expect("require message global");
+            let file = crate::emit::panic::file_global_for(ctx, &frame.module);
+            let (line, col) = ctx
+                .sources
+                .get(&frame.module)
+                .map_or((0, 0), |src| src.line_col(e.span.start));
+            let i64_ty = ctx.context.i64_type();
+            let panic_args = [
+                msg_global.as_pointer_value().into(),
+                i64_ty.const_int(msg.len() as u64, false).into(),
+                file.into(),
+                i64_ty.const_int(line as u64, false).into(),
+                i64_ty.const_int(col as u64, false).into(),
+            ];
+            ctx.builder
+                .build_call(crate::runtime::panic_fn(ctx), &panic_args, "require.panic")
+                .expect("kai_panic call");
+            ctx.builder
+                .build_unreachable()
+                .expect("panic never returns");
+
+            ctx.builder.position_at_end(ok_bb);
         }
         TypedStmt::Observe(e) => {
-            let _ = expr::emit(ctx, frame, e);
+            // v0.0.8 (§5.2.2): Signal telemetry — evaluate exactly once,
+            // record {timestamp, location, condition, outcome}, never fatal.
+            // Root-less string-API builds skip recording entirely (documented
+            // no-op, v0.21); evaluation itself is unchanged.
+            let outcome_bool = expr::emit(ctx, frame, e);
+            let outcome = ctx.builder.build_int_cast(
+                outcome_bool.into_int_value(),
+                ctx.context.i32_type(),
+                "observe.outcome.i32",
+            ).expect("outcome widen to i32");
+            if let Some(record) = signal_record(ctx, frame, e.span, "observe.log") {
+                let args = [
+                    record.sink.into(),
+                    record.location.into(),
+                    record.condition.into(),
+                    outcome.into(),
+                ];
+                ctx.builder
+                    .build_call(
+                        crate::runtime::observe::observe_record_fn(ctx),
+                        &args,
+                        "observe.rec",
+                    )
+                    .expect("kai_observe_record call");
+            }
         }
         TypedStmt::Expr(e) => {
             // Value discarded; calls make this meaningful in v0.0.3.
@@ -284,4 +364,65 @@ pub(crate) fn fallback_return<'ctx>(ctx: &Ctx<'ctx>, ret: &kai_tast::KaiType) {
             let _ = ctx.builder.build_return(None);
         }
     }
+}
+
+
+// -- v0.0.8 §5.2 signal recording helpers --------------------------------------
+
+/// One baked signal call's arguments: the sink path (project-root-relative
+/// `.kai/*.log`), the `file:line:col` location, and the raw source-text
+/// condition (v0.22). `None` = root-less string API — documented recording
+/// no-op (§5.2.2/v0.21).
+struct SignalRecord<'ctx> {
+    #[allow(dead_code)]
+    sink: inkwell::values::PointerValue<'ctx>,
+    location: inkwell::values::PointerValue<'ctx>,
+    condition: inkwell::values::PointerValue<'ctx>,
+}
+
+/// Bakes the three c-string globals for a require/observe record, or returns
+/// `None` when compiling via the root-less string API. `sink_file` is
+/// `"observe.log"` or `"debt.log"`, resolved under `<root>/.kai/`.
+fn signal_record<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &crate::frame::Frame<'ctx>,
+    span: kai_diagnostics::Span,
+    sink_file: &str,
+) -> Option<SignalRecord<'ctx>> {
+    let root = ctx.sink_root.as_ref()?;
+    let info = ctx.sources.get(&frame.module)?;
+    let location = info.location(span);
+    let condition = info.slice(span);
+
+    let sink_path = root.join(".kai").join(sink_file);
+    let sink_str = sink_path.to_string_lossy().into_owned();
+
+    Some(SignalRecord {
+        sink: bake_cstr(ctx, &sink_str, "kai.sink.path"),
+        location: bake_cstr(ctx, &location, "kai.sig.loc"),
+        condition: bake_cstr(ctx, &condition, "kai.sig.cond"),
+    })
+}
+
+/// Private unnamed constant byte-string with NUL terminator, as an i8*.
+fn bake_cstr<'ctx>(
+    ctx: &Ctx<'ctx>,
+    text: &str,
+    name: &str,
+) -> inkwell::values::PointerValue<'ctx> {
+    let global = ctx
+        .builder
+        .build_global_string_ptr(text, name)
+        .expect("string global");
+    global.as_pointer_value()
+}
+
+
+/// §5.2/v0.22: condition text is the raw source-text span — verbatim slice,
+/// never an AST pretty-print. Falls back to `<unknown>` when no source is
+/// attached (tests that pass empty source lists).
+fn condition_text<'ctx>(ctx: &Ctx<'ctx>, module_key: &str, span: kai_diagnostics::Span) -> String {
+    ctx.sources
+        .get(module_key)
+        .map_or_else(|| "<unknown>".to_string(), |src| src.slice(span))
 }

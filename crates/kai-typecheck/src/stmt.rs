@@ -42,13 +42,16 @@ pub(crate) fn lower_stmt(
         // rules; only the binding is skipped. Interim P1 form — the
         // Optional/Result discard diagnostic joins in P3.
         StmtKind::Discard(value) => Some(TypedStmt::Expr(expr::lower(checker, value, None))),
+        // v0.0.8 (§5.2, whitepaper v0.20–v0.22): `require`/`observe` lower to
+        // typed statements here; the Trust<C> lowering lives in kai-effects
+        // and the runtime behavior (panic / sink recording) in codegen. The
+        // only static rule at this phase is that the guarded expression must
+        // be `bool`.
         StmtKind::Require(expr) => {
             let typed = expr::lower(checker, expr, None);
             if typed.ty != KaiType::Bool {
                 checker.error(error::condition_not_bool(typed.ty.clone(), expr.span));
             }
-            // Parsed in v0.0.7, semantics not yet formalized (§5.2, v0.0.8). Diagnostic instead of silent.
-            checker.error(error::require_not_yet_implemented(stmt.span));
             Some(TypedStmt::Require(typed))
         }
         StmtKind::Observe(expr) => {
@@ -56,7 +59,6 @@ pub(crate) fn lower_stmt(
             if typed.ty != KaiType::Bool {
                 checker.error(error::condition_not_bool(typed.ty.clone(), expr.span));
             }
-            checker.error(error::observe_not_yet_implemented(stmt.span));
             Some(TypedStmt::Observe(typed))
         }
         StmtKind::Expr(e) => {

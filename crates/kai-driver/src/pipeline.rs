@@ -53,7 +53,13 @@ pub fn compile_file(entry: &Path) -> Result<String, Failure> {
     with_big_stack(move || {
         let modules = load_modules(&entry)?;
         let program = lower_modules(&modules)?;
-        kai_codegen::compile_ir_with_sources("kai_module", &program, &module_sources(&modules))
+        let root = entry.parent().map(|p| p.to_path_buf());
+        kai_codegen::compile_ir_with_sink(
+            "kai_module",
+            &program,
+            &module_sources(&modules),
+            root.as_deref(),
+        )
             .map_err(internal_failure)
     })
 }
@@ -64,7 +70,8 @@ pub fn jit_file(entry: &Path) -> Result<i32, Failure> {
     with_big_stack(move || {
         let modules = load_modules(&entry)?;
         let program = lower_modules(&modules)?;
-        kai_codegen::run_jit_with_sources(&program, &module_sources(&modules))
+        let root = entry.parent().map(|p| p.to_path_buf());
+        kai_codegen::run_jit_with_sink(&program, &module_sources(&modules), root.as_deref())
             .map_err(internal_failure)
     })
 }

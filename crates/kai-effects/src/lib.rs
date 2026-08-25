@@ -1,7 +1,10 @@
 //! Effect checker (v0.0.7, §5.1): `escapes-local-context` inference, verified contract `inferred ⊆ declared`,
 //! and temporal reachability. Trust<C> lowering for @local/@wallclock → `Trust<C>` is validated here.
-//! Require/observe (v0.0.8) are parsed but not yet effect-checked — they emit "not yet implemented" in typecheck,
-//! so this crate treats them as passthrough (no effect).
+//! `require`/`observe` lower into `Trust<C>` locally through this crate too (v0.20 §5.2) — but bypass the
+//! call-graph inference subsystem entirely: their violations/records are runtime concerns at the statement's
+//! own execution point, with nothing for a caller to propagate (see `trust.rs`, v0.20–v0.22).
+
+pub mod trust;
 
 use kai_diagnostics::{Diagnostic, Span};
 use kai_tast::{Effect, EffectSet, KaiType, TemporalOrigin, TypedProgram, TypedStmt};

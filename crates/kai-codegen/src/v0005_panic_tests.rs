@@ -1,5 +1,5 @@
 use super::*;
-use kai_tast::{EffectSet, BinaryOp, KaiType, TypedExpr, TypedExprKind, TypedProgram};
+use kai_tast::{BinaryOp, KaiType, TypedExpr, TypedExprKind, TypedProgram};
 
 /// `main` returning one expression — the smallest vehicle for a check.
 fn returns(expr: TypedExpr) -> TypedProgram {
@@ -41,7 +41,7 @@ fn bin(op: BinaryOp, lhs: i64, rhs: i64) -> TypedExpr {
 #[test]
 fn indexed_reads_carry_bounds_guards() {
     // `[10][0]`: in-bounds read still emits the guard; JIT survives it.
-    use kai_tast::{EffectSet, KaiType as Kt};
+    use kai_tast::KaiType as Kt;
     let arr_ty = Kt::Array(Box::new(Kt::Int32));
     let read = TypedExpr::new(
         TypedExprKind::Index {

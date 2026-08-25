@@ -946,7 +946,7 @@ fn v007_duration_zero_is_type_error() {
 #[test]
 fn v007_effects_contract_verified() {
     // inferred {escapes} ⊆ declared {} must fail (§5.1.2)
-    let src = "fn bad(t: string) -> unit effects {} { return; }\nfn caller(t: string) -> unit { bad(t); }\nfn main() -> int32 { return 0; }";
+    let _src_unused = 0;
     // This specific `bad` has no direct escapes, so it would not fail — we test a function that declares empty but body calls an escaping function via transitive
     let src2 = "fn esc(t: string) -> unit effects { escapes-local-context } { return; }\nfn bad2(t: string) -> unit effects {} { esc(t); }\nfn main() -> int32 { return 0; }";
     assert_fails_at(src2, "effect", "declared effects");
@@ -959,16 +959,148 @@ fn v007_local_passed_to_escapes_is_effect_error() {
 }
 
 #[test]
-fn v007_require_observe_parsed_but_not_implemented() {
+fn v007_require_observe_non_bool_rejected() {
     assert_fails_at(
-        "fn main() -> int32 { require true; return 0; }",
+        "fn main() -> int32 { require 1; return 0; }",
         "typecheck",
-        "not yet implemented",
+        "condition must be `bool`",
     );
     assert_fails_at(
-        "fn main() -> int32 { observe true; return 0; }",
+        "fn main() -> int32 { observe \"x\"; return 0; }",
         "typecheck",
-        "not yet implemented",
+        "condition must be `bool`",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// v0.0.8: require runtime panic + §10.3 debt.log, observe JSONL sink,
+// exactly-once evaluation, string-API recording no-op (§5.2, v0.20–v0.22).
+// ---------------------------------------------------------------------------
+
+/// CLI-level: failing `require` exits 101 with the §10.3 message shape AND
+/// writes the pre-ledger record to `.kai/debt.log` before exiting.
+#[test]
+fn v008_require_violation_panics_and_writes_debt_log() {
+    let dir = std::env::temp_dir().join(format!("kai-req-{}-{}", "viol", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("main.kai");
+    std::fs::write(
+        &path,
+        "fn main() -> int32 {\n    let age: int32 = 5;\n    require age > 10;\n    return 0;\n}\n",
+    )
+    .expect("write program");
+
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(101), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("kai runtime panic: requirement violated: age > 10"),
+        "missing §10.3 message:\n{stderr}"
+    );
+    assert!(
+        stderr.lines().any(|l| l.starts_with("  at ") && l.contains("main.kai:")),
+        "missing location line:\n{stderr}"
+    );
+
+    // §10.3 sequencing: the debt record exists AFTER exit — flushed write.
+    let debt = dir.join(".kai").join("debt.log");
+    let contents = std::fs::read_to_string(&debt).expect("debt.log written before panic");
+    assert!(contents.contains("\"kind\":\"correctness\""), "{contents}");
+    assert!(contents.contains("\"condition\":\"age > 10\""), "{contents}");
+    assert!(contents.contains("\"outcome\":false"), "{contents}");
+    assert!(contents.starts_with('{') && contents.trim_end().ends_with('}'));
+    assert_eq!(contents.lines().count(), 1);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn v008_require_pass_runs_clean_no_debt_entry() {
+    let dir = std::env::temp_dir().join(format!("kai-req-{}-ok", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("main.kai");
+    std::fs::write(&path, "fn main() -> int32 { let a = 5; require a > 1; return 9; }\n")
+        .expect("write");
+
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(9));
+    let debt = dir.join(".kai").join("debt.log");
+    assert!(!debt.exists(), "passing require must not write debt.log");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn v008_observe_writes_valid_jsonl_per_evaluation() {
+    let dir = std::env::temp_dir().join(format!("kai-obs-{}-{}", "jsonl", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("main.kai");
+    std::fs::write(
+        &path,
+        "fn main() -> int32 { observe 1 < 2; observe 5 >= 5; return 3; }\n",
+    )
+    .expect("write");
+
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(3));
+
+    let log = std::fs::read_to_string(dir.join(".kai").join("observe.log"))
+        .expect("observe.log written");
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines.len(), 2, "two evaluations -> two records: {log}");
+    for line in &lines {
+        assert!(line.starts_with('{') && line.ends_with('}'), "{line}");
+        assert!(!line.contains("\n"), "raw newline must be escaped: {line}");
+        assert!(line.contains("\"condition\""));
+        assert!(line.contains("\"timestamp\":\"20"), "RFC3339 year prefix");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn v008_signal_evaluation_is_exactly_once() {
+    // Synchronous, exactly-once (§5.2.1): if the condition were evaluated
+    // twice, the second `once(arr)` read would see a[0] == 2 and the
+    // require would trap — exit code 0 proves single evaluation.
+    let src = concat!(
+        "fn once(mut a: int32[]) -> int32 {\n",
+        "    let v = a[0];\n",
+        "    a[0] = v + 1;\n",
+        "    return v;\n",
+        "}\n",
+        "fn main() -> int32 {\n",
+        "    var arr = [1];\n",
+        "    require once(arr) == 1;\n",
+        "    return 0;\n",
+        "}"
+    );
+    assert_eq!(pipeline::jit(src).unwrap(), 0);
+}
+
+#[test]
+fn v008_string_api_recording_is_documented_noop() {
+    // §5.2.2/v0.21: compile(&str) has no project root — recording is a
+    // documented no-op. Proven at IR level: the observe/debt record calls
+    // are ABSENT from string-API output (file-API output has them, see
+    // v008_require_violation test). The require panic itself still fires —
+    // but verifying that trap requires spawning the binary (kai_panic exits
+    // the process), which v008_require_violation already covers via CLI.
+    let src = "fn main() -> int32 { observe 1 < 2; return 4; }";
+    let ir = pipeline::compile(src).expect("compiles");
+    assert!(
+        !ir.contains("kai_observe_record"),
+        "string API must skip observe recording:\\n{ir}"
+    );
+
+    let fail_src = "fn main() -> int32 { require false; return 0; }";
+    let ir = pipeline::compile(fail_src).expect("compiles");
+    assert!(
+        !ir.contains("kai_debt_record"),
+        "string API must skip debt recording:\\n{ir}"
+    );
+    assert!(
+        ir.contains("requirement violated:"),
+        "the panic itself must remain baked in:\\n{ir}"
     );
 }
 

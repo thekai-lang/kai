@@ -1,3 +1,17 @@
+## v0.0.8 — `require`/`observe` implemented: runtime panic, §10.3 debt record, JSONL Signal sink (whitepaper v0.20–v0.22 §5.2)
+
+The first trust-aware behaviors that execute: `require expr;` traps with the §10.3 message shape and writes a pre-ledger record before exiting; `observe expr;` appends a Signal record to `.kai/observe.log`. Both lower into `Trust<C>` locally through kai-effects (v0.20's scoping decision) — the call-graph inference subsystem stays exclusively §5.1's.
+
+- **Typecheck** — the two "not yet implemented" diagnostics are gone. Static rule at this phase is only that the guarded expression must be `bool`; everything else is runtime (§5.2 v0.20 scoping).
+- **kai-effects Trust<C> lowering (`trust.rs`, 113 lines)** — the single consumer-side definition of both record shapes per §5.2.1–§5.2.2/v0.22: `observe_jsonl(timestamp, location, condition, outcome)` and `debt_correctness_jsonl(...)` with `kind:"correctness"` matching §5.6 categories (v0.21). Includes canonical RFC3339-UTC-micros formatter (§5.1.5 format reused for record timestamps) and minimal JSON escaping — embedded newlines in source-text conditions escape to `\n`, never breaking one-record-per-line.
+- **Condition text = raw source span (v0.22)** — codegen slices the original source via the TAST span (`SourceInfo::slice`), verbatim including embedded newlines in panic messages; no AST pretty-printer, zero drift from what the programmer wrote.
+- **Codegen emission** — `Require`: evaluate once → branch violation/ok → on violation path: `kai_debt_record` (flushed) then `kai_panic("requirement violated: <span>")` → unreachable; ok path continues. `Observe`: evaluate once → `kai_observe_record`. Outcome widened i1→i32 at ABI boundary.
+- **Runtime sinks (`runtime/observe.rs`, 111 lines)** — `kai_observe_record(sink, loc, cond, outcome)` and `kai_debt_record(sink, loc, cond)` host intrinsics: timestamp acquired host-side, JSONL shaped by kai-effects, append+flush (create_dir_all for `.kai/`). INTRINSICS 9 → 11.
+- **Sink resolution (v0.21)** — file API bakes `<project root>/.kai/*.log` paths (root = entry file's directory per §3.6); string API passes no root and codegen emits NO recording calls — the documented no-op is proven at IR level (`v008_string_api_recording_is_documented_noop` asserts absence of both record calls AND presence of the baked require panic).
+- **Driver** — file API threads project root into new `compile_ir_with_sink` / `run_jit_with_sink` entry points; old signatures delegate with `None`.
+
+Testing: 13 driver tests added/updated — CLI-level failing require (exit 101 + §10.3 message + flushed `.kai/debt.log` with kind/location/condition/outcome), passing require leaves no debt entry, observe writes valid escaped JSONL (N evaluations = N lines), exactly-once evaluation proven by array-mutation counter (double eval would trap), string-API IR-level no-op assertions. 309 → 317 tests total; clippy `-D warnings` clean; all logic files <500 LOC (§8.4).
+
 # Kai Changelog
 
 This file tracks **compiler implementation** releases (`vX.Y.Z`, what `kai build --version` reports). Specification-level changes are recorded in the whitepaper's own changelog (`kai-whitepaper.md`, `v0.x` line) and cross-referenced here only where they land in code.

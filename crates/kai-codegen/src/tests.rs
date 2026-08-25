@@ -74,7 +74,7 @@ pub(crate) fn fn_decl(id: u32, name: &str, ret: KaiType, stmts: Vec<TypedStmt>) 
 /// the entry block, even when the binding itself lives in a nested block.
 #[test]
 fn allocas_live_in_entry_block_only() {
-    use kai_tast::{EffectSet, LocalId, TypedIf, TypedLet};
+    use kai_tast::{LocalId, TypedIf, TypedLet};
 
     let let_in_branch = TypedStmt::Let(TypedLet {
         local: LocalId(0),

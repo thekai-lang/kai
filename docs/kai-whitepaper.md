@@ -1,12 +1,15 @@
 # Kai
 ### A trust-aware programming language
 
-**Status:** Draft v0.19 — pre-implementation specification
+**Status:** Draft v0.22 — pre-implementation specification
 **Purpose:** Freeze scope before writing any compiler code. Nothing described here is authoritative until it appears in this document. Feature ideas that arise during implementation go into an `IDEAS.md` backlog, not into the compiler.
 
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
 
 **Changelog**
+- **v0.22** — Locked the last open detail for v0.0.8: condition text in `require`'s panic message and `observe`'s JSONL records is the raw source-text span (§5.2.1), never an AST pretty-print — reuses existing `Diagnostic`/TAST span infrastructure, guarantees the rendered text always matches what the programmer wrote verbatim, and needs no new pretty-printing machinery. §5.2's semantics are now fully specified end to end.
+- **v0.21** — `require` violations now write a concrete pre-ledger record before panicking (§10.3): `.kai/debt.log`, JSONL, one line per violation, `kind` field matching §5.6's existing debt categories so v0.0.12's aggregation needs no format translation — mirrors `observe.log`'s sink design (§5.2.2) rather than inventing a second pattern. Locked the sink-location question for both logs when compiling via the string API (no project root): a documented no-op, explicitly not CWD — falling back to CWD would have directly contradicted §3.6's rejection of CWD for module-root resolution (same non-determinism argument applies identically here).
+- **v0.20** — §5.2 (`require`/`observe`) formalized to §5.1's rigor ahead of v0.0.8: `require` gets a full `Trust<C>` lowering table (§5.2.1) plus a synchronous, exactly-once evaluation rule; `observe`'s recorded shape and sink are locked (§5.2.2) — a pluggable interface with exactly one v0.0.8 implementation, a local append-only JSONL file (`.kai/observe.log`), consistent with §2.1's offline-by-default principle; full `kai debt` dashboard integration deferred to its already-scheduled v0.0.12 slot. Precisely scoped what §5.1's apparatus `require`/`observe` do *not* need: the call-graph inference subsystem (`EffectName`/`EffectSet`, SCC/fixpoint, `effects { ... }` contracts) — but not `kai-effects`/`Trust<C>` lowering itself, which both constructs still go through (locally, with no graph to traverse) so `kai debt` and `@override` continue to operate on `Trust<C>` uniformly per §5.0/§8.
 - **v0.19** — New §5.1.3a closes the Appendix A gap found during v0.0.7's own boundary-test suite: `T @local(d)` may be read as plain `T` at an argument position without being stripped from the TAST — the safety decision moves entirely to the effect checker (which callee effect set applies), consistent with §8's phase order (typecheck cannot know a transitively-inferred effect set yet). Non-escaping callees now accept `@local`-tracked arguments silently; escaping callees still reject them, now via the correct boundary-specific diagnostic rather than an incidental type mismatch. v0.0.7 tag: `80d9410`.
 - **v0.18** — v0.0.7's core safety property (boundary rejection) confirmed proven by three distinct compiler-verified negative tests: direct `@local`→escaping-function rejection at the effect phase, exact-type rejection at typecheck when passing `@local` to a plain (unmodified) parameter, and transitive rejection across a two-hop call chain via fixpoint inference (both hops correctly flagged, not just the direct one). v0.0.7 is complete. New Appendix A item, surfaced by the second test: passing a `@local`-typed value to a plain-`T` parameter is rejected via exact-type matching regardless of whether the callee actually escapes — open question whether this should also block *non-escaping* functions (which would make `@local` impractical across any real call graph, contradicting its zero-runtime-footprint design intent) or whether an explicit, always-safe strip conversion (`T @local(d) → T`) is needed. Unresolved, needs a decision before `@local` sees real multi-function use.
 - **v0.17** — New §5.1.7, prompted by a real leak found during v0.0.7 implementation (codegen treated `Temporal` as a release no-op). Locks the two Origins as genuinely asymmetric, not two branches of one shape: `@wallclock` is unconditionally heap-bearing (array's precedent — a header exists regardless of inner type), `@local` is pure zero-footprint delegation to its inner type (more minimal than `Optional`/`Result`'s conditional delegation — no wrapper at all, compile-time-only). Header's internal instant representation locked as a compact integer (UTC microseconds since epoch), explicitly not the RFC 3339 string form — that's a serialization-boundary contract only (§5.1.5), never the in-memory shape. Release specified as two-step whenever the inner type is heap-bearing (cascade into payload, then release the header) — the exact case a bare unconditional header-release silently gets wrong. Same asymmetry applies uniformly to `heap_bearing` queries, retain, and closure-environment dtors, not just the release path that surfaced it.
@@ -523,7 +526,11 @@ This asymmetry applies uniformly everywhere heap-bearing-ness is queried — cod
 
 The original single `assume` construct tried to be two things that turned out to have incompatible semantics: a hard invariant (violating it is always fatal, so a confidence score attached to it changes nothing about program behavior) and a statistical observation (which, if it's ever allowed to be fatal, isn't really "statistical" at all). Kai splits these into two constructs — only one of which is a Trust.
 
-**`require` — Correctness Trust.** Declares an invariant the function's correctness genuinely depends on. Violation always panics, unconditionally — there is no confidence score, because a confidence score would not change what happens when it's false.
+**Scoping decision, stated up front: neither construct needs the call-graph *inference* machinery from §5.1 (`EffectName`/`EffectSet`, SCC/fixpoint propagation, `effects { ... }` contracts).** That machinery exists because a temporal boundary crossing is a *static* soundness property — a caller must know a callee's effect set, possibly transitively inferred, before it can decide whether `@local` is still legal at that call site (§5.1.2, §5.1.3a). `require`/`observe` have no analogous cross-function static concern: a violation happens at the exact point the statement executes, and no decision a *caller* makes depends on it — nothing needs propagating. Building the inference apparatus here would be machinery with no problem to solve — consistent with §4's non-goals discipline.
+
+**This does not mean `require`/`observe` bypass `kai-effects` entirely — only its inference subsystem.** They still lower into `Trust<C>` (§5.0) through the same crate, exactly as originally planned for it (§8: one crate, one `Trust<C>` consumer, new lowering rules rather than new crates per feature) — `require` lowers to a Correctness Trust value, `observe` to a Signal. This lowering is local and immediate (the TAST statement maps directly to one `Trust<C>` value, no graph to traverse), which is precisely *why* no inference layer is needed for it — but it still has to happen, because `kai debt` (§5.6, "a projection of Trust state") and `@override` (§5.5) both operate on `Trust<C>` uniformly, and `require`'s debt-ledger entry (§10.3) has nowhere to come from if it skips this lowering step.
+
+#### 5.2.1 `require` — Correctness Trust
 
 ```kai
 fn getDiscount(user: User) -> Percent {
@@ -532,7 +539,23 @@ fn getDiscount(user: User) -> Percent {
 }
 ```
 
-**`observe` — Signal, not Trust.** Pure telemetry: records how often a condition holds, purely for visibility, and never affects control flow or panics. Because it has no Violation, it does not fit the Trust structure (§5.0) at all — it is not tracked in `kai debt` as debt (nothing is owed), only surfaced as informational history.
+**Trust<C> lowering**, filling in §5.0's table with the mechanics specific to `require`:
+
+| Field | Value |
+|---|---|
+| Claim | the asserted boolean expression holds |
+| Origin | the programmer's `require` declaration at this exact point in control flow |
+| Verification | runtime, synchronous, at the statement itself |
+| Decay | stateful — the invariant can become false as program state changes, without the `require` statement's own code changing |
+| Violation | panic, unconditional (§10.3) — no confidence score, no soft form |
+
+**Evaluation is synchronous and exactly-once.** `require expr;` evaluates `expr` exactly one time, inline, at the point it appears in control flow — no laziness, no deferral, no reordering relative to surrounding statements. This is deliberately unremarkable: `expr`'s evaluation follows ordinary expression rules (borrows, temporaries released at end of statement per §9.11) with nothing `require`-specific about it — the only special behavior is what happens with the resulting boolean (§10.3's panic sequencing), not how the expression itself is evaluated.
+
+**Condition text — used in the panic message (§10.1/§10.3) and in `observe`'s JSONL records (§5.2.2) alike — is the raw source-text span of the expression, never an AST pretty-print.** It's a direct slice of the original source, using the span already carried by `Diagnostic`/TAST nodes (§8) — no new pretty-printer, and no risk of the rendered text drifting from what the programmer actually wrote (which a reconstruction could introduce via whitespace/parenthesization normalization). If the expression happens to span multiple lines, it's emitted verbatim: JSON string encoding already escapes embedded newlines without breaking the one-record-per-line JSONL format, and the plain-text panic message simply includes them as written — no special formatting rule invented for what's a rare case in practice.
+
+Full runtime failure sequencing (record to debt ledger, then panic) is specified in §10.3 and is not repeated here — this section owns the Trust<C> shape and evaluation semantics, §10 owns the failure path.
+
+#### 5.2.2 `observe` — Signal, not Trust
 
 ```kai
 fn getDiscount(user: User) -> Percent {
@@ -541,7 +564,22 @@ fn getDiscount(user: User) -> Percent {
 }
 ```
 
-If a `require` invariant should instead be soft-tracked for now while a fix is planned, that is what `@override` (§5.5) with `kind: "suppress"` and a mandatory expiry is for — not a weaker version of `require` itself.
+Pure telemetry: records how often a condition holds, purely for visibility, and never affects control flow or panics. Because it has no Violation, it does not fit the Trust structure (§5.0) at all — it is not tracked in `kai debt` as debt (nothing is owed), only surfaced as informational history (§5.6/§9.9a already established this split; this section defines what actually gets recorded and where).
+
+**What gets recorded, per evaluation:** `{ timestamp, source location, condition text, boolean outcome }`. Like `require`, evaluation is synchronous and exactly-once — no batching, no deferred recording.
+
+**The sink — resolved for v0.0.8, deliberately minimal.** Per §2.1 (static and offline by default — nothing reaches outside the project without an explicit, separate step), the default sink is a **local, append-only file**, not network telemetry:
+
+```
+.kai/observe.log   — JSONL, one record per line:
+{"timestamp": "...", "location": "src/billing.kai:12:5", "condition": "user.age > 0", "outcome": true}
+```
+
+The sink is a pluggable interface internally (so a future version can add alternative sinks without redesigning `observe` itself), but v0.0.8 ships exactly one implementation — the local file above — and no opt-in telemetry or network sink of any kind. **This is explicitly not full `kai debt` integration.** Aggregating these raw records into `kai debt`'s dashboard view (§5.6) is v0.0.12 scope, already scheduled after `require`/`observe` (v0.0.8) and both `dsl` layers (v0.0.10–11) on the roadmap (§7) — v0.0.8's job is only to get the raw signal recorded reliably, not to build the ledger UI on top of it.
+
+**Sink location without a project root — `compile(&str)`, the string API — is a documented no-op, never the invoking process's CWD.** `.kai/observe.log` and `.kai/debt.log` (§10.3) are project-relative paths, and `compile(&str)` (v0.0.4, scoped explicitly to sources without `use` — not a full-project API) has no project root to be relative to. Falling back to CWD here would directly contradict §3.6's project-root rule for module resolution, which deliberately rejected CWD for the same reason: it's external environmental state that makes behavior depend on where a command happens to be invoked from, rather than on the input itself. Rather than reintroduce that non-determinism through the back door, the sink is a documented no-op when compiling via the string API — recording is skipped, explicitly and predictably, not written to some incidental directory the caller didn't choose. This is a deliberate limitation of `compile(&str)`, not a silent gap: it's written down here precisely so it isn't rediscovered as a surprise later. (A future version could let callers of the string API supply an in-memory sink explicitly, avoiding the filesystem question entirely — out of scope for v0.0.8.)
+
+If a `require` invariant should instead be soft-tracked for now while a fix is planned, that is what `@override` (§5.5) with `kind: "suppress"` and a mandatory expiry is for — not a weaker version of `require` itself, and not `observe` either (which never carries a Violation, so it cannot express "I know this might be wrong for now").
 
 ### 5.3 Reversibility — `reversible`, and why "rollback" isn't always the right word
 
@@ -1013,7 +1051,11 @@ The source location is mandatory. Kai's diagnostics (`{ file, message, span, sev
 A `require` violation traps, immediately, at the point of violation. This is unconditional — `require` is Correctness Trust (§5.0): it has exactly one Violation behavior, always fatal, with no statistical softening. That statistical framing now belongs entirely to `observe` (§5.2), which is not a Trust and never panics under any circumstance — the split exists precisely so that these two behaviors are never forced into one construct with ambiguous semantics again.
 
 Sequencing on a `require` violation:
-1. The violation is recorded to the debt ledger (§5.6, `[correctness]`) — this happens before the process exits, not asynchronously afterward, so a crash never loses the record.
+1. The violation is recorded to the debt ledger **before** the panic proceeds — concretely, a synchronous, flushed write to `.kai/debt.log` (JSONL, one record per line, mirroring `observe.log`'s sink design in §5.2.2 and the same location-without-project-root rule: documented no-op via `compile(&str)`, never CWD):
+```
+{"timestamp": "...", "location": "src/billing.kai:12:5", "kind": "correctness", "condition": "user.age > 0", "event": "violation"}
+```
+   `kind` matches §5.6's debt categories (`contract`/`temporal`/`correctness`/`reversibility`) so v0.0.12's `kai debt` aggregation can read this file directly with no format translation. This happens before the process exits, not asynchronously afterward, so a crash never loses the record.
 2. The process panics per §10.1, with the required condition as the message:
 ```
 kai runtime panic: requirement violated: user.age > 0
@@ -1080,7 +1122,7 @@ These are known unresolved design questions. They are *not* to be decided ad-hoc
 
 - Are `require`, `reversible`, `@local`/`@wallclock` part of the type system (checked, can reject a program) or purely annotations read by tooling? This determines whether an effect-tracking layer is required in the type checker. (Note: regardless of the answer, their runtime failure behavior is now fixed — §10.3, §10.4.)
 - Conflict resolution when two overrides on the same field disagree over time — last-write-wins with a flagged history, or hard block until reconciled?
-- Where does `observe`'s history report to — local file, opt-in telemetry, or pluggable sink? Needs a decision before v0.0.8.
+- ~~Where does `observe`'s history report to~~ **Resolved (§5.2.2).** Pluggable sink interface, one v0.0.8 implementation: local append-only JSONL file (`.kai/observe.log`), no telemetry/network sink. Full `kai debt` dashboard aggregation remains v0.0.12 scope (§7), unaffected by this — v0.0.8 only needed the raw recording mechanism decided.
 - Severity heuristics for `kai debt` — fully compiler-inferred, fully config-driven, or hybrid (default + override)? Leaning hybrid; needs a concrete default rule set written down before v0.0.12.
 - ~~Precise definition of "compiler-untraceable boundary"~~ **Resolved (§5.1.1–§5.1.3).** Defined mechanically as the `escapes-local-context` effect — loss of statically provable execution-context continuity — not a hardcoded construct list; inferred transitively over the call/closure graph (least fixed point over SCCs), verified against optional `effects { ... }` contract annotations.
 - ~~`@wallclock` serialization format.~~ **Resolved (§5.1.5).** Canonical RFC 3339, UTC only, fixed microsecond precision, mandatory `Z` suffix — no local offsets. `deserialize(serialize(t)) == t` invariant.

@@ -37,7 +37,7 @@ fn source_map(sources: &[SourceUnit]) -> HashMap<String, SourceInfo> {
 
 /// Compiles a typed program to textual LLVM IR, verifying the module first.
 pub fn compile_ir(module_name: &str, program: &TypedProgram) -> Result<String, String> {
-    compile_ir_with_sources(module_name, program, &[])
+    compile_ir_with_sink(module_name, program, &[], None)
 }
 
 /// [`compile_ir`] with per-module sources attached, so runtime checks can
@@ -47,8 +47,21 @@ pub fn compile_ir_with_sources(
     program: &TypedProgram,
     sources: &[SourceUnit],
 ) -> Result<String, String> {
+    compile_ir_with_sink(module_name, program, sources, None)
+}
+
+/// Full entry: sources for §5.2 condition-text spans plus the project root
+/// for the `.kai/observe.log` / `.kai/debt.log` sinks (v0.21). `None` root =
+/// string API — recording is a documented no-op (§5.2.2); `require` still
+/// panics on violation.
+pub fn compile_ir_with_sink(
+    module_name: &str,
+    program: &TypedProgram,
+    sources: &[SourceUnit],
+    sink_root: Option<&std::path::Path>,
+) -> Result<String, String> {
     let context = inkwell::context::Context::create();
-    let mut ctx = Ctx::new(&context, module_name, source_map(sources));
+    let mut ctx = Ctx::new(&context, module_name, source_map(sources), sink_root.map(|p| p.to_path_buf()));
 
     emit::program(&mut ctx, program);
     module::verify(&ctx)?;
@@ -66,10 +79,19 @@ pub fn run_jit_with_sources(
     program: &TypedProgram,
     sources: &[SourceUnit],
 ) -> Result<i32, String> {
+    run_jit_with_sink(program, sources, None)
+}
+
+/// [`run_jit_with_sources`] with a sink root — see [`compile_ir_with_sink`].
+pub fn run_jit_with_sink(
+    program: &TypedProgram,
+    sources: &[SourceUnit],
+    sink_root: Option<&std::path::Path>,
+) -> Result<i32, String> {
     initialize_native()?;
 
     let context = inkwell::context::Context::create();
-    let mut ctx = Ctx::new(&context, "kai_jit", source_map(sources));
+    let mut ctx = Ctx::new(&context, "kai_jit", source_map(sources), sink_root.map(|p| p.to_path_buf()));
     emit::program(&mut ctx, program);
     module::verify(&ctx)?;
 

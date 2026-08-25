@@ -1,6 +1,6 @@
 //! Scope-exit release ordering (§9.4) and for..in ownership (§9.9).
 
-use super::tests::{block, fn_decl, int_lit, let_, local_ref, ret, run, str_lit, unwrap_retain};
+use super::tests::{block, fn_decl, int_lit, let_, local_ref, ret, run, str_lit};
 use super::*;
 
 

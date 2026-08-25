@@ -320,14 +320,6 @@ pub(crate) fn err_needs_annotation(span: Span) -> Diagnostic {
     )
 }
 
-pub(crate) fn require_not_yet_implemented(span: Span) -> Diagnostic {
-    Diagnostic::error("`require` is parsed but not yet implemented — v0.0.8 (semantics not yet formalized, §5.2)", span)
-}
-
-pub(crate) fn observe_not_yet_implemented(span: Span) -> Diagnostic {
-    Diagnostic::error("`observe` is parsed but not yet implemented — v0.0.8 (semantics not yet formalized, §5.2)", span)
-}
-
 pub(crate) fn temporal_zero_duration(span: Span) -> Diagnostic {
     Diagnostic::error("temporal duration must be non-zero (e.g. `30m`, not `0m`)", span)
 }

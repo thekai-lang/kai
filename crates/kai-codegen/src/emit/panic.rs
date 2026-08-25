@@ -98,3 +98,12 @@ fn file_global<'ctx>(
         .insert(module_key.to_string(), ptr);
     ptr
 }
+
+/// Public wrapper for §10.3's require-panic site, which builds its own
+/// message global but shares the file-location global.
+pub(crate) fn file_global_for<'ctx>(
+    ctx: &Ctx<'ctx>,
+    module_key: &str,
+) -> inkwell::values::PointerValue<'ctx> {
+    file_global(ctx, module_key)
+}
