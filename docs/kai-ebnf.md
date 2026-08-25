@@ -3,8 +3,8 @@
 **Scope:** v0.0.1–v0.0.6 core language (unchanged, §1–§8 below), plus §9
 covering the v0.0.7 trust-aware layer's syntax (`@local`/`@wallclock`,
 locked in whitepaper v0.15 and refined through v0.17's §5.1.7) and §9a
-covering the v0.0.8 `require`/`observe` pair (syntax stable since v0.2;
-semantics NOT yet formalized). The rest of the trust-aware layer —
+covering the v0.0.8 `require`/`observe` pair — **syntax AND semantics both
+locked** (whitepaper v0.20–v0.22, §5.2). The rest of the trust-aware layer —
 `reversible`, `compensate`, `dsl sql`, `dsl api`, `@override` — remains
 excluded: those sections of §5 aren't locked yet, so their grammar isn't
 written until they are, same discipline as before.
@@ -38,20 +38,20 @@ Letter       ::= 'a'..'z' | 'A'..'Z'
 Digit        ::= '0'..'9'
 
 Keyword      ::= 'fn' | 'let' | 'var' | 'type' | 'use' | 'return'
-                | 'if' | 'else' | 'for' | 'in' | 'while'
-                | 'true' | 'false'
-                | 'public' | 'mut'
-                | 'Some' | 'None' | 'Ok' | 'Err' | 'Result' | 'Optional'
-                | 'catch' | 'as'                    (* 'as' reserved for future module alias, not v0.0.1–5 core *)
+               | 'if' | 'else' | 'for' | 'in' | 'while'
+               | 'true' | 'false'
+               | 'public' | 'mut'
+               | 'Some' | 'None' | 'Ok' | 'Err' | 'Result' | 'Optional'
+               | 'catch' | 'as'                    (* 'as' reserved for future module alias, not v0.0.1–5 core *)
                 (* v0.0.7 trust-aware layer (§9): temporal modifiers, effects
-                   contracts, and the §9a require/observe pair (v0.0.8
-                   semantics, syntax stable). `local`/`wallclock` lex as
-                   keywords but are only meaningful immediately after '@'. *)
-                | 'require' | 'observe'             (* v0.0.8 semantics — §9a *)
+                   contracts, and the §9a require/observe pair. `local`/
+                   `wallclock` lex as keywords but are only meaningful
+                   immediately after '@'. *)
+                | 'require' | 'observe'             (* v0.0.8 semantics — locked whitepaper v0.20 §5.2 *)
                 | 'effects'                         (* EffectsAnnotation, §9 *)
-                | 'escapes-local-context'           (* hyphenated: the lexer consumes `-local-context`
-                                                       as one continuation of the word `escapes`, so it is a
-                                                       single keyword token despite '-' not being an Ident char *)
+                | 'escapes-local-context'           (* hyphenated: lexer consumes `-local-context`
+                                                       as one continuation of `escapes`, a single
+                                                       keyword token despite '-' not being an Ident char *)
                 | 'local' | 'wallclock'             (* only after '@', see TemporalModifier §9 *)
 
 (* Literals *)
@@ -83,10 +83,10 @@ EscapeSeq    ::= '\' ('n' | 't' | 'r' | '\' | '"' | '0')
 
 (* Operators and punctuation *)
 Op           ::= '+' | '-' | '*' | '/' | '%'
-                | '==' | '!=' | '<' | '>' | '<=' | '>='
-                | '&&' | '||' | '!'
-                | '=' | '+=' | '-=' | '*=' | '/='
-                | '@'                               (* v0.0.7: temporal modifier prefix, §9 *)
+               | '==' | '!=' | '<' | '>' | '<=' | '>='
+               | '&&' | '||' | '!'
+               | '=' | '+=' | '-=' | '*=' | '/='
+               | '@'                               (* v0.0.7: temporal modifier prefix, §9 *)
                | '??' | '->' | '.' | ',' | ':' | ';'
                | '(' | ')' | '{' | '}' | '[' | ']'
                | '?'                                  (* postfix optional-type marker *)
@@ -401,27 +401,22 @@ ClosureLit   ::= 'fn' '(' [ ParamList ] ')' '->' Type Block
 | `ArrayType`, `ArrayLit`, array indexing, `ForStmt`, `string` (`StringLit`, plain literals — no interpolation, deferred), string `==`/`!=` as content comparison | v0.0.5 (Ownership runtime — retain/release actually exercised here for the first time) |
 | `OptionalType`, `ResultType`, `CoalesceExpr`, `unwrap_or` (both `Optional`/`Result`), `catch` (`Result`-only), `ClosureType`, `ClosureLit`, `DiscardStmt`, closure-cycle rejection | v0.0.6 |
 | `DurationLit`, `@local`/`@wallclock` type modifiers, `EffectsAnnotation` | v0.0.7 |
-| `RequireStmt`, `ObserveStmt` (syntax only — semantics not yet formalized, §9a) | v0.0.8 |
+| `RequireStmt`, `ObserveStmt` — syntax and semantics both locked (§9a, whitepaper §5.2) | v0.0.8 |
 
 ---
 
 ## 9. Trust-aware layer grammar — v0.0.7 (`@local`/`@wallclock` only)
 
-Only §5.1 (temporal types), locked in whitepaper v0.15, gets grammar here. `require`/`observe` (§5.2) grammar is defined separately below (§9a) — its **syntax** has been stable since v0.2, but per roadmap §7, `require`/`observe` is **v0.0.8** scope, not v0.0.7; it's kept separate so a reader doesn't infer v0.0.7 implements it. `reversible`/`compensate` (§5.3) and `dsl sql`/`dsl api` (§5.4) stay excluded entirely until those sections go through the same lock-then-grammar sequence §5.1 just did.
+Only §5.1 (temporal types), locked in whitepaper v0.15, gets grammar here alongside §9a below. `require`/`observe` (§5.2) is **v0.0.8** scope per roadmap §7 — syntax stable since v0.2, semantics formalized in whitepaper v0.20–v0.22 (§5.2.1–§5.2.2); kept separate so a reader doesn't infer v0.0.7 implements it. `reversible`/`compensate` (§5.3) and `dsl sql`/`dsl api` (§5.4) stay excluded entirely until those sections go through the same lock-then-grammar sequence §5.1 just did.
 
 ```ebnf
 DurationLit  ::= DecimalInt DurationUnit
 DurationUnit ::= 'ms' | 's' | 'm' | 'h' | 'd'
-                (* Integer-only for v0.0.7 — 30m, 1h, 500ms valid; 1.5h,
-                   1hour, -30m, bare 30 with no unit are not. Lexical
-                   validity only: 0ms parses fine, whether it's a legal
-                   duration for a given temporal type is a typecheck
-                   question, not a lexer one — whitepaper §5.1.6.
-                   LEXING NOTE: DurationLit is ONE token — the lexer
-                   maximal-munches the unit suffix straight after the digit
-                   run (`ms` wins over `m`), and `DecimalInt` is the §1
-                   IntLit production (digits only). So `500ms` lexes as one
-                   DurationLit, never IntLit + Ident("ms"). *)
+               (* Integer-only for v0.0.7 — 30m, 1h, 500ms valid; 1.5h,
+                  1hour, -30m, bare 30 with no unit are not. Lexical
+                  validity only: 0ms parses fine, whether it's a legal
+                  duration for a given temporal type is a typecheck
+                  question, not a lexer one — whitepaper §5.1.6. *)
 
 TemporalModifier ::= '@local' '(' DurationLit ')'
                    | '@wallclock' '(' DurationLit ')'
@@ -462,6 +457,8 @@ FnDecl       ::= [ 'public' ] 'fn' Ident '(' [ ParamList ] ')' '->' Type
 
 **Not grammar, recorded here only as a pointer:** the boundary rule itself (`escapes-local-context` inference, the closure-capture reachability invariant, the SCC/fixpoint call-graph analysis, and §5.1.3a's local-read narrowing — a `T @local(d)` value flowing to a plain-`T` argument position with propagation gated by the callee's effect set) is entirely a type/effect-checker concern, per whitepaper §5.1.1's own layering principle — none of it belongs in this file. This section defines syntax only; consult whitepaper §5.1.1–§5.1.3a (and §5.1.7 for the runtime representation) for what the syntax *means*.
 
+## 9a. `require`/`observe` grammar — syntax & semantics locked (whitepaper §5.2, v0.20)
+
 ```ebnf
 RequireStmt  ::= 'require' Expr ';'
                (* Correctness Trust — whitepaper §5.2. Violation always
@@ -472,15 +469,15 @@ ObserveStmt  ::= 'observe' Expr ';'
                   as informational history only, not debt. *)
 ```
 
-**Status, explicitly:** this shape has been stable since whitepaper v0.2 and is unlikely to change, but §5.2's *semantics* — an `EffectKind` classification, a `Trust<C>` lowering table analogous to §5.1.2's effect-contract table, precise `Verification` timing, and `observe`'s history-sink decision (still an open Appendix A item) — have never been formalized to §5.1's level of rigor. **If v0.0.7's parser happens to accept this shape anyway** (because the grammar is simple enough to fall out of the existing `Stmt` production for free), the implementation must not silently treat it as semantically complete: either don't wire it into effect-checking at all yet, or emit an explicit `not yet implemented` diagnostic at the point it would otherwise need real semantics. Full formalization is a pre-v0.0.8 task, matching what §5.1.1–§5.1.6 just did for temporal types — same rigor, not a lighter pass just because the syntax is smaller.
+**Status:** ~~syntax only, semantics pending~~ **Resolved.** This shape has been stable since whitepaper v0.2, and §5.2's semantics are now formalized to §5.1's rigor (whitepaper v0.20–v0.22): `require`'s `Trust<C>` lowering table and evaluation timing (v0.20), the pre-ledger `.kai/debt.log` record and sink-location rule (v0.21), and the raw source-text-span condition text (v0.22). Both lower into `Trust<C>` through `kai-effects` (local, no graph traversal — §5.2's scoping decision explicitly excludes only the call-graph *inference* subsystem from §5.1, not `Trust<C>` lowering itself). Implementation may proceed on the same footing as §5.1.
 
----
 
 ## Open items — grammar-level decisions not yet made anywhere in the whitepaper
 
 Items **struck through** below are now resolved by the actual implementation
-and reflected in the rules above. They're kept visible so the resolution
-history isn't lost — same spirit as the whitepaper's own changelog.
+and reflected in the rules above. They're kept
+visible so the resolution history isn't lost — same spirit as the whitepaper's
+own changelog.
 
 1. ~~No loop other than `for...in` has ever appeared.~~ **Resolved: `while` exists** (v0.0.2) and **`for...in` landed at v0.0.5** with arrays/ownership — both rules above are implemented, not spec-only.
 2. ~~Boolean logic operators (`&&`, `||`, `!`) have never appeared.~~ **Resolved: all three exist**, confirmed v0.0.2, with `&&` binding tighter than `||` and short-circuit evaluation verified end-to-end.
