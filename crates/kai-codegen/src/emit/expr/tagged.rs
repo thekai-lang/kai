@@ -158,7 +158,8 @@ pub(crate) fn lazy_select<'ctx>(
 
     let fallback_is_fresh = matches!(
         &fallback.kind,
-        TypedExprKind::StrLit { .. }
+        TypedExprKind::IntLit(_)
+            | TypedExprKind::StrLit { .. }
             | TypedExprKind::ArrayLit { .. }
             | TypedExprKind::StructLit { .. }
             | TypedExprKind::Call { .. }
@@ -196,6 +197,33 @@ pub(crate) fn lazy_select<'ctx>(
                 let _ = ctx.builder.build_store(tmp, d);
                 crate::emit::ownership_tagged::retain_tagged_copy(ctx, result_ty, tmp);
             }
+            KaiType::Temporal { inner, origin, .. } => {
+                match origin {
+                    kai_tast::TemporalOrigin::Wallclock => {
+                        // Retain the wallclock header itself; cascades via dtor.
+                        crate::emit::ownership::retain_header(ctx, d);
+                    }
+                    _ => {
+                        // @local: delegate to inner retain (same repr).
+                        match inner.as_ref() {
+                            KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                                crate::emit::ownership::retain_header(ctx, d);
+                            }
+                            KaiType::Struct(_) => {
+                                let tmp = crate::emit::alloca_in_entry(
+                                    ctx,
+                                    crate::emit::current_function(ctx),
+                                    crate::types::to_llvm(ctx, inner),
+                                    "co.retain.tmp",
+                                );
+                                let _ = ctx.builder.build_store(tmp, d);
+                                crate::emit::ownership::retain_struct_copy(ctx, inner, tmp);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         // Step 2: release creation claim ONLY for fresh owned temps.
@@ -215,6 +243,25 @@ pub(crate) fn lazy_select<'ctx>(
                     );
                     let _ = ctx.builder.build_store(tmp, d);
                     crate::emit::ownership::emit_release_slot(ctx, result_ty, tmp);
+                }
+                KaiType::Temporal { origin, .. } => {
+                    match origin {
+                        kai_tast::TemporalOrigin::Wallclock => {
+                            // Release creation claim for the wallclock header.
+                            crate::emit::ownership::release_header_value(ctx, d);
+                        }
+                        _ => {
+                            // @local: delegate to inner release via slot.
+                            let tmp = crate::emit::alloca_in_entry(
+                                ctx,
+                                crate::emit::current_function(ctx),
+                                result_llvm,
+                                "co.release.tmp",
+                            );
+                            let _ = ctx.builder.build_store(tmp, d);
+                            crate::emit::ownership::emit_release_slot(ctx, result_ty, tmp);
+                        }
+                    }
                 }
                 _ => {}
             }

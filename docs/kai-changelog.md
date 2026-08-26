@@ -7,24 +7,12 @@
 - **tagged-helper multi-branch crash fix (latent since v0.0.6)**: building a retain/release helper for a tagged union with TWO heap-bearing payloads (e.g., `Result<string,string>`) aborted codegen with "Terminator found in the middle of a basic block" — the second branch's conditional branch was emitted after the first branch's terminator. Checks are now chained through dedicated `tag.check` blocks. Surfaced by F2/F3 hoisting producing hidden locals of exactly that shape; covered by the new catch regression.
 - **Tests**: 326 passing (no count change); new repros verified by allocation-count deltas (LD_PRELOAD malloc tracker): plain-call loop −1, Optional loop +2 (noise), unwrap_or/coalesce/catch loops ≤3 (noise-level), all previously linear at ~100.
 
-## KNOWN ISSUES — v0.0.8.1
+## KNOWN ISSUES
 
-### Heap-payload `unwrap_or` memory corruption (CRITICAL, needs dedicated investigation)
+No open critical issues as of v0.0.8.4.
 
-`optional_val.unwrap_or(heap_struct_default)` crashes with glibc `tcache_thread_shutdown(): unaligned tcache chunk detected` when the payload type is heap-bearing (contains strings/arrays). Scalar payloads (`int32?`, `int64?`) work correctly. Same-function cases may accidentally appear correct due to undefined register content masking the corruption.
-
-Root cause area: the `lazy_select` codegen path (`emit/expr/mod.rs`) copies the selected payload out of the tagged union WITHOUT retaining heap fields, while the consumer-side retain/release accounting assumes co-ownership. Needs GDB/valgrind session to pinpoint exact double-free/UAF site.
-
-Repro:
-```kai
-use shop.model;
-fn main() -> int32 {
-    var items = [model.Product { sku: "A", label: "B", cents: 25000, stock: 100, rating: 4.8 }];
-    let hit = model.find(items, "ZZ");   // None
-    let g = hit.unwrap_or(model.Product { sku: "?", label: "?", cents: 1, stock: 0, rating: 0.0 });
-    return 0;
-}   // <- crash at scope-exit releases
-```
+### `unwrap_or` heap-payload double-free — RESOLVED in v0.0.8.4
+`optional_val.unwrap_or(heap_struct_default)` previously crashed with glibc `tcache_thread_shutdown(): unaligned tcache chunk detected` when the payload type was heap-bearing. Root cause: the `lazy_select` codegen path copied the selected payload out of the tagged union without retaining heap fields, while consumer-side retain/release assumed co-ownership. Fixed by F2/F3 orphan-claim hoisting (`hoist_borrow_temps` now recurses into always-evaluated positions — coalesce lhs, unwrap_or receiver, catch base) so heap-bearing owned temps materialize into hidden locals and release per scope.
 
 ### `catch.join` terminator gap — RESOLVED in v0.0.8.1
 Previously listed as known gap from v0.0.6.1; fixed by unconditional `position_at_end(join_bb)` after both branch paths complete.
