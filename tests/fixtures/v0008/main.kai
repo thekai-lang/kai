@@ -1,0 +1,21 @@
+// v0.0.8 — require/observe implemented (whitepaper v0.20–v0.22 §5.2)
+// Deterministic value trail:
+//   passing require  -> ok path, no debt record at runtime (compile-only golden)
+//   observe records  -> kai_observe_record calls baked with fixed sink root
+//   failing require in dead branch would trap; not present here so JIT stays clean
+fn check(age: int32) -> unit {
+    observe age > 0;
+    return;
+}
+
+fn main() -> int32 {
+    var total = 0;
+    let a: int32 = 5;
+    if a > 0 {
+        require a > 0;
+        total += 10;
+    }
+    check(a);
+    observe total == 10;
+    return total;
+}

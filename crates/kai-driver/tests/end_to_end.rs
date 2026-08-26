@@ -686,7 +686,7 @@ fn corpus_flows_through_pipeline_without_rust_panics() {
     }
     // Every version's fixture set must actually be exercised.
     let seen: HashSet<&str> = checked.iter().filter_map(|s| s.split('/').next()).collect();
-    for ver in ["v0001", "v0002", "v0003", "v0004", "v0005", "v0006", "v0007"] {
+    for ver in ["v0001", "v0002", "v0003", "v0004", "v0005", "v0006", "v0007", "v0008"] {
         assert!(seen.contains(ver), "{ver} missing from corpus sweep");
     }
 }
@@ -1141,6 +1141,40 @@ fn v007_wallclock_cascade_has_two_releases() {
         ir.contains("call void @kai_wallclock_release"),
         "header release missing:\n{ir}"
     );
+}
+
+fn v0008_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v0008/main.kai")
+}
+
+/// Golden IR with a FIXED fake sink root — the baked `.kai/*.log` path
+/// globals stay deterministic across machines (real runs derive the root
+/// from the entry's parent, which is machine-dependent).
+#[test]
+fn v008_file_pipeline_matches_golden_ir() {
+    let ir = pipeline::compile_file_with_sink(
+        &v0008_entry(),
+        std::path::Path::new("/kai-fixture-root"),
+    )
+    .expect("compilation should succeed");
+    assert_golden("v0008/main.expected.ll", &ir);
+}
+
+#[test]
+fn v008_ir_contains_signal_and_guard_calls() {
+    let ir = pipeline::compile_file_with_sink(
+        &v0008_entry(),
+        std::path::Path::new("/kai-fixture-root"),
+    )
+    .expect("compilation should succeed");
+    assert!(ir.contains("call void @kai_observe_record"), "observe record missing");
+    assert!(ir.contains("call void @kai_debt_record"), "debt record missing");
+    assert!(
+        ir.contains("requirement violated: a > 0"),
+        "raw source-span condition text must be baked verbatim (v0.22)"
+    );
+    assert!(ir.contains(".kai\\observe.log") || ir.contains(".kai/observe.log"),
+        "sink path missing from baked globals");
 }
 
 fn v007_boundary_fail_entry() -> PathBuf {

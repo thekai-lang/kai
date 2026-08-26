@@ -64,6 +64,25 @@ pub fn compile_file(entry: &Path) -> Result<String, Failure> {
     })
 }
 
+/// [`compile_file`] with an explicit sink root — golden-IR tests use a
+/// fixed fake root so the baked `.kai/*.log` path globals stay deterministic
+/// across machines (real runs derive the root from the entry's parent).
+pub fn compile_file_with_sink(entry: &Path, sink_root: &Path) -> Result<String, Failure> {
+    let entry = entry.to_path_buf();
+    let sink_root = sink_root.to_path_buf();
+    with_big_stack(move || {
+        let modules = load_modules(&entry)?;
+        let program = lower_modules(&modules)?;
+        kai_codegen::compile_ir_with_sink(
+            "kai_module",
+            &program,
+            &module_sources(&modules),
+            Some(sink_root.as_path()),
+        )
+            .map_err(internal_failure)
+    })
+}
+
 /// JIT-executes the module tree rooted at `entry`.
 pub fn jit_file(entry: &Path) -> Result<i32, Failure> {
     let entry = entry.to_path_buf();
