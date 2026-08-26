@@ -1143,6 +1143,119 @@ fn v007_wallclock_cascade_has_two_releases() {
     );
 }
 
+fn v0008_require_fail_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/v0008/require_fail.kai")
+}
+
+fn v0008_observe_false_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/v0008/observe_false.kai")
+}
+
+/// The negative counterpart of the ok-path fixture — a GENUINELY violating
+/// `require` at runtime proves all three §10.3 properties at once: exit 101,
+/// the mandated message shape with the raw source-span condition, and a
+/// flushed `.kai/debt.log` record whose fields are exactly right.
+#[test]
+fn v008_require_fail_fixture_traps_and_writes_correct_debt_record() {
+    let dir = std::env::temp_dir().join(format!(
+        "kai-v008-fail-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+
+    // Copy the fixture into a fresh temp root so the debt.log we read back
+    // is THIS run's, not a leftover from another test.
+    let entry = dir.join("require_fail.kai");
+    std::fs::copy(v0008_require_fail_entry(), &entry).expect("copy fixture");
+
+    let out = run_cli(&["run", entry.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(101), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("kai runtime panic: requirement violated: age > 10"),
+        "missing violation message:\n{stderr}"
+    );
+    assert!(
+        stderr.lines().any(|l| l.contains("require_fail.kai:6:13")),
+        "location must point at the require statement:\n{stderr}"
+    );
+
+    let debt = std::fs::read_to_string(dir.join(".kai").join("debt.log"))
+        .expect("debt.log flushed before panic");
+    assert_eq!(debt.lines().count(), 1, "exactly one violation record");
+    for field in [
+        "\"kind\":\"correctness\"",
+        "\"location\":\"require_fail.kai:6:13\"",
+        "\"condition\":\"age > 10\"",
+        "\"outcome\":false",
+    ] {
+        assert!(debt.contains(field), "missing {field} in:\n{debt}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// §5.2.2's boolean must be genuinely THREADED into `kai_observe_record` —
+/// a false condition records `"outcome":false` and never affects control
+/// flow (exit code comes from `return`, not from the observed value).
+#[test]
+fn v008_observe_false_records_false_outcome() {
+    let dir = std::env::temp_dir().join(format!(
+        "kai-v008-obsf-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let entry = dir.join("observe_false.kai");
+    std::fs::copy(v0008_observe_false_entry(), &entry).expect("copy fixture");
+
+    let out = run_cli(&["run", entry.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(5), "false observe must not trap");
+
+    let log = std::fs::read_to_string(dir.join(".kai").join("observe.log"))
+        .expect("observe.log written");
+    assert_eq!(log.lines().count(), 1);
+    assert!(
+        log.contains("\"condition\":\"done == 1\"") && log.contains("\"outcome\":false"),
+        "false outcome must be recorded verbatim:\n{log}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Structural IR proof: `observe` compiles to STRAIGHT-LINE code — the
+/// record call sits in the same block as the comparison, with no branch
+/// between them (§5.2.2: observe never affects control flow). `require`, by
+/// contrast, MUST have the conditional branch (only false does something).
+#[test]
+fn v008_observe_ir_is_unconditional_straight_line() {
+    let ir = pipeline::compile_file_with_sink(
+        &v0008_observe_false_entry(),
+        std::path::Path::new("/kai-fixture-root"),
+    )
+    .expect("compiles");
+
+    // No observe-specific blocks exist; the record call lives inline.
+    assert!(
+        !ir.contains("observe.ok") && !ir.contains("observe.viol") && !ir.contains("observe.rec.bb"),
+        "observe must not introduce control flow:\n{ir}"
+    );
+    let main_body = &ir[ir.find("define i32 @main").unwrap()..];
+    let icmp_pos = main_body.find("icmp eq").expect("comparison emitted");
+    let call_pos = main_body
+        .find("call void @kai_observe_record")
+        .expect("record call emitted");
+    let between = &main_body[icmp_pos..call_pos];
+    assert!(
+        !between.contains(" br "),
+        "branch between comparison and record call — observe became conditional:\n{}",
+        between
+    );
+}
+
 fn v0008_entry() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v0008/main.kai")
 }

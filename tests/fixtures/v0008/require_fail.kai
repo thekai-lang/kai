@@ -1,0 +1,8 @@
+// v0.0.8 — genuinely violating require (§10.3): condition FALSE at runtime.
+// Proves: exit 101, §10.3 message shape, debt.log JSONL with kind/location/
+// condition/outcome=false — the negative counterpart of main.kai's ok path.
+fn main() -> int32 {
+    let age: int32 = 5;
+    require age > 10;
+    return 0;
+}

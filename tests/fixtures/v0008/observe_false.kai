@@ -1,0 +1,7 @@
+// v0.0.8 — observe with a FALSE outcome (§5.2.2): proves the boolean value
+// is genuinely threaded into kai_observe_record (not assumed always-true).
+fn main() -> int32 {
+    let done: int32 = 0;
+    observe done == 1;
+    return 5;
+}
