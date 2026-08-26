@@ -244,24 +244,19 @@ pub(crate) fn lazy_select<'ctx>(
                     let _ = ctx.builder.build_store(tmp, d);
                     crate::emit::ownership::emit_release_slot(ctx, result_ty, tmp);
                 }
-                KaiType::Temporal { origin, .. } => {
-                    match origin {
-                        kai_tast::TemporalOrigin::Wallclock => {
-                            // Release creation claim for the wallclock header.
-                            crate::emit::ownership::release_header_value(ctx, d);
-                        }
-                        _ => {
-                            // @local: delegate to inner release via slot.
-                            let tmp = crate::emit::alloca_in_entry(
-                                ctx,
-                                crate::emit::current_function(ctx),
-                                result_llvm,
-                                "co.release.tmp",
-                            );
-                            let _ = ctx.builder.build_store(tmp, d);
-                            crate::emit::ownership::emit_release_slot(ctx, result_ty, tmp);
-                        }
-                    }
+                KaiType::Temporal { .. } => {
+                    // Both @wallclock and @local go through emit_release_slot
+                    // which dispatches to wallclock_release_fn / inner release
+                    // respectively — release_header_value only calls generic
+                    // kai_release which doesn't free wallclock headers.
+                    let tmp = crate::emit::alloca_in_entry(
+                        ctx,
+                        crate::emit::current_function(ctx),
+                        result_llvm,
+                        "co.release.tmp",
+                    );
+                    let _ = ctx.builder.build_store(tmp, d);
+                    crate::emit::ownership::emit_release_slot(ctx, result_ty, tmp);
                 }
                 _ => {}
             }
