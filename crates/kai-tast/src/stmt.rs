@@ -14,6 +14,7 @@ pub enum TypedStmt {
     Assign(TypedAssign),
     If(TypedIf),
     For(crate::stmt::TypedFor),
+    While(crate::stmt::TypedWhile),
     /// Bare nested block; exists purely for scoping semantics.
     Block(TypedBlock),
     /// `require expr;` (v0.0.8, §5.2) — Correctness Trust, always panics. Parsed in v0.0.7 but not yet effect-checked.
@@ -60,6 +61,22 @@ pub struct FieldStep {
 pub enum TypedPlaceStep {
     Field(FieldStep),
     Index(Box<TypedExpr>),
+}
+
+/// `while cond { body }` (v0.0.8.1). `cond_releases` lists the hidden
+/// per-iteration temporaries hoisted from the condition — released BOTH on
+/// the back-edge and at loop exit (dual release points, §5.2-style care:
+/// one release per store, never zero).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedWhile {
+    /// Hidden per-iteration temporaries (B1-style hoists) — emitted at the
+    /// TOP of `while.cond` so the condition evaluates FRESH every iteration.
+    pub cond_prelude: Vec<TypedStmt>,
+    pub cond: TypedExpr,
+    pub body: crate::stmt::TypedBlock,
+    /// Released at BOTH the back-edge (before re-evaluating) and loop exit —
+    /// one release per evaluation, never zero.
+    pub cond_releases: Vec<(LocalId, KaiType)>,
 }
 
 /// `op == None` is plain store; `Some(op)` is read-modify-write

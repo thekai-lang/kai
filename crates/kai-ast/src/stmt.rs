@@ -28,6 +28,14 @@ pub struct IfStmt {
     pub else_block: Option<Block>,
 }
 
+/// `while cond { ... }` (v0.0.8.1, GAP-1 closure) — re-evaluates `cond`
+/// before every iteration; exits when false.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhileStmt {
+    pub cond: Expr,
+    pub body: Block,
+}
+
 /// `for name in expr { ... }` — iterates an array, BORROWING each element
 /// per iteration (§9.9): the loop variable never owns, the array stays
 /// owner throughout and after the loop.
@@ -46,6 +54,7 @@ pub enum StmtKind {
     Assign(AssignStmt),
     If(IfStmt),
     For(ForStmt),
+    While(WhileStmt),
     /// Bare nested block: its own variable scope (§9.3 shadowing rules).
     Block(Block),
     /// `_ = expr;` (v0.0.6, §9.9b) — the sole explicit-discard form. The

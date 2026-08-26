@@ -1256,6 +1256,89 @@ fn v008_observe_ir_is_unconditional_straight_line() {
     );
 }
 
+// -- v0.0.8.1 stabilization: BUG-1..4 regressions -----------------------------
+
+/// BUG-2: chained field access on a computed tagged-union rvalue used to
+/// emit `undef` silently (field_read's non-place arm). Must return 4.
+#[test]
+fn v0081_bug2_chained_field_on_unwrap_or_across_fn() {
+    let src = concat!(
+        "type P = { x: int32; }\n",
+        "fn mk(p: P) -> P? { return Some(p); }\n",
+        "fn main() -> int32 { let v = mk(P { x: 4 }); return v.unwrap_or(P { x: 99 }).x; }"
+    );
+    assert_eq!(pipeline::jit(src).unwrap(), 4);
+}
+
+/// BUG-1: `return value;` inside for..in must thread the enclosing fn's
+/// return type (was hardcoded `unit`).
+#[test]
+fn v0081_bug1_early_return_inside_for_in() {
+    let src = concat!(
+        "fn f(a: int32[]) -> int32 {\n",
+        "    for x in a {\n",
+        "        if x > 0 {\n",
+        "            return x;\n",
+        "        }\n",
+        "    }\n",
+        "    return 0;\n",
+        "}\n",
+        "fn main() -> int32 { return f([1]); }"
+    );
+    assert_eq!(pipeline::jit(src).unwrap(), 1);
+}
+
+/// BUG-3: same undef family as BUG-2 but through assignment-in-loop +
+/// Optional var return; also locks that rc equals the returned value.
+#[test]
+fn v0081_bug3_optional_var_return_through_loop() {
+    let src = concat!(
+        "type P = { x: int32; }\n",
+        "fn mk(ps: P[]) -> P? {\n",
+        "    var out: P? = None;\n",
+        "    for q in ps {\n",
+        "        if q.x > 0 {\n",
+        "            out = Some(q);\n",
+        "        }\n",
+        "    }\n",
+        "    return out;\n",
+        "}\n",
+        "fn main() -> int32 {\n",
+        "    let arr = [P { x: 5 }];\n",
+        "    let r = mk(arr);\n",
+        "    return r.unwrap_or(P { x: 0 }).x;\n",
+        "}"
+    );
+    assert_eq!(pipeline::jit(src).unwrap(), 5);
+}
+
+/// BUG-4: catch on a qualified-call result with a plain local tail used to
+/// leave %catch.join without a terminator (verifier crash).
+#[test]
+fn v0081_bug4_catch_join_terminator_present() {
+    let src = concat!(
+        "fn discounted(total: int64, percent: int64) -> Result<int64, string> {\n",
+        "    require percent >= 0;\n",
+        "    if percent > 80 {\n",
+        "        return Err(\"over limit\");\n",
+        "    }\n",
+        "    return Ok(total - total * percent / 100);\n",
+        "}\n",
+        "fn main() -> int32 {\n",
+        "    let five_hundred: int64 = 500;\n",
+        "    let one_fifty: int64 = 150;\n",
+        "    let rescued: int64 = discounted(five_hundred, one_fifty) catch |e| {\n",
+        "        five_hundred\n",
+        "    };\n",
+        "    _ = rescued;\n",
+        "    return 0;\n",
+        "}"
+    );
+    // Compilation itself is the assertion — verify() crashed before.
+    let ir = pipeline::compile(src).expect("catch.join must be terminated");
+    assert!(ir.contains("catch.join"), "{ir}");
+}
+
 fn v0008_entry() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v0008/main.kai")
 }

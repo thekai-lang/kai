@@ -32,6 +32,10 @@ pub(crate) fn collect_refs_stmt(s: &kai_tast::TypedStmt, out: &mut Vec<LocalId>)
             collect_refs_expr(&f.iterable, out);
             collect_local_refs(&f.body, out);
         }
+        TypedStmt::While(w) => {
+            collect_refs_expr(&w.cond, out);
+            collect_local_refs(&w.body, out);
+        }
         TypedStmt::Block(b) => collect_local_refs(b, out),
         TypedStmt::Require(e) | TypedStmt::Observe(e) | TypedStmt::Expr(e) => collect_refs_expr(e, out),
         // Ownership-pass markers: no user references inside.

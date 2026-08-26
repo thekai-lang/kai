@@ -127,6 +127,7 @@ fn stmt_span(stmt: &TypedStmt) -> Span {
         TypedStmt::Let(l) => l.init.span,
         TypedStmt::Assign(a) => a.span,
         TypedStmt::If(i) => i.cond.span,
+        TypedStmt::While(w) => w.cond.span,
         TypedStmt::For(f) => f.iterable.span,
         TypedStmt::Block(b) => b.stmts.first().map(stmt_span).unwrap_or(Span::new(0, 0)),
         TypedStmt::Require(e) | TypedStmt::Observe(e) | TypedStmt::Expr(e) => e.span,
@@ -157,6 +158,10 @@ fn collect_stmt_calls(stmt: &TypedStmt, out: &mut Vec<u32>) {
         TypedStmt::For(f) => {
             collect_expr_calls(&f.iterable, out);
             for s in &f.body.stmts { collect_stmt_calls(s, out); }
+        }
+        TypedStmt::While(w) => {
+            collect_expr_calls(&w.cond, out);
+            for s in &w.body.stmts { collect_stmt_calls(s, out); }
         }
         TypedStmt::Block(b) => for s in &b.stmts { collect_stmt_calls(s, out); },
         TypedStmt::Return(None) | TypedStmt::ReleaseLocal { .. } | TypedStmt::ReturnCleanup { .. } => {}

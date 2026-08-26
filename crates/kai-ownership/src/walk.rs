@@ -1,5 +1,8 @@
 #[allow(unused_imports)]
-use kai_tast::{BinaryOp, KaiType, LocalId, TypedAssign, TypedBlock, TypedExpr, TypedExprKind, TypedFnDecl, TypedFor, TypedProgram, TypedStmt};
+use kai_tast::{
+    BinaryOp, KaiType, LocalId, TypedAssign, TypedBlock, TypedExpr, TypedExprKind, TypedFnDecl,
+    TypedFor, TypedProgram, TypedStmt, TypedWhile,
+};
 use super::fresh::FreshIds;
 use super::heap::{HeapBearing, is_owned_temp, wrap_retain_if_borrowed};
 use super::scopes::Scopes;
@@ -133,6 +136,32 @@ pub(crate) fn walk_stmt(
             out.push(TypedStmt::For(f));
             push_frame_releases(&end_releases, &mut out);
             out
+        }
+        TypedStmt::While(mut while_) => {
+            // v0.0.8.1: condition heap temporaries are hoisted into a
+            // loop-owned scope. `cond_prelude` (their bindings) is emitted
+            // at the TOP of `while.cond` so the condition evaluates FRESH
+            // every iteration; `cond_releases` rides BOTH the back-edge and
+            // loop exit — one release per evaluation, never zero.
+            scopes.push();
+            let mut pre = Vec::new();
+            hoist_borrow_temps(heap, &mut while_.cond, fresh, scopes, &mut pre, false);
+            walk_expr(heap, &mut while_.cond, scopes, fresh);
+            let cond_releases: Vec<(LocalId, KaiType)> = scopes
+                .frames
+                .last()
+                .map(|frame| frame.iter().rev().cloned().collect())
+                .unwrap_or_default();
+            while_.body = walk_block(heap, while_.body, scopes, fresh);
+            let _exit_releases = scopes.pop();
+            while_.cond_prelude = pre;
+            // Codegen emits cond_releases BOTH on the back-edge and at loop
+            // exit — the walker must NOT duplicate them here (double-release
+            // corruption found in v0.0.8.1 testing).
+            while_.cond_releases = cond_releases;
+
+            let stmts_out = vec![TypedStmt::While(while_)];
+            stmts_out
         }
         TypedStmt::Block(block) => {
             vec![TypedStmt::Block(walk_block(heap, block, scopes, fresh))]

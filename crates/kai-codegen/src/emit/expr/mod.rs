@@ -188,9 +188,12 @@ pub(crate) fn emit<'ctx>(
                 let _ = ctx.builder.build_unconditional_branch(join_bb);
             }
 
-            if !tagged::terminated_here(ctx) {
-                ctx.builder.position_at_end(join_bb);
-            }
+            // Always continue emission in the join block: both predecessors
+            // end in unconditional branches, so the builder's cursor would
+            // otherwise stay parked at the end of a TERMINATED block and any
+            // subsequent instructions would land as dead code after a
+            // terminator — leaving join itself empty (v0.0.8.1 BUG-4).
+            ctx.builder.position_at_end(join_bb);
             // Value only meaningful when control actually reaches here.
             ctx.builder
                 .build_load(result_llvm, slot, "catch.v")

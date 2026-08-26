@@ -71,7 +71,8 @@ pub(crate) fn lower_stmt(
             }
             Some(TypedStmt::Expr(typed))
         },
-        StmtKind::For(f) => for_stmt(checker, f),
+        StmtKind::For(f) => for_stmt(checker, f, return_type),
+        StmtKind::While(w) => while_stmt(checker, w, return_type),
     }
 }
 
@@ -288,7 +289,35 @@ fn if_stmt(
 /// an IMMUTABLE element-typed local inside the loop's own scope (§9.9). The
 /// borrow-not-own behavior is the ownership pass's concern; here we only
 /// fix shapes.
-fn for_stmt(checker: &mut Checker, f: &kai_ast::ForStmt) -> Option<TypedStmt> {
+/// `while cond { body }` (v0.0.8.1): condition strictly `bool`; the body
+/// threads the enclosing fn's return type (BUG-1 lesson). Returns inside
+/// the loop do NOT satisfy definite-return (the loop may run zero times).
+fn while_stmt(
+    checker: &mut Checker,
+    w: &kai_ast::WhileStmt,
+    return_type: &KaiType,
+) -> Option<TypedStmt> {
+    let cond = expr::lower(checker, &w.cond, None);
+    if cond.ty != KaiType::Bool {
+        let span = w.cond.span;
+        let found = cond.ty.clone();
+        checker.error(error::condition_not_bool(found, span));
+    }
+    let body = lower_block(checker, &w.body, return_type);
+    Some(TypedStmt::While(kai_tast::TypedWhile {
+        cond,
+        // Filled by the ownership pass (per-iteration cond temporaries).
+        cond_prelude: Vec::new(),
+        body,
+        cond_releases: Vec::new(),
+    }))
+}
+
+fn for_stmt(
+    checker: &mut Checker,
+    f: &kai_ast::ForStmt,
+    return_type: &KaiType,
+) -> Option<TypedStmt> {
     let iterable = expr::lower(checker, &f.iterable, None);
 
     let elem_ty = match iterable.ty.clone() {
@@ -307,7 +336,9 @@ fn for_stmt(checker: &mut Checker, f: &kai_ast::ForStmt) -> Option<TypedStmt> {
         .declare(&declared_name, elem_ty.clone(), false)
     {
         crate::scope::DeclareOutcome::Fresh(info) => {
-            let body = lower_block(checker, &f.body, &KaiType::Unit);
+            // v0.0.8.1 (BUG-1): thread the enclosing function's return type
+            // so early `return value;` inside for..in type-checks correctly.
+            let body = lower_block(checker, &f.body, return_type);
             Some(TypedStmt::For(TypedFor {
                 binding_local: info.id,
                 binding_name: declared_name,

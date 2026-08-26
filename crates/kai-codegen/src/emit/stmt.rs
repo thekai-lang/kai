@@ -112,6 +112,7 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
             let _ = expr::emit(ctx, frame, e);
         }
         TypedStmt::For(f) => for_stmt(ctx, frame, f),
+        TypedStmt::While(w) => while_stmt(ctx, frame, w),
         // Ownership marker from the pass: the local's heap content leaves
         // scope here (§9.4). The slot points at storage of `ty`.
         TypedStmt::ReleaseLocal { local, ty } => {
@@ -425,4 +426,40 @@ fn condition_text<'ctx>(ctx: &Ctx<'ctx>, module_key: &str, span: kai_diagnostics
     ctx.sources
         .get(module_key)
         .map_or_else(|| "<unknown>".to_string(), |src| src.slice(span))
+}
+
+/// `while cond { body }` (v0.0.8.1): classic cond/body/end blocks.
+/// `cond_prelude` (hidden temporaries) is emitted at the TOP of cond so
+/// the condition evaluates FRESH every iteration; `cond_releases` ride
+/// BOTH the back-edge and loop exit — one release per evaluation, never
+/// zero (§5.2-style dual-point care applied to loop conditions).
+fn while_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, w: &kai_tast::TypedWhile) {
+    let function = super::current_function(ctx);
+    let cond_bb = ctx.context.append_basic_block(function, "while.cond");
+    let body_bb = ctx.context.append_basic_block(function, "while.body");
+    let end_bb = ctx.context.append_basic_block(function, "while.end");
+
+    let _ = ctx.builder.build_unconditional_branch(cond_bb);
+    ctx.builder.position_at_end(cond_bb);
+    for inner in &w.cond_prelude {
+        emit(ctx, frame, inner);
+    }
+    let cond = expr::emit(ctx, frame, &w.cond).into_int_value();
+    let _ = ctx.builder.build_conditional_branch(cond, body_bb, end_bb);
+
+    ctx.builder.position_at_end(body_bb);
+    for inner in &w.body.stmts {
+        emit(ctx, frame, inner);
+    }
+    // Back-edge: release this iteration's condition temporaries first.
+    for (local, ty) in w.cond_releases.iter() {
+        crate::emit::ownership::emit_release_slot(ctx, ty, frame.slot(*local));
+    }
+    branch_to(ctx, cond_bb);
+
+    ctx.builder.position_at_end(end_bb);
+    // Loop exit: final evaluation's temporaries released here.
+    for (local, ty) in w.cond_releases.iter() {
+        crate::emit::ownership::emit_release_slot(ctx, ty, frame.slot(*local));
+    }
 }

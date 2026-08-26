@@ -6,7 +6,7 @@ use crate::parser::Parser;
 use crate::ty;
 use kai_ast::{
     AssignOp, AssignStmt, AssignTarget, Block, Expr, ExprKind, ForStmt, IfStmt, LetStmt,
-    PlaceStep, Stmt, StmtKind,
+    PlaceStep, Stmt, StmtKind, WhileStmt,
 };
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
@@ -36,6 +36,7 @@ fn stmt(parser: &mut Parser) -> Stmt {
         TokenKind::Let | TokenKind::Var => binding(parser),
         TokenKind::If => if_stmt(parser),
         TokenKind::For => for_stmt(parser),
+        TokenKind::While => while_stmt(parser),
         TokenKind::LBrace => bare_block(parser),
         // `_ = expr;` (v0.0.6, §9.9b) — `_` cannot start an expression, so
         // this dispatch is unambiguous. Note `let _ = ...` needs no special
@@ -116,6 +117,7 @@ pub(crate) fn catch_block(parser: &mut Parser) -> (Vec<Stmt>, Expr, Span) {
             | TokenKind::Var
             | TokenKind::If
             | TokenKind::For
+            | TokenKind::While
             | TokenKind::LBrace
             | TokenKind::Require
             | TokenKind::Observe => {
@@ -284,6 +286,22 @@ fn if_stmt(parser: &mut Parser) -> Stmt {
             then_block,
             else_block,
         }),
+    }
+}
+
+/// `while cond { ... }` (v0.0.8.1, GAP-1 closure): re-evaluates `cond`
+/// before every iteration; NO_STRUCT_LITERAL applies like `if`.
+fn while_stmt(parser: &mut Parser) -> Stmt {
+    let start = parser.span_here();
+    parser.bump(); // `while`
+
+    let cond = parser.with_struct_lits_banned(|parser| expr::expr(parser));
+    let body = block(parser);
+
+    let span = Span::merge(start, body.span);
+    Stmt {
+        span,
+        kind: StmtKind::While(WhileStmt { cond, body }),
     }
 }
 

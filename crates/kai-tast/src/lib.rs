@@ -13,6 +13,7 @@ pub use fn_decl::{TypedFnDecl, TypedParam};
 pub use program::{TypedProgram, TypedStruct, TypedStructField};
 pub use stmt::{
     FieldStep, TypedAssign, TypedBlock, TypedFor, TypedIf, TypedLet, TypedPlaceStep, TypedStmt,
+    TypedWhile,
 };
 pub use symbol::{FunctionId, LocalId, StructId};
 pub use ty::{

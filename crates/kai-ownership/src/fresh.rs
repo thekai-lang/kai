@@ -61,6 +61,10 @@ fn seed_stmts(stmts: &[TypedStmt], max: &mut u32) {
                 seed_expr(&f.iterable, max);
                 seed_stmts(&f.body.stmts, max);
             }
+            TypedStmt::While(w) => {
+                seed_expr(&w.cond, max);
+                seed_stmts(&w.body.stmts, max);
+            }
             TypedStmt::Block(b) => seed_stmts(&b.stmts, max),
             TypedStmt::Expr(e)
             | TypedStmt::Require(e)

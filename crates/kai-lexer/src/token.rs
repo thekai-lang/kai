@@ -16,6 +16,7 @@ pub enum TokenKind {
     Public,
     For,
     In,
+    While,
     // v0.0.6 keywords. `Some`/`None` construct an Optional value (§9.9a);
     // `Ok`/`Err` construct a Result value (§3.4, v0.14); `catch` is the Result error-branch postfix operator. `Result` and
     // `Optional` stay plain identifiers — they only ever name types, so
@@ -134,6 +135,7 @@ impl TokenKind {
             TokenKind::Public => "`public`".into(),
             TokenKind::For => "`for`".into(),
             TokenKind::In => "`in`".into(),
+            TokenKind::While => "`while`".into(),
             TokenKind::SomeKw => "`Some`".into(),
             TokenKind::NoneKw => "`None`".into(),
             TokenKind::OkKw => "`Ok`".into(),

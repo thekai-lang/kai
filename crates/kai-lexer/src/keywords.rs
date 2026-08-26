@@ -24,6 +24,8 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         // v0.0.5 keywords. `for`/`in` open the array iteration loop (§9.9).
         "for" => Some(TokenKind::For),
         "in" => Some(TokenKind::In),
+        // v0.0.8.1: `while` implemented (GAP-1 closure) — condition loop.
+        "while" => Some(TokenKind::While),
         // v0.0.6 keywords (§9.9a/§9.9b). `Some`/`None` construct an Optional;
         // `Ok`/`Err` construct a Result (§3.4, v0.14); `catch` is a postfix operator on Result.
         "Some" => Some(TokenKind::SomeKw),

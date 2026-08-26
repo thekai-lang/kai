@@ -291,6 +291,12 @@ pub(crate) fn call<'ctx>(
 }
 
 /// Reads a field: GEP the base place by this access's index, then load.
+///
+/// v0.0.8.1 (BUG-2/3): when the base is NOT a place — an rvalue computed
+/// aggregate such as `v.unwrap_or(default)` or a call result — the value is
+/// materialized into an entry-block temporary first, then GEP'd. The old
+/// behavior emitted `undef` silently here, which made chained field reads on
+/// computed aggregates return register garbage (silent data corruption).
 
 pub(crate) fn field_read<'ctx>(
     ctx: &Ctx<'ctx>,
@@ -300,16 +306,28 @@ pub(crate) fn field_read<'ctx>(
     field: u16,
     ty: &KaiType,
 ) -> BasicValueEnum<'ctx> {
-    match place_ptr(ctx, frame, base) {
-        Some(base_ptr) => {
-            let ptr = crate::emit::field_gep(ctx, struct_id, base_ptr, u32::from(field), "field");
-            let pointee = crate::types::to_llvm(ctx, ty);
-            ctx.builder
-                .build_load(pointee, ptr, "field")
-                .expect("load from field")
+    let base_ptr = match place_ptr(ctx, frame, base) {
+        Some(ptr) => ptr,
+        None => {
+            // Rvalue base: emit it and spill to a temporary so the field
+            // GEP has real storage to read from.
+            let value = emit(ctx, frame, base);
+            let agg_ty = crate::types::to_llvm(ctx, &base.ty);
+            let tmp = crate::emit::alloca_in_entry(
+                ctx,
+                crate::emit::current_function(ctx),
+                agg_ty,
+                "field.base.tmp",
+            );
+            let _ = ctx.builder.build_store(tmp, value);
+            tmp
         }
-        None => undef_of(ctx, ty), // unreachable post-typecheck
-    }
+    };
+    let ptr = crate::emit::field_gep(ctx, struct_id, base_ptr, u32::from(field), "field");
+    let pointee = crate::types::to_llvm(ctx, ty);
+    ctx.builder
+        .build_load(pointee, ptr, "field")
+        .expect("load from field")
 }
 
 /// Address of an lvalue-shaped expression. Struct-typed expressions are
