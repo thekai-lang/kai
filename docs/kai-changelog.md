@@ -1,3 +1,26 @@
+
+## KNOWN ISSUES — v0.0.8.1
+
+### Heap-payload `unwrap_or` memory corruption (CRITICAL, needs dedicated investigation)
+
+`optional_val.unwrap_or(heap_struct_default)` crashes with glibc `tcache_thread_shutdown(): unaligned tcache chunk detected` when the payload type is heap-bearing (contains strings/arrays). Scalar payloads (`int32?`, `int64?`) work correctly. Same-function cases may accidentally appear correct due to undefined register content masking the corruption.
+
+Root cause area: the `lazy_select` codegen path (`emit/expr/mod.rs`) copies the selected payload out of the tagged union WITHOUT retaining heap fields, while the consumer-side retain/release accounting assumes co-ownership. Needs GDB/valgrind session to pinpoint exact double-free/UAF site.
+
+Repro:
+```kai
+use shop.model;
+fn main() -> int32 {
+    var items = [model.Product { sku: "A", label: "B", cents: 25000, stock: 100, rating: 4.8 }];
+    let hit = model.find(items, "ZZ");   // None
+    let g = hit.unwrap_or(model.Product { sku: "?", label: "?", cents: 1, stock: 0, rating: 0.0 });
+    return 0;
+}   // <- crash at scope-exit releases
+```
+
+### `catch.join` terminator gap — RESOLVED in v0.0.8.1
+Previously listed as known gap from v0.0.6.1; fixed by unconditional `position_at_end(join_bb)` after both branch paths complete.
+
 ## v0.0.8 — `require`/`observe` implemented: runtime panic, §10.3 debt record, JSONL Signal sink (whitepaper v0.20–v0.22 §5.2)
 
 The first trust-aware behaviors that execute: `require expr;` traps with the §10.3 message shape and writes a pre-ledger record before exiting; `observe expr;` appends a Signal record to `.kai/observe.log`. Both lower into `Trust<C>` locally through kai-effects (v0.20's scoping decision) — the call-graph inference subsystem stays exclusively §5.1's.
