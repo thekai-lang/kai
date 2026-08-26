@@ -88,28 +88,14 @@ pub(crate) fn lazy_select<'ctx>(
     let _ = ctx.builder.build_store(slot, payload);
     let _ = ctx.builder.build_unconditional_branch(join_bb);
 
-    // Fallback: evaluate lazily; when it produced an OWNED header, drop the
-    // creator's reference after copying into the slot (§9.9a scheme).
+    // Fallback: evaluate lazily; store directly to the result slot.
+    // NO release here — both branches produce correctly-owned values for
+    // the consumer (some_bb borrows from recv, else_bb owns fresh temp).
+    // The old code released the creator's reference here, but that freed
+    // heap fields BEFORE co.join could read them (v0.0.8.1 BUG).
     ctx.builder.position_at_end(else_bb);
     let d = emit(ctx, frame, fallback);
     let _ = ctx.builder.build_store(slot, d);
-    if crate::emit::ownership::heap_bearing(ctx, result_ty) {
-        match result_ty {
-            KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
-                crate::emit::ownership::release_header_value(ctx, d);
-            }
-            other => {
-                let tmp = crate::emit::alloca_in_entry(
-                    ctx,
-                    crate::emit::current_function(ctx),
-                    result_llvm,
-                    "co.tmp",
-                );
-                let _ = ctx.builder.build_store(tmp, d);
-                crate::emit::ownership::emit_release_slot(ctx, other, tmp);
-            }
-        }
-    }
     let _ = ctx.builder.build_unconditional_branch(join_bb);
 
     ctx.builder.position_at_end(join_bb);
