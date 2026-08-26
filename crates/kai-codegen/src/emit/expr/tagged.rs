@@ -78,14 +78,32 @@ pub(crate) fn lazy_select<'ctx>(
         .builder
         .build_conditional_branch(active, some_bb, else_bb);
 
-    // Active: forward the payload bits untouched — the consumer's retain
-    // (borrow semantics) balances against its later release.
+    // Active: extract payload, store to result slot, then RETAIN if
+    // heap-bearing — the consumer owns this copy (§9.5 boundary rule).
+    // Without this retain, scope-exit release would decrement below the
+    // original owner's claim (v0.0.8.2 BUG-5 fix).
     ctx.builder.position_at_end(some_bb);
     let payload = ctx
         .builder
         .build_extract_value(recv, 1, "payload")
         .expect("payload");
     let _ = ctx.builder.build_store(slot, payload);
+    if crate::emit::ownership::heap_bearing(ctx, result_ty) {
+        match result_ty {
+            KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                let hdr = ctx.builder.build_load(
+                    crate::types::to_llvm(ctx, result_ty),
+                    slot,
+                    "some.ret.hdr",
+                ).expect("payload header load");
+                crate::emit::ownership::retain_header(ctx, hdr);
+            }
+            KaiType::Struct(_) => {
+                crate::emit::ownership::retain_struct_copy(ctx, result_ty, slot);
+            }
+            _ => {}
+        }
+    }
     let _ = ctx.builder.build_unconditional_branch(join_bb);
 
     // Fallback: evaluate lazily; store directly to the result slot.

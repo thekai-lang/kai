@@ -72,7 +72,12 @@ pub(crate) fn is_owned_temp(expr: &TypedExpr) -> bool {
         | TypedExprKind::SomeLit(_)
         | TypedExprKind::OkLit(_)
         | TypedExprKind::ErrLit(_)
-        | TypedExprKind::ClosureLit(_) => true,
+        | TypedExprKind::ClosureLit(_)
+        // v0.0.8.2 (BUG-5): UnwrapOr transfers ownership — both branches
+        // produce correctly-owned values for the consumer (some_bb retains,
+        // else_bb constructs fresh). No Retain-on-bind needed; the value
+        // moves directly into the binding.
+        | TypedExprKind::UnwrapOr { .. } => true,
         // Everything else borrows: bindings, projections, scalars, poison.
         // Coalesce/UnwrapOr/Catch forward a payload chosen at runtime —
         // precise tag-guarded handling lands with the P4 commit; treated as
