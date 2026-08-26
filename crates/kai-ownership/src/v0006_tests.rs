@@ -86,9 +86,12 @@ use super::*;
     }
 
     #[test]
-    fn coalesce_fallback_is_not_hoisted_eagerly() {
-        // Laziness: the rhs must stay INSIDE the Coalesce node — hoisting it
-        // into a hidden local would evaluate it even when lhs wins.
+    fn coalesce_fallback_is_materialized_for_leak_prevention() {
+        // v0.0.8.3: Coalesce IS an owned temp (is_owned_temp=true) — it gets
+        // materialized into a hidden local so scope machinery releases it.
+        // This prevents the per-iteration leak found by ASan audit (BUG-5).
+        // Lazy evaluation is preserved: the Coalesce node survives as the
+        // Let init, and lazy_select still branches internally.
         let mut co = TypedExpr {
             kind: TypedExprKind::Coalesce {
                 lhs: Box::new(local_ref(0, KaiType::String)),
@@ -100,12 +103,24 @@ use super::*;
         let heap = heap_table();
         let mut fresh = FreshIds::default();
         let mut scopes = Scopes::default();
+        scopes.push(); // production always has a scope open (walk_block pushes)
         let mut pre = Vec::new();
         hoist_borrow_temps(&heap, &mut co, &mut fresh, &mut scopes, &mut pre, false);
-        assert!(pre.is_empty(), "no eager statements for lazy positions");
+        // The Coalesce IS materialized into a hidden $tmp local.
+        assert_eq!(pre.len(), 1, "coalesce must be materialized for leak tracking");
+        if let TypedStmt::Let(binding) = &pre[0] {
+            assert_eq!(binding.name, "$tmp");
+            assert!(
+                matches!(binding.init.kind, TypedExprKind::Coalesce { .. }),
+                "init must be the original Coalesce node"
+            );
+        } else {
+            panic!("expected Let statement in pre");
+        }
+        // The outer expression is now a LocalRef to the hidden local.
         assert!(
-            matches!(co.kind, TypedExprKind::Coalesce { .. }),
-            "node must survive untouched"
+            matches!(co.kind, TypedExprKind::LocalRef(_)),
+            "outer must reference the hidden local"
         );
     }
 

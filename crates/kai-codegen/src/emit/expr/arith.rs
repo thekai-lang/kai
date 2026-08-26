@@ -93,6 +93,24 @@ pub(crate) fn apply_binary<'ctx>(
             }
             .into()
         }
+        // Temporal (v0.0.8.x §5.1.7): both operands are same-origin wrappers.
+    // @local delegates to inner repr; @wallclock compares header payloads.
+    KaiType::Temporal { inner, .. } => {
+        match op {
+            BinaryOp::Eq | BinaryOp::Ne => {
+                // Delegate to string content compare for string inner;
+                // icmp for scalar inner. Both operands share the same
+                // representation as their inner type after GEP/load.
+                let result = apply_binary(ctx, frame, op, lhs, rhs, inner, span);
+                result
+            }
+            _ => {
+                // Non-comparison ops not yet defined for temporal types.
+                unreachable!("temporal types only support == and !=")
+            }
+        }
+    }
+
         _ => int_arith(ctx, frame, op, lhs.into_int_value(), rhs.into_int_value(), span).into(),
     }
 }

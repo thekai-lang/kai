@@ -77,11 +77,11 @@ pub(crate) fn is_owned_temp(expr: &TypedExpr) -> bool {
         // produce correctly-owned values for the consumer (some_bb retains,
         // else_bb constructs fresh). No Retain-on-bind needed; the value
         // moves directly into the binding.
-        | TypedExprKind::UnwrapOr { .. } => true,
+        | TypedExprKind::UnwrapOr { .. }
+        // v0.0.8.3 (F1): same rationale as UnwrapOr — Coalesce shares
+        // lazy_select's some_bb retain + else_bb fresh construction.
+        | TypedExprKind::Coalesce { .. } => true,
         // Everything else borrows: bindings, projections, scalars, poison.
-        // Coalesce/UnwrapOr/Catch forward a payload chosen at runtime —
-        // precise tag-guarded handling lands with the P4 commit; treated as
-        // borrows until then.
         _ => false,
     }
 }

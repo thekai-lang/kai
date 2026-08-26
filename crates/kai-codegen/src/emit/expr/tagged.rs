@@ -5,7 +5,7 @@ use crate::context::Ctx;
 use crate::frame::Frame;
 use crate::types::to_llvm;
 use inkwell::values::BasicValueEnum;
-use kai_tast::{KaiType, TypedExpr};
+use kai_tast::{KaiType, TypedExpr, TypedExprKind};
 
 use super::emit;
 
@@ -107,13 +107,82 @@ pub(crate) fn lazy_select<'ctx>(
     let _ = ctx.builder.build_unconditional_branch(join_bb);
 
     // Fallback: evaluate lazily; store directly to the result slot.
-    // NO release here — both branches produce correctly-owned values for
-    // the consumer (some_bb borrows from recv, else_bb owns fresh temp).
-    // The old code released the creator's reference here, but that freed
-    // heap fields BEFORE co.join could read them (v0.0.8.1 BUG).
+    //
+    // §9.5/v0.22 branch-level claim normalization: after storing to co.r,
+    // normalize claims so exactly ONE claim survives past join:
+    // - fresh fallback (owned temp): retain for consumer, release creation
+    // - borrowed fallback: retain only (owner keeps their claim)
+    // Without this normalization: fresh leaked at rc=1 (pre-da88704 was
+    // corruption from premature release). Neither is acceptable.
     ctx.builder.position_at_end(else_bb);
     let d = emit(ctx, frame, fallback);
     let _ = ctx.builder.build_store(slot, d);
+
+    let fallback_is_fresh = matches!(
+        &fallback.kind,
+        TypedExprKind::StrLit { .. }
+            | TypedExprKind::ArrayLit { .. }
+            | TypedExprKind::StructLit { .. }
+            | TypedExprKind::Call { .. }
+            | TypedExprKind::SomeLit(_)
+            | TypedExprKind::OkLit(_)
+            | TypedExprKind::ErrLit(_)
+            | TypedExprKind::ClosureLit(_)
+            | TypedExprKind::UnwrapOr { .. }
+            | TypedExprKind::Coalesce { .. }
+    );
+
+    if crate::emit::ownership::heap_bearing(ctx, result_ty) {
+        // Step 1: retain for the consumer (both fresh and borrow)
+        match result_ty {
+            KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                crate::emit::ownership::retain_header(ctx, d);
+            }
+            KaiType::Struct(_) => {
+                let tmp = crate::emit::alloca_in_entry(
+                    ctx,
+                    crate::emit::current_function(ctx),
+                    result_llvm,
+                    "co.retain.tmp",
+                );
+                let _ = ctx.builder.build_store(tmp, d);
+                crate::emit::ownership::retain_struct_copy(ctx, result_ty, tmp);
+            }
+            KaiType::Optional(_) | KaiType::Result { .. } => {
+                let tmp = crate::emit::alloca_in_entry(
+                    ctx,
+                    crate::emit::current_function(ctx),
+                    result_llvm,
+                    "co.retain.tmp",
+                );
+                let _ = ctx.builder.build_store(tmp, d);
+                crate::emit::ownership::retain_tagged_copy(ctx, result_ty, tmp);
+            }
+            _ => {}
+        }
+        // Step 2: release creation claim ONLY for fresh owned temps.
+        // For borrowed fallbacks, the original owner keeps their claim —
+        // releasing here would be premature/double-free.
+        if fallback_is_fresh {
+            match result_ty {
+                KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                    crate::emit::ownership::release_header_value(ctx, d);
+                }
+                KaiType::Struct(_) | KaiType::Optional(_) | KaiType::Result { .. } => {
+                    let tmp = crate::emit::alloca_in_entry(
+                        ctx,
+                        crate::emit::current_function(ctx),
+                        result_llvm,
+                        "co.release.tmp",
+                    );
+                    let _ = ctx.builder.build_store(tmp, d);
+                    crate::emit::ownership::emit_release_slot(ctx, result_ty, tmp);
+                }
+                _ => {}
+            }
+        }
+    }
+
     let _ = ctx.builder.build_unconditional_branch(join_bb);
 
     ctx.builder.position_at_end(join_bb);
