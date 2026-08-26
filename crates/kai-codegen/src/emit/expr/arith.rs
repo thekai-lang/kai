@@ -93,23 +93,47 @@ pub(crate) fn apply_binary<'ctx>(
             }
             .into()
         }
-        // Temporal (v0.0.8.x §5.1.7): both operands are same-origin wrappers.
-    // @local delegates to inner repr; @wallclock compares header payloads.
-    KaiType::Temporal { inner, .. } => {
-        match op {
-            BinaryOp::Eq | BinaryOp::Ne => {
-                // Delegate to string content compare for string inner;
-                // icmp for scalar inner. Both operands share the same
-                // representation as their inner type after GEP/load.
-                let result = apply_binary(ctx, frame, op, lhs, rhs, inner, span);
-                result
-            }
-            _ => {
-                // Non-comparison ops not yet defined for temporal types.
-                unreachable!("temporal types only support == and !=")
+        // Temporal (§5.1.7): both operands are same-origin wrappers.
+        // @local delegates to inner repr; @wallclock GEP-extracts payload
+        // field (idx 4) from both headers before delegating comparison.
+        // Equality is inner-value equality only — instant dimension not
+        // represented (whitepaper v0.22 §5.1.7 note).
+        KaiType::Temporal { inner, origin, .. } => {
+            match op {
+                BinaryOp::Eq | BinaryOp::Ne => match origin {
+                    kai_tast::TemporalOrigin::Local => {
+                        // Zero-cost: same repr as inner.
+                        apply_binary(ctx, frame, op, lhs, rhs, inner, span)
+                    }
+                    kai_tast::TemporalOrigin::Wallclock => {
+                        // GEP-extract payload field (idx 4) from each
+                        // header, then delegate to inner comparison.
+                        let l_hdr = lhs.into_pointer_value();
+                        let r_hdr = rhs.into_pointer_value();
+                        let header_ty = crate::types::wallclock_header_ty(ctx, inner);
+                        let payload_idx = crate::types::WALLCLOCK_PAYLOAD_IDX;
+                        let l_payload = ctx.builder.build_struct_gep(
+                            header_ty, l_hdr, payload_idx, "tw.l.payload",
+                        ).expect("l payload gep");
+                        let r_payload = ctx.builder.build_struct_gep(
+                            header_ty, r_hdr, payload_idx, "tw.r.payload",
+                        ).expect("r payload gep");
+                        let l_val = ctx.builder.build_load(
+                            crate::types::to_llvm(ctx, inner), l_payload, "tw.l.v",
+                        ).expect("l payload load");
+                        let r_val = ctx.builder.build_load(
+                            crate::types::to_llvm(ctx, inner), r_payload, "tw.r.v",
+                        ).expect("r payload load");
+                        apply_binary(ctx, frame, op, l_val, r_val, inner, span)
+                    }
+                },
+                _ => {
+                    // Non-comparison ops on Temporal are rejected by typecheck
+                    // (§5.1.7); defensive fallback returns false rather than panicking.
+                    ctx.context.bool_type().const_int(0, false).into()
+                }
             }
         }
-    }
 
         _ => int_arith(ctx, frame, op, lhs.into_int_value(), rhs.into_int_value(), span).into(),
     }

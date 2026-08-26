@@ -140,7 +140,7 @@ pub(crate) fn emit_closure<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, clo: 
                         let copy = if matches!(k, KaiType::Struct(_)) {
                             crate::emit::ownership::retain_struct_copy(ctx, k, src)
                         } else {
-                            crate::emit::ownership::retain_tagged_copy(ctx, k, src)
+                            crate::emit::ownership_tagged::retain_tagged_copy(ctx, k, src)
                         };
                         let _ = ctx.builder.build_store(dst, copy);
                     }

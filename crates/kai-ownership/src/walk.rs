@@ -251,10 +251,23 @@ pub(crate) fn hoist_borrow_temps(
         // Laziness/env identity: `??`/`unwrap_or` fallbacks and catch bodies
         // must not evaluate eagerly, and closure literals ARE the value —
         // codegen's result-slot/capture rules manage them instead.
-        TypedExprKind::Coalesce { .. }
-        | TypedExprKind::UnwrapOr { .. }
-        | TypedExprKind::Catch { .. }
-        | TypedExprKind::CallIndirect { .. }
+        // v0.0.8.4 (F2/F3): the ALWAYS-evaluated positions (coalesce lhs,
+        // unwrap_or receiver, catch base) DO recurse — heap-bearing owned
+        // temps inside them were previously never hoisted, leaking one
+        // orphan claim per evaluation (t2a/t2b repro). Lazy positions
+        // (rhs/default/stmts/tail) stay untouched: hoisting would evaluate
+        // them eagerly, changing semantics; their cleanup rides codegen's
+        // branch-level claim normalization instead.
+        TypedExprKind::Coalesce { lhs, .. } => {
+            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false);
+        }
+        TypedExprKind::UnwrapOr { receiver, .. } => {
+            hoist_borrow_temps(heap, receiver, fresh, scopes, out, false);
+        }
+        TypedExprKind::Catch { base, .. } => {
+            hoist_borrow_temps(heap, base, fresh, scopes, out, false);
+        }
+        TypedExprKind::CallIndirect { .. }
         | TypedExprKind::ClosureLit(_)
         | TypedExprKind::NoneLit => {}
         TypedExprKind::Binary { lhs, rhs, .. } => {

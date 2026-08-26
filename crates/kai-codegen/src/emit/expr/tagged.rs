@@ -101,6 +101,44 @@ pub(crate) fn lazy_select<'ctx>(
             KaiType::Struct(_) => {
                 crate::emit::ownership::retain_struct_copy(ctx, result_ty, slot);
             }
+            // Temporal (§5.1.7): @wallclock always heap-bearing (header);
+            // @local delegates to inner retain (zero-cost repr).
+            KaiType::Temporal { inner, origin, .. } => {
+                let loaded = ctx.builder.build_load(
+                    crate::types::to_llvm(ctx, &KaiType::Temporal {
+                        inner: inner.clone(),
+                        origin: origin.clone(),
+                        duration: kai_tast::DurationLit { value: 0, unit: kai_tast::DurationUnit::S },
+                    }),
+                    slot,
+                    "some.ret.temporal",
+                ).expect("payload load");
+                match origin {
+                    kai_tast::TemporalOrigin::Wallclock => {
+                        // Retain the wallclock header itself; cascades via dtor.
+                        crate::emit::ownership::retain_header(ctx, loaded);
+                    }
+                    _ => {
+                        // @local: delegate to inner retain (same repr).
+                        match inner.as_ref() {
+                            KaiType::String | KaiType::Array(_) | KaiType::Closure { .. } => {
+                                crate::emit::ownership::retain_header(ctx, loaded);
+                            }
+                            KaiType::Struct(_) => {
+                                let tmp = crate::emit::alloca_in_entry(
+                                    ctx,
+                                    crate::emit::current_function(ctx),
+                                    crate::types::to_llvm(ctx, inner),
+                                    "some.retain.tmp",
+                                );
+                                let _ = ctx.builder.build_store(tmp, loaded);
+                                crate::emit::ownership::retain_struct_copy(ctx, inner, tmp);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -156,7 +194,7 @@ pub(crate) fn lazy_select<'ctx>(
                     "co.retain.tmp",
                 );
                 let _ = ctx.builder.build_store(tmp, d);
-                crate::emit::ownership::retain_tagged_copy(ctx, result_ty, tmp);
+                crate::emit::ownership_tagged::retain_tagged_copy(ctx, result_ty, tmp);
             }
             _ => {}
         }

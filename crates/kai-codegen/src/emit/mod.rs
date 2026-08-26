@@ -3,6 +3,7 @@
 
 pub(crate) mod expr;
 pub(crate) mod ownership;
+pub(crate) mod ownership_tagged;
 pub(crate) mod panic;
 pub(crate) mod stmt;
 pub(crate) mod wallclock;

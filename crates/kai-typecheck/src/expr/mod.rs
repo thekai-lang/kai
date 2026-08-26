@@ -148,6 +148,33 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
 }
 
 fn int_lit(checker: &mut Checker, value: u64, expected: Option<&KaiType>, span: Span) -> TypedExpr {
+    // Scalar literals coerce into a temporal wrapper when the expected type
+    // is `int32/int64 @local(d)` or `@wallclock(d)` — mirrors string-literal
+    // coercion above (creation point starts the duration clock, §5.1).
+    if let Some(KaiType::Temporal { inner, origin, duration }) = expected
+        && matches!(inner.as_ref(), KaiType::Int32 | KaiType::Int64)
+    {
+        let scalar = if matches!(inner.as_ref(), KaiType::Int64) {
+            KaiType::Int64
+        } else {
+            KaiType::Int32
+        };
+        let max_inclusive: u64 = match scalar {
+            KaiType::Int32 => i32::MAX as u64,
+            _ => i64::MAX as u64,
+        };
+        if value > max_inclusive {
+            checker.error(error::literal_out_of_range(max_inclusive, scalar.clone(), span));
+        }
+        return TypedExpr::new(
+            TypedExprKind::IntLit(value as i64),
+            KaiType::Temporal {
+                inner: inner.clone(),
+                origin: origin.clone(),
+                duration: duration.clone(),
+            },
+        );
+    }
     let ty = if expected == Some(&KaiType::Int64) {
         KaiType::Int64
     } else {

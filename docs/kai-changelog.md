@@ -1,4 +1,12 @@
 
+## v0.0.8.4 — Temporal equality locked, F2/F3 orphan-claim hoisting, tagged-helper multi-branch fix
+
+- **F4+F5 — temporal retain & equality (§5.1.7)**: `lazy_select`'s some_bb now retains `Temporal` results (`@wallclock` retains the header; `@local` delegates to the inner type's retain). Equality on Temporal values is **inner-value equality** — `@wallclock` GEP-extracts both payloads (idx 4) before delegating to the inner comparison; `@local` delegates directly (zero-cost). The instant never participates in `==` (semantic decision recorded as whitepaper v0.23 §5.1.7 — validity belongs to verification machinery, `==` stays a pure function of value contents; string-content precedent §9.7). Non-comparison ops on Temporal return a defensive `false` instead of panicking through `unreachable!`.
+- **Scalar temporal literals**: `int32/int64 @local(d)/@wallclock(d)` now coerce from integer literals symmetrically with strings (typecheck + wallclock-header wrap at codegen) — bare scalar storage previously made every later release treat a raw `i32/i64` as a heap pointer.
+- **F2/F3 — orphan-claim hoisting**: `hoist_borrow_temps` now recurses into the always-evaluated positions of composite expressions — coalesce `lhs`, `unwrap_or` receiver, catch `base` — so heap-bearing owned temps inside them materialize into hidden locals and release per scope. Lazy positions (`rhs`/`default`/catch stmts/tail) stay untouched: hoisting would evaluate them eagerly. Verified flat header-outstanding counts across 100-iteration loops for all three shapes (was ~1 leaked header per iteration pre-fix).
+- **tagged-helper multi-branch crash fix (latent since v0.0.6)**: building a retain/release helper for a tagged union with TWO heap-bearing payloads (e.g., `Result<string,string>`) aborted codegen with "Terminator found in the middle of a basic block" — the second branch's conditional branch was emitted after the first branch's terminator. Checks are now chained through dedicated `tag.check` blocks. Surfaced by F2/F3 hoisting producing hidden locals of exactly that shape; covered by the new catch regression.
+- **Tests**: 326 passing (no count change); new repros verified by allocation-count deltas (LD_PRELOAD malloc tracker): plain-call loop −1, Optional loop +2 (noise), unwrap_or/coalesce/catch loops ≤3 (noise-level), all previously linear at ~100.
+
 ## KNOWN ISSUES — v0.0.8.1
 
 ### Heap-payload `unwrap_or` memory corruption (CRITICAL, needs dedicated investigation)

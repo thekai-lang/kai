@@ -37,7 +37,22 @@ pub(crate) fn emit<'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let ty = expr.ty.clone();
     match &expr.kind {
-        TypedExprKind::IntLit(value) => int_const(ctx, *value, &ty).into(),
+        TypedExprKind::IntLit(value) => {
+            // Scalar temporal literal (§5.1.7): same header-wrap as string
+            // literals — bare i32/i64 here made every later release treat
+            // the scalar as a heap pointer.
+            if let KaiType::Temporal {
+                inner,
+                origin: kai_tast::TemporalOrigin::Wallclock,
+                ..
+            } = &expr.ty
+            {
+                let base = int_const(ctx, *value, inner).into();
+                crate::emit::wallclock::wallclock_construct(ctx, inner, base)
+            } else {
+                int_const(ctx, *value, &ty).into()
+            }
+        }
         TypedExprKind::FloatLit(value) => ctx.context.f64_type().const_float(*value).into(),
         TypedExprKind::BoolLit(value) => ctx
             .context
@@ -331,7 +346,7 @@ pub(crate) fn emit<'ctx>(
                         if matches!(t_inner.as_ref(), KaiType::Struct(_)) {
                             crate::emit::ownership::retain_struct_copy(ctx, t_inner, tmp);
                         } else {
-                            crate::emit::ownership::retain_tagged_copy(ctx, t_inner, tmp);
+                            crate::emit::ownership_tagged::retain_tagged_copy(ctx, t_inner, tmp);
                         }
                         ctx.builder
                             .build_load(agg_ty, tmp, "retained.v")
@@ -372,7 +387,7 @@ pub(crate) fn emit<'ctx>(
                 if matches!(expr.ty, KaiType::Struct(_)) {
                     crate::emit::ownership::retain_struct_copy(ctx, &expr.ty, tmp);
                 } else {
-                    crate::emit::ownership::retain_tagged_copy(ctx, &expr.ty, tmp);
+                    crate::emit::ownership_tagged::retain_tagged_copy(ctx, &expr.ty, tmp);
                 }
                 ctx.builder
                     .build_load(agg_ty, tmp, "retained.v")
