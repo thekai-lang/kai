@@ -1,3 +1,11 @@
+## v0.0.9 — Reversible Ledgers (§5.3) & CompensateThunk
+
+- **CompensateThunk & Capture Semantics (P2)**: Implemented complete `compensate` blocks for `reversible` functions. A `compensate` block registers a self-contained, typed LLVM environment and an anonymous thunk to the `REVERSE_STACK` ledger. Variables captured from the outer scope are copied *by-value* at registration (shallow copy), providing strict snapshot semantics that insulate the compensation logic from subsequent outer mutations.
+- **Strict ABI Alignment (P0)**: The runtime ledger (`kai_reversible_push_compensate`) backs environments using a strictly `16-byte` aligned storage (via custom `AlignedBuffer`), satisfying LLVM ABI layout constraints and preventing UB on strict-alignment targets.
+- **Recursive Retain/Release**: Environment construction automatically scans and generates `retain` structures for deep heap-bearing captures (e.g. `Struct` containing `Array` containing `String`), with corresponding recursive `release` destructors.
+- **Panic Isolation (Reentrant Unwind Safety)**: The unwind runtime pops the ledger entry *before* execution. This structurally eliminates infinite recursion or double-releases if a `compensate` thunk panics internally.
+- **ASan Validation**: Extensively verified with new ASan test suites covering LIFO ordering, deep struct captures, reentrant unwinding, snapshot-mutation insulation, and string allocations. All leak regression tests green.
+
 
 ## v0.0.8.4 — Temporal equality locked, F2/F3 orphan-claim hoisting, tagged-helper multi-branch fix
 
