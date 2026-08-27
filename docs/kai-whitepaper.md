@@ -653,6 +653,17 @@ This ordering is the direct extension of §9.4's existing "prepare replacement b
 
 LedgerPush is emitted during ownership resolution because it is a runtime object-management node attached to a mutation, analogous to the retain/release nodes already emitted by that phase (§9.5). The effect checker remains responsible only for validating whether the resulting transactional or compensatable effect is permitted — consistent with §8 constraint 8's uniform Trust<C> model, where ownership resolution produces the runtime nodes and codegen reads them mechanically (never inferring them ad hoc), and the effect checker validates the Trust semantics rather than emitting runtime structure.
 
+### 5.3.6 Compensation Thunks and Capture Semantics
+
+When a `reversible` function declares a `compensate` block for a call, the compiler generates an internal, runtime-only callback (a `CompensateThunk`) rather than a first-class `Closure` value. This ensures compensation logic is strictly bound to the activation ledger and cannot be leaked or invoked manually.
+
+Because a panic unwind may execute the compensation long after the surrounding function has advanced, the thunk must capture its environment with precise semantics:
+
+1. **Capture-by-value at registration:** Variables referenced inside the `compensate` block are captured by value (shallow copy) at the exact moment the `compensate` block is evaluated and registered to the ledger. Subsequent mutations to those variables in the outer scope do not affect the captured state.
+2. **Ownership (Retain/Release):** Heap-bearing values captured by the environment are explicitly retained (incrementing their reference count) during registration. When the ledger is processed — whether via normal **commit** (thunk destroyed without execution) or **unwind** (thunk executed, then destroyed) — the captured values are released. This prevents memory leaks on success and use-after-free errors during rollback.
+3. **Immutable Environment:** For simplicity and safety, bindings captured within a `compensate` block are strictly read-only (`snapshot immutable`). Attempting to mutate a captured variable inside a compensation block is a compile-time error. This avoids complex aliasing, nested ledgers for inside-thunk mutations, and ambiguities about which object is actually being mutated.
+4. **Self-contained Storage:** The captured environment is fully self-contained. It never holds raw pointers to the caller's stack slots (`alloca`), ensuring the thunk remains safe to execute regardless of how the runtime traverses the call stack during an unwind.
+
 ### 5.4 External contracts — `dsl sql`, `dsl api`
 
 Queries and external API calls are validated against a committed **snapshot**, not a live connection, at build time.
