@@ -202,62 +202,40 @@ pub(crate) fn walk_stmt(
     }
 }
 
-/// Materializes owned temporaries sitting in BORROW positions into hidden
-/// locals declared in the current scope; the ordinary scope machinery then
-/// releases them at block exit and on early returns. Without this, values
-/// like a string literal passed to a function leak — nobody owns them after
-/// the consuming statement ends.
-///
-/// `root_is_transfer` marks positions whose top node MOVES instead of
-/// borrowing (initializer/assignment RHS roots): there the root stays put
-/// and only nested borrow positions are rewritten.
+/// Recurse into the ALWAYS-evaluated children of `expr` to hoist any
+/// owned temporaries sitting in borrow positions. Does NOT hoist
+/// `expr` itself — the caller decides whether the root needs materializing.
 ///
 /// Skipped deliberately:
 /// - `&&`/`||` subtrees — hoisting would evaluate the rhs temp even when
 ///   short-circuited; needs real materialization nodes (v0.0.6).
 /// - Struct/array literal members — those are OWNING slots already handled
-///   by the retain wrappers.
-pub(crate) fn hoist_borrow_temps(
+///   by the retain wrappers; their dtor releases children.
+/// - Lazy positions (unwrap_or default, coalesce rhs, catch body/tail,
+///   closure literals) — hoisting would change evaluation order; cleanup
+///   rides codegen's branch-level claim normalization instead.
+fn hoist_children(
     heap: &HeapBearing,
     expr: &mut TypedExpr,
     fresh: &mut FreshIds,
     scopes: &mut Scopes,
     out: &mut Vec<TypedStmt>,
-    root_is_transfer: bool,
 ) {
-    if !root_is_transfer && heap.is(&expr.ty) && is_owned_temp(expr) {
-        let local = fresh.alloc();
-        let ty = expr.ty.clone();
-        let init =
-            std::mem::replace(expr, TypedExpr::new(TypedExprKind::LocalRef(local), ty.clone()));
-        scopes.declare(local, ty, true);
-        out.push(TypedStmt::Let(kai_tast::TypedLet {
-            local,
-            name: "$tmp".into(),
-            init,
-        }));
-        return;
-    }
     match &mut expr.kind {
-        // Guarded by control flow: leave untouched (see doc comment).
+        // Guarded by control flow: leave untouched.
         TypedExprKind::Binary { op: BinaryOp::And | BinaryOp::Or, .. } => {}
         // v0.0.6: `Some`/`Ok`/`Err` payloads are owning slots handled by
-        // the retain wrapper; hoisting them would double-own.
+        // the retain wrapper; recursing into them lets nested owned temps
+        // (e.g. a Call inside Ok(Call(...))) be hoisted before the wrapper.
         TypedExprKind::SomeLit(value)
         | TypedExprKind::OkLit(value)
         | TypedExprKind::ErrLit(value) => {
             hoist_borrow_temps(heap, value, fresh, scopes, out, false);
         }
-        // Laziness/env identity: `??`/`unwrap_or` fallbacks and catch bodies
-        // must not evaluate eagerly, and closure literals ARE the value —
-        // codegen's result-slot/capture rules manage them instead.
         // v0.0.8.4 (F2/F3): the ALWAYS-evaluated positions (coalesce lhs,
         // unwrap_or receiver, catch base) DO recurse — heap-bearing owned
         // temps inside them were previously never hoisted, leaking one
-        // orphan claim per evaluation (t2a/t2b repro). Lazy positions
-        // (rhs/default/stmts/tail) stay untouched: hoisting would evaluate
-        // them eagerly, changing semantics; their cleanup rides codegen's
-        // branch-level claim normalization instead.
+        // orphan claim per evaluation (t2a/t2b repro).
         TypedExprKind::Coalesce { lhs, .. } => {
             hoist_borrow_temps(heap, lhs, fresh, scopes, out, false);
         }
@@ -286,9 +264,49 @@ pub(crate) fn hoist_borrow_temps(
         TypedExprKind::FieldAccess { base, .. } => {
             hoist_borrow_temps(heap, base, fresh, scopes, out, false)
         }
-        // Scalar contexts and pre-wrapped nodes hold nothing to hoist;
-        // literals' members are owning slots.
+        // Neg/Not: scalar unary — no heap children to hoist.
+        // StructLit/ArrayLit: owning slots — children released by dtor.
+        // StrLit/IntLit/FloatLit/BoolLit/LocalRef/Invalid/Retain/NoneLit: leaf nodes.
         _ => {}
+    }
+}
+
+/// Materializes owned temporaries sitting in BORROW positions into hidden
+/// locals declared in the current scope; the ordinary scope machinery then
+/// releases them at block exit and on early returns. Without this, values
+/// like a string literal passed to a function leak — nobody owns them after
+/// the consuming statement ends.
+///
+/// `root_is_transfer` marks positions whose top node MOVES instead of
+/// borrowing (initializer/assignment RHS roots): there the root stays put
+/// and only nested borrow positions are rewritten.
+///
+/// Children are always recursed into FIRST (`hoist_children`), then the
+/// root itself is materialized if needed. This ordering ensures that owned
+/// temporaries nested inside the root (e.g. a string literal passed as a
+/// call argument) are hoisted before the root is replaced with a LocalRef,
+/// so every creation claim gets a matching release at scope exit.
+pub(crate) fn hoist_borrow_temps(
+    heap: &HeapBearing,
+    expr: &mut TypedExpr,
+    fresh: &mut FreshIds,
+    scopes: &mut Scopes,
+    out: &mut Vec<TypedStmt>,
+    root_is_transfer: bool,
+) {
+    hoist_children(heap, expr, fresh, scopes, out);
+
+    if !root_is_transfer && heap.is(&expr.ty) && is_owned_temp(expr) {
+        let local = fresh.alloc();
+        let ty = expr.ty.clone();
+        let init =
+            std::mem::replace(expr, TypedExpr::new(TypedExprKind::LocalRef(local), ty.clone()));
+        scopes.declare(local, ty, true);
+        out.push(TypedStmt::Let(kai_tast::TypedLet {
+            local,
+            name: "$tmp".into(),
+            init,
+        }));
     }
 }
 

@@ -610,6 +610,47 @@ fn main() -> int32 {
     assert_eq!(pipeline::jit(src).unwrap(), 7);
 }
 
+// -- v0.0.8.4+ leak fixes: creation-claim balance in nested owned temps ------
+
+#[test]
+fn jit_unwrap_or_call_arg_leak_fixed() {
+    // Regression: mk(true, "x").unwrap_or("fallback") — the "x" passed to
+    // mk was an orphaned creation claim (rc=1 from kai_string_new, never
+    // balanced).  hoist_children restructure now materializes it.
+    let src = r#"
+fn mk(flag: bool, s: string) -> Result<string, string> {
+    if flag { return Ok(s); }
+    return Err("nope");
+}
+fn main() -> int32 {
+    let picked = mk(true, "x").unwrap_or("fallback");
+    let missed = mk(false, "y").unwrap_or("fallback");
+    _ = picked;
+    _ = missed;
+    return 0;
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 0);
+}
+
+#[test]
+fn jit_catch_call_arg_leak_fixed() {
+    // Regression: mk(false, "q") catch |e| { e } — same orphaned-claim
+    // pattern as unwrap_or, different codegen path (catch.err block).
+    let src = r#"
+fn mk(flag: bool, s: string) -> Result<string, string> {
+    if flag { return Ok(s); }
+    return Err("nope");
+}
+fn main() -> int32 {
+    let rescued = mk(false, "q") catch |e| { e };
+    _ = rescued;
+    return 0;
+}
+"#;
+    assert_eq!(pipeline::jit(src).unwrap(), 0);
+}
+
 // -- v0.0.5 fixture: ownership runtime -----------------------------------------
 
 fn v0005_entry() -> PathBuf {

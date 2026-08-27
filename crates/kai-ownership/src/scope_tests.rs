@@ -201,3 +201,184 @@ fn for_over_borrowed_iterable_leaves_ownership_alone() {
     let TypedStmt::For(f) = &out.fns[0].body.stmts[1] else { panic!() };
     assert!(!f.iterable_owned);
 }
+
+// ---------- nested owned-temp hoisting (v0.0.8.4+ hoist_children restructure) ----------
+
+#[test]
+fn heap_returning_call_hoists_strlit_arg() {
+    // Regression: when the Call ITSELF is heap-bearing (e.g. returns String),
+    // the old code hoisted the Call but NOT its StrLit arg — orphaning the
+    // creation claim.  With the hoist_children restructure, children are
+    // recursed into first, so both the StrLit arg AND the Call are materialized.
+    //
+    // Note: walk_stmt for a discarded heap Expr skips the Expr node entirely
+    // (line 185-190 of walk.rs) — the expression IS the hidden local.
+    let call = TypedExpr::new(
+        TypedExprKind::Call {
+            func: kai_tast::FunctionId(1),
+            args: vec![str_lit("x")],
+        },
+        KaiType::String,
+    );
+    let body = block(vec![TypedStmt::Expr(call), ret(None)]);
+    let program = TypedProgram { structs: vec![], fns: vec![fn_decl(body, vec![], KaiType::Unit)] };
+    let out = run(program);
+    // stmts[0]: $tmp0 = "x"  (StrLit arg materialized)
+    let TypedStmt::Let(h0) = &out.fns[0].body.stmts[0]
+    else { panic!("expected hoisted StrLit arg:\n{out:#?}") };
+    assert_eq!(h0.name, "$tmp");
+    assert!(
+        matches!(h0.init.kind, TypedExprKind::StrLit { .. }),
+        "first hoist must be the StrLit arg, got: {:?}", h0.init.kind
+    );
+    // stmts[1]: $tmp1 = Call(func:1, [LocalRef($tmp0)])
+    let TypedStmt::Let(h1) = &out.fns[0].body.stmts[1]
+    else { panic!("expected hoisted Call:\n{out:#?}") };
+    assert_eq!(h1.name, "$tmp");
+    assert!(
+        matches!(h1.init.kind, TypedExprKind::Call { .. }),
+        "second hoist must be the Call, got: {:?}", h1.init.kind
+    );
+    // No Expr statement — the Call was a discarded heap temp, so
+    // walk_stmt binds it directly without an Expr wrapper.
+    // stmts[2] is the ReturnCleanup from ret(None).
+    assert!(
+        matches!(out.fns[0].body.stmts[2], TypedStmt::ReturnCleanup { .. }),
+        "expected ReturnCleanup after hoisted stmts, got: {:?}", out.fns[0].body.stmts[2]
+    );
+}
+
+#[test]
+fn unwrap_or_receiver_call_hoists_strlit_arg() {
+    // Regression: mk(true, "x").unwrap_or("fallback") — the "x" inside the
+    // Call inside the UnwrapOr receiver must be materialized so every creation
+    // claim gets a matching release at scope exit.
+    let call = TypedExpr::new(
+        TypedExprKind::Call {
+            func: kai_tast::FunctionId(1),
+            args: vec![str_lit("x")],
+        },
+        KaiType::Optional(Box::new(KaiType::String)),
+    );
+    let unwrap_or = TypedExpr::new(
+        TypedExprKind::UnwrapOr {
+            receiver: Box::new(call),
+            default: Box::new(str_lit("fallback")),
+        },
+        KaiType::String,
+    );
+    let body = block(vec![TypedStmt::Expr(unwrap_or), ret(None)]);
+    let program = TypedProgram { structs: vec![], fns: vec![fn_decl(body, vec![], KaiType::Unit)] };
+    let out = run(program);
+    // stmts[0]: $tmp = "x"  (StrLit arg)
+    let TypedStmt::Let(h0) = &out.fns[0].body.stmts[0]
+    else { panic!("expected hoisted StrLit arg:\n{out:#?}") };
+    assert!(matches!(h0.init.kind, TypedExprKind::StrLit { .. }));
+    // stmts[1]: $tmp = Call(...)  (Call with Optional<String> return)
+    let TypedStmt::Let(h1) = &out.fns[0].body.stmts[1]
+    else { panic!("expected hoisted Call:\n{out:#?}") };
+    assert!(matches!(h1.init.kind, TypedExprKind::Call { .. }));
+    // stmts[2]: $tmp = UnwrapOr { receiver: LocalRef, default: StrLit("fallback") }
+    let TypedStmt::Let(h2) = &out.fns[0].body.stmts[2]
+    else { panic!("expected hoisted UnwrapOr:\n{out:#?}") };
+    assert!(
+        matches!(h2.init.kind, TypedExprKind::UnwrapOr { .. }),
+        "third hoist must be the UnwrapOr, got: {:?}", h2.init.kind
+    );
+    // The default ("fallback") must NOT be separately hoisted — it's lazy.
+    if let TypedExprKind::UnwrapOr { default, .. } = &h2.init.kind {
+        assert!(
+            matches!(default.kind, TypedExprKind::StrLit { .. }),
+            "default must remain a StrLit (lazy), got: {:?}", default.kind
+        );
+    }
+}
+
+#[test]
+fn catch_base_call_hoists_strlit_arg() {
+    // Regression: mk(false, "q") catch |e| { e } — the "q" inside the
+    // Call inside the Catch base must be materialized.
+    let call = TypedExpr::new(
+        TypedExprKind::Call {
+            func: kai_tast::FunctionId(1),
+            args: vec![str_lit("q")],
+        },
+        KaiType::Result {
+            ok: Box::new(KaiType::String),
+            err: Box::new(KaiType::String),
+        },
+    );
+    let catch = TypedExpr::new(
+        TypedExprKind::Catch {
+            base: Box::new(call),
+            err_binding: kai_tast::LocalId(2),
+            err_ty: KaiType::String,
+            stmts: vec![],
+            tail: Box::new(local_ref(2, KaiType::String)),
+            releases: vec![],
+        },
+        KaiType::String,
+    );
+    let body = block(vec![TypedStmt::Expr(catch), ret(None)]);
+    let program = TypedProgram { structs: vec![], fns: vec![fn_decl(body, vec![], KaiType::Unit)] };
+    let out = run(program);
+    // stmts[0]: $tmp = "q"  (StrLit arg)
+    let TypedStmt::Let(h0) = &out.fns[0].body.stmts[0]
+    else { panic!("expected hoisted StrLit arg:\n{out:#?}") };
+    assert!(matches!(h0.init.kind, TypedExprKind::StrLit { .. }));
+    // stmts[1]: $tmp = Call(...)  (Call with Result return)
+    let TypedStmt::Let(h1) = &out.fns[0].body.stmts[1]
+    else { panic!("expected hoisted Call:\n{out:#?}") };
+    assert!(matches!(h1.init.kind, TypedExprKind::Call { .. }));
+    // stmts[2]: Expr(Catch { base: LocalRef, ... })
+    // Catch is NOT in is_owned_temp, so it is NOT materialized —
+    // only the base (Call) inside it is.
+    let TypedStmt::Expr(e) = &out.fns[0].body.stmts[2] else { panic!("expected Expr") };
+    if let TypedExprKind::Catch { base, .. } = &e.kind {
+        assert!(
+            matches!(base.kind, TypedExprKind::LocalRef(_)),
+            "Catch base must reference the Call's hidden local, got: {:?}", base.kind
+        );
+    } else {
+        panic!("expected Catch expression, got: {:?}", e.kind);
+    }
+}
+
+#[test]
+fn nested_oklit_call_hoists_strlit_arg() {
+    // Regression: Ok(Call(func, ["x"])) — nested owned temps must all be
+    // materialized so no creation claim is orphaned.
+    let call = TypedExpr::new(
+        TypedExprKind::Call {
+            func: kai_tast::FunctionId(1),
+            args: vec![str_lit("x")],
+        },
+        KaiType::String,
+    );
+    let ok = TypedExpr::new(
+        TypedExprKind::OkLit(Box::new(call)),
+        KaiType::Result {
+            ok: Box::new(KaiType::String),
+            err: Box::new(KaiType::String),
+        },
+    );
+    let body = block(vec![TypedStmt::Expr(ok), ret(None)]);
+    let program = TypedProgram { structs: vec![], fns: vec![fn_decl(body, vec![], KaiType::Unit)] };
+    let out = run(program);
+    // stmts[0]: $tmp = "x"  (StrLit arg)
+    let TypedStmt::Let(h0) = &out.fns[0].body.stmts[0]
+    else { panic!("expected hoisted StrLit arg:\n{out:#?}") };
+    assert!(matches!(h0.init.kind, TypedExprKind::StrLit { .. }));
+    // stmts[1]: $tmp = Call(...)  (Call with String return)
+    let TypedStmt::Let(h1) = &out.fns[0].body.stmts[1]
+    else { panic!("expected hoisted Call:\n{out:#?}") };
+    assert!(matches!(h1.init.kind, TypedExprKind::Call { .. }));
+    // The OkLit wraps the Call's hidden local — OkLit IS an owned temp
+    // so it IS materialized as a third hidden local.
+    let TypedStmt::Let(h2) = &out.fns[0].body.stmts[2]
+    else { panic!("expected hoisted OkLit:\n{out:#?}") };
+    assert!(
+        matches!(h2.init.kind, TypedExprKind::OkLit(_)),
+        "third hoist must be the OkLit, got: {:?}", h2.init.kind
+    );
+}
