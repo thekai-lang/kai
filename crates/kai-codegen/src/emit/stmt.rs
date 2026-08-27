@@ -113,6 +113,12 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
         }
         TypedStmt::For(f) => for_stmt(ctx, frame, f),
         TypedStmt::While(w) => while_stmt(ctx, frame, w),
+        // §5.3.1 ledger push: captures pre-mutation Place value before the
+        // following Assign. Phase E will emit load + conditional retain +
+        // ledger push here. For now a no-op marker (Place mutation still
+        // emitted by the Assign below); heap snapshot retains are deferred
+        // to the unwind implementation so ASan stays clean on the commit path.
+        TypedStmt::ReversiblePush(_push) => {}
         // Ownership marker from the pass: the local's heap content leaves
         // scope here (§9.4). The slot points at storage of `ty`.
         TypedStmt::ReleaseLocal { local, ty } => {

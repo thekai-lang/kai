@@ -37,6 +37,13 @@ pub(crate) fn collect_refs_stmt(s: &kai_tast::TypedStmt, out: &mut Vec<LocalId>)
             collect_local_refs(&w.body, out);
         }
         TypedStmt::Block(b) => collect_local_refs(b, out),
+        TypedStmt::ReversiblePush(p) => {
+            for step in &p.path {
+                if let kai_tast::TypedPlaceStep::Index(idx) = step {
+                    collect_refs_expr(idx, out);
+                }
+            }
+        }
         TypedStmt::Require(e) | TypedStmt::Observe(e) | TypedStmt::Expr(e) => collect_refs_expr(e, out),
         // Ownership-pass markers: no user references inside.
         TypedStmt::ReleaseLocal { .. } | TypedStmt::ReturnCleanup { .. } => {}

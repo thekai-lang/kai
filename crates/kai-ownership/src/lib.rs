@@ -64,7 +64,7 @@ fn resolve_fn(heap: &HeapBearing, decl: &mut kai_tast::TypedFnDecl, fresh: &mut 
         scopes.declare(param.local, param.ty.clone(), false);
     }
     let body = std::mem::replace(&mut decl.body, TypedBlock { stmts: Vec::new() });
-    decl.body = walk_block(heap, body, &mut scopes, fresh);
+    decl.body = walk_block(heap, body, &mut scopes, fresh, decl.is_reversible);
 }
 
 #[cfg(test)]

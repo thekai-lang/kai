@@ -26,7 +26,7 @@ use super::*;
         let heap = heap_table();
         let mut fresh = FreshIds::default();
         let mut scopes = Scopes::default();
-        walk_block(&heap, block(body), &mut scopes, &mut fresh).stmts
+        walk_block(&heap, block(body), &mut scopes, &mut fresh, false).stmts
     }
 
     #[test]
@@ -147,7 +147,7 @@ use super::*;
         let mut fresh = FreshIds::default();
         let mut scopes = Scopes::default();
         scopes.push(); // function root
-        walk_expr(&heap, &mut catch_expr, &mut scopes, &mut fresh);
+        walk_expr(&heap, &mut catch_expr, &mut scopes, &mut fresh, false);
         scopes.pop();
         match catch_expr.kind {
             TypedExprKind::Catch { releases, .. } => {
@@ -180,6 +180,6 @@ use super::*;
         let mut fresh = FreshIds::default();
         let mut scopes = Scopes::default();
         scopes.push();
-        walk_expr(&heap, &mut e, &mut scopes, &mut fresh);
+        walk_expr(&heap, &mut e, &mut scopes, &mut fresh, false);
         assert!(matches!(e.kind, TypedExprKind::ClosureLit(_)));
     }

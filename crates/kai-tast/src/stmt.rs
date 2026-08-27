@@ -12,6 +12,11 @@ pub enum TypedStmt {
     Return(Option<TypedExpr>),
     Let(TypedLet),
     Assign(TypedAssign),
+    /// `reversible` ledger push (§5.3.1): captures pre-mutation Place value
+    /// before the following `Assign`. Inserted by ownership pass; codegen
+    /// emits load + conditional retain + ledger push. The `ty` is the Place's
+    /// content type (same as the Assign value's type).
+    ReversiblePush(ReversiblePush),
     If(TypedIf),
     For(crate::stmt::TypedFor),
     While(crate::stmt::TypedWhile),
@@ -97,6 +102,17 @@ pub struct TypedAssign {
     /// Source extent of the whole assignment; locates runtime guards it
     /// emits (bounds checks on index hops, arithmetic traps).
     pub span: kai_diagnostics::Span,
+}
+
+/// `reversible` ledger push (§5.3.1): captures pre-mutation Place value
+/// before the following `Assign`. Heap-bearing snapshots retain(old) so
+/// unwind can restore ownership-safe. Inserted by ownership pass; codegen
+/// emits the load, conditional retain, and ledger push.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReversiblePush {
+    pub root: LocalId,
+    pub path: Vec<TypedPlaceStep>,
+    pub ty: KaiType,
 }
 
 /// `for name in array { body }`. `binding_local` is declared ONCE per loop

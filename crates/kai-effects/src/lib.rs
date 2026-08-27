@@ -137,6 +137,10 @@ fn stmt_span(stmt: &TypedStmt) -> Span {
         TypedStmt::While(w) => w.cond.span,
         TypedStmt::For(f) => f.iterable.span,
         TypedStmt::Block(b) => b.stmts.first().map(stmt_span).unwrap_or(Span::new(0, 0)),
+        TypedStmt::ReversiblePush(p) => p.path.first().map_or(Span::new(0, 0), |step| match step {
+            kai_tast::TypedPlaceStep::Index(idx) => idx.span,
+            _ => Span::new(0, 0),
+        }),
         TypedStmt::Require(e) | TypedStmt::Observe(e) | TypedStmt::Expr(e) => e.span,
         TypedStmt::ReleaseLocal { .. } | TypedStmt::ReturnCleanup { .. } => Span::new(0, 0),
     }
@@ -171,6 +175,13 @@ fn collect_stmt_calls(stmt: &TypedStmt, out: &mut Vec<u32>) {
             for s in &w.body.stmts { collect_stmt_calls(s, out); }
         }
         TypedStmt::Block(b) => for s in &b.stmts { collect_stmt_calls(s, out); },
+        TypedStmt::ReversiblePush(p) => {
+            for step in &p.path {
+                if let kai_tast::TypedPlaceStep::Index(idx) = step {
+                    collect_expr_calls(idx, out);
+                }
+            }
+        }
         TypedStmt::Return(None) | TypedStmt::ReleaseLocal { .. } | TypedStmt::ReturnCleanup { .. } => {}
     }
 }
@@ -270,6 +281,13 @@ fn check_block_temporal(block: &kai_tast::TypedBlock, all_fns: &[kai_tast::Typed
                 check_block_temporal(&f.body, all_fns, diagnostics);
             }
             TypedStmt::Block(b) => check_block_temporal(b, all_fns, diagnostics),
+            TypedStmt::ReversiblePush(p) => {
+                for step in &p.path {
+                    if let kai_tast::TypedPlaceStep::Index(idx) = step {
+                        check_expr_temporal(idx, all_fns, diagnostics);
+                    }
+                }
+            }
             TypedStmt::Return(Some(e)) => check_expr_temporal(e, all_fns, diagnostics),
             _ => {}
         }
