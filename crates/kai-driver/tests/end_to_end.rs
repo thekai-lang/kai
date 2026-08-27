@@ -1825,3 +1825,21 @@ fn v007_boundary_transitive_inference_rejects_whole_chain() {
         failure.diagnostics
     );
 }
+
+#[test]
+fn v009_compensate_rejects_mutation_of_outer_variable() {
+    assert_fails_at(
+        r#"
+        fn effect() -> int32 { return 1; }
+        fn main() -> int32 reversible {
+            var x = "A";
+            effect() compensate {
+                x = "B";
+            };
+            return 1;
+        }
+        "#,
+        "typecheck",
+        "cannot assign to outer variable 'x' inside compensate block",
+    );
+}

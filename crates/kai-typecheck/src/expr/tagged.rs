@@ -99,6 +99,8 @@ pub(crate) fn compensate_expr(checker: &mut Checker, c: &CompensateExpr) -> Type
     }
 
     checker.locals.push_scope();
+    let boundary = checker.locals.next_id();
+    
     let ret_hint = KaiType::Unit;
     let stmts: Vec<_> = c
         .stmts
@@ -107,10 +109,42 @@ pub(crate) fn compensate_expr(checker: &mut Checker, c: &CompensateExpr) -> Type
         .collect();
     checker.locals.pop_scope();
 
+    let mut refs = Vec::new();
+    for s in &stmts {
+        collect_refs_stmt(s, &mut refs);
+    }
+    
+    let mut captures: Vec<kai_tast::TypedCapture> = Vec::new();
+    for id in refs {
+        if id.0 >= boundary || captures.iter().any(|c| c.local == id) {
+            continue;
+        }
+        let Some(info) = checker.locals.info_of(id) else {
+            continue;
+        };
+        captures.push(kai_tast::TypedCapture {
+            local: id,
+            ty: info.ty.clone(),
+        });
+    }
+
+    // P2.1 Immutability check: forbid mutating captured variables.
+    for s in &stmts {
+        if let Some(mutated_id) = crate::expr::collect::find_outer_mutation(s, boundary) {
+            checker.error(kai_diagnostics::Diagnostic {
+                severity: kai_diagnostics::Severity::Error,
+                message: format!("cannot assign to outer variable '{}' inside compensate block", checker.locals.name_of(mutated_id)),
+                span: c.base.span, // Better if we had the assign span, but this works
+                file: None,
+            });
+        }
+    }
+
     TypedExpr::new(
         TypedExprKind::Compensate {
             base: Box::new(base),
             stmts,
+            captures,
             releases: Vec::new(),
         },
         call_ty,

@@ -120,3 +120,55 @@ pub(crate) fn is_import_alias(checker: &Checker, base: &Expr) -> bool {
     }
 }
 
+
+pub(crate) fn find_outer_mutation(s: &kai_tast::TypedStmt, boundary: u32) -> Option<LocalId> {
+    use kai_tast::TypedStmt;
+    match s {
+        TypedStmt::Assign(a) => {
+            if a.root.0 < boundary {
+                return Some(a.root);
+            }
+            None
+        }
+        TypedStmt::If(i) => {
+            for stmt in &i.then_block.stmts {
+                if let Some(id) = find_outer_mutation(stmt, boundary) {
+                    return Some(id);
+                }
+            }
+            if let Some(b) = &i.else_block {
+                for stmt in &b.stmts {
+                    if let Some(id) = find_outer_mutation(stmt, boundary) {
+                        return Some(id);
+                    }
+                }
+            }
+            None
+        }
+        TypedStmt::For(f) => {
+            for stmt in &f.body.stmts {
+                if let Some(id) = find_outer_mutation(stmt, boundary) {
+                    return Some(id);
+                }
+            }
+            None
+        }
+        TypedStmt::While(w) => {
+            for stmt in &w.body.stmts {
+                if let Some(id) = find_outer_mutation(stmt, boundary) {
+                    return Some(id);
+                }
+            }
+            None
+        }
+        TypedStmt::Block(b) => {
+            for stmt in &b.stmts {
+                if let Some(id) = find_outer_mutation(stmt, boundary) {
+                    return Some(id);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}

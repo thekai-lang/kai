@@ -152,6 +152,8 @@ pub enum TypedExprKind {
     Compensate {
         base: Box<TypedExpr>,
         stmts: Vec<crate::stmt::TypedStmt>,
+        /// Environment bindings captured by this block from the surrounding scope.
+        captures: Vec<TypedCapture>,
         /// Locals declared by the compensation block, released after `stmts`
         /// evaluate (ownership pass fills this; codegen emits them).
         releases: Vec<(crate::symbol::LocalId, KaiType)>,
