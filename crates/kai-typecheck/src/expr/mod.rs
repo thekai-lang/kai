@@ -366,6 +366,7 @@ fn binary_node(op: BinaryOp, lhs: TypedExpr, rhs: TypedExpr, ty: KaiType) -> Typ
             op,
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
+            rhs_hoists: Vec::new(),
         },
         ty,
     )

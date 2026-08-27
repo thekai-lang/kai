@@ -62,8 +62,8 @@ pub(crate) fn emit<'ctx>(
         TypedExprKind::LocalRef(local) => load_local(ctx, frame, *local, &ty),
         TypedExprKind::Neg(inner) => arith::neg(ctx, frame, inner, &ty, expr.span),
         TypedExprKind::Not(inner) => arith::not(ctx, frame, inner),
-        TypedExprKind::Binary { op, lhs, rhs } => {
-            arith::binary(ctx, frame, *op, lhs, rhs, expr.span)
+        TypedExprKind::Binary { op, lhs, rhs, rhs_hoists, .. } => {
+            arith::binary(ctx, frame, *op, lhs, rhs, rhs_hoists, expr.span)
         }
         // Poisoned recovery node; only reachable in programs that failed
         // upstream. `undef` keeps emission total without inventing behavior.

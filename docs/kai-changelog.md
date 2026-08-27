@@ -10,12 +10,23 @@
 - **co.fallback Temporal retain/release**: `else_bb` was missing the `KaiType::Temporal` arm in both step 1 (retain for consumer) and step 2 (release creation claim), causing double-free of `@wallclock` headers and leak of `@local` temporals. Fixed by mirroring the `some_bb` pattern. Also fixed `release_header_value` call path for wallclock headers: it used generic `kai_release` instead of `kai_wallclock_release` — now routes through `emit_release_slot` which dispatches correctly.
 - **IntLit in `fallback_is_fresh`**: scalar temporal literals like `int32 @wallclock(30m) = 42` were not identified as fresh owned temps, skipping the step 2 release.
 
+## v0.0.8.5 — B1 exemption resolved: `&&`/`||` rhs borrow-temp leak fix
+
+- **B1 exemption resolved — `&&`/`||` rhs borrow-position temporaries no longer leak**: the ownership pass now recurses into both sides of `&&`/`||`. Lhs children are hoisted normally (always evaluated); rhs children are hoisted with throwaway scopes whose Let bindings are stored in `rhs_hoists` and emitted inside the `and.rhs` basic block — only executed when short-circuit doesn't skip. This completes the B1 exemption declared in v0.0.5.1 and deferred in v0.0.6: "real materialization nodes for `&&`/`||` borrow-position temporaries." Whitepaper §9.11 (scope-exit release) already specifies this behavior; the implementation now matches.
+- **`hoist_root` helper**: extracted from `hoist_borrow_temps` with a `register_scope: bool` parameter, allowing rhs_hoists to skip scope registration (prevents double-release at scope exit — they are released inside the `and.rhs` block, not at block end).
+- **TAST `rhs_hoists` field**: `TypedExprKind::Binary` gains `rhs_hoists: Vec<TypedStmt>` for `And`/`Or` operators. Other binary ops carry `rhs_hoists: Vec::new()`.
+- **Codegen `short_circuit`**: now accepts `rhs_hoists: &[TypedStmt]`, emits Let statements + `alloca_in_entry` + `emit_release_slot` inside the `rhs_block`.
+- **Tests**: 332 passing; golden IR v005 regenerated; JIT regression tests pass. ASan-verified 0 leaks on `stress_heap.kai` (40 heap-allocating operations per iteration × 10 iterations).
+
 ## KNOWN ISSUES
 
-No open critical issues as of v0.0.8.4.
+No open critical issues as of v0.0.8.5.
 
 ### `unwrap_or` heap-payload double-free — RESOLVED in v0.0.8.4
 `optional_val.unwrap_or(heap_struct_default)` previously crashed with glibc `tcache_thread_shutdown(): unaligned tcache chunk detected` when the payload type was heap-bearing. Root cause: the `lazy_select` codegen path copied the selected payload out of the tagged union without retaining heap fields, while consumer-side retain/release assumed co-ownership. Fixed by F2/F3 orphan-claim hoisting (`hoist_borrow_temps` now recurses into always-evaluated positions — coalesce lhs, unwrap_or receiver, catch base) so heap-bearing owned temps materialize into hidden locals and release per scope.
+
+### `&&`/`||` rhs borrow-temp leak — RESOLVED in v0.0.8.5
+The B1 exemption from v0.0.5.1 deferred `&&`/`||` subtrees: "hoisting would evaluate the right side even when short-circuited; that needs real materialization nodes." Owned temporaries in the rhs of `&&`/`||` (e.g., `x == "alpha" && y == "delta"`) leaked because the rhs was never hoisted. Fixed by hoisting rhs children into throwaway scopes, storing their Let bindings in `rhs_hoists`, and emitting them inside the `and.rhs` basic block — only reached when short-circuit doesn't skip. ASan-verified 0 leaks.
 
 ### `catch.join` terminator gap — RESOLVED in v0.0.8.1
 Previously listed as known gap from v0.0.6.1; fixed by unconditional `position_at_end(join_bb)` after both branch paths complete.

@@ -33,6 +33,7 @@ fn bin(op: BinaryOp, lhs: i64, rhs: i64) -> TypedExpr {
             op,
             lhs: Box::new(TypedExpr::new(TypedExprKind::IntLit(lhs), int.clone())),
             rhs: Box::new(TypedExpr::new(TypedExprKind::IntLit(rhs), int.clone())),
+            rhs_hoists: Vec::new(),
         },
         int,
     )

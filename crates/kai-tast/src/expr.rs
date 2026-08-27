@@ -62,6 +62,12 @@ pub enum TypedExprKind {
         op: BinaryOp,
         lhs: Box<TypedExpr>,
         rhs: Box<TypedExpr>,
+        /// Let statements collected from owned-temp hoisting inside the rhs
+        /// of `&&`/`||`. These must be emitted inside the short-circuit rhs
+        /// basic block (not the outer scope) so the allocation + release only
+        /// execute when the rhs branch is actually taken, preserving
+        /// short-circuit semantics.
+        rhs_hoists: Vec<crate::TypedStmt>,
     },
     /// Poisoned node carried over from parser recovery. Only ever present in
     /// programs that already failed; codegen lowers it to `undef` so every

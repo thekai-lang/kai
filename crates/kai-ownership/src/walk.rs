@@ -207,8 +207,8 @@ pub(crate) fn walk_stmt(
 /// `expr` itself — the caller decides whether the root needs materializing.
 ///
 /// Skipped deliberately:
-/// - `&&`/`||` subtrees — hoisting would evaluate the rhs temp even when
-///   short-circuited; needs real materialization nodes (v0.0.6).
+/// - `&&`/`||` rhs subtrees — hoisting would evaluate the rhs temp even
+///   when short-circuited; the lhs (always evaluated) IS recursed into.
 /// - Struct/array literal members — those are OWNING slots already handled
 ///   by the retain wrappers; their dtor releases children.
 /// - Lazy positions (unwrap_or default, coalesce rhs, catch body/tail,
@@ -222,8 +222,33 @@ fn hoist_children(
     out: &mut Vec<TypedStmt>,
 ) {
     match &mut expr.kind {
-        // Guarded by control flow: leave untouched.
-        TypedExprKind::Binary { op: BinaryOp::And | BinaryOp::Or, .. } => {}
+        // Short-circuit: lhs is always evaluated, rhs is lazy (guarded).
+        // LHS hoisting is unconditional (pushed to `out`, registered in
+        // scope). RHS hoisting goes into `rhs_hoists` WITHOUT scope
+        // registration — the codegen emits those Let statements + releases
+        // inside the short-circuit rhs basic block, preserving short-circuit
+        // semantics (allocation + release only happen when rhs branch taken).
+        TypedExprKind::Binary {
+            op: BinaryOp::And | BinaryOp::Or,
+            lhs,
+            rhs,
+            rhs_hoists,
+        } => {
+            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false);
+            // Use a throwaway scope for rhs so that nested owned-temp
+            // hoists inside the rhs (e.g. string literals in `a == "x"`)
+            // are NOT registered in the real scope. If they were, the
+            // scope-exit release path would double-free them (once in the
+            // short-circuit rhs basic block via rhs_hoists, once at scope
+            // exit). The throwaway scope just absorbs the declare() calls
+            // so hoist_children doesn't panic on the empty-frames check.
+            let mut throwaway = Scopes::default();
+            throwaway.push();
+            let mut conditional_out = Vec::new();
+            hoist_children(heap, rhs, fresh, &mut throwaway, &mut conditional_out);
+            hoist_root(heap, rhs, fresh, &mut throwaway, &mut conditional_out, false, false);
+            *rhs_hoists = conditional_out;
+        }
         // v0.0.6: `Some`/`Ok`/`Err` payloads are owning slots handled by
         // the retain wrapper; recursing into them lets nested owned temps
         // (e.g. a Call inside Ok(Call(...))) be hoisted before the wrapper.
@@ -295,13 +320,31 @@ pub(crate) fn hoist_borrow_temps(
     root_is_transfer: bool,
 ) {
     hoist_children(heap, expr, fresh, scopes, out);
+    hoist_root(heap, expr, fresh, scopes, out, root_is_transfer, true);
+}
 
+/// Materialize the root node if it is a heap-bearing owned temp.
+/// `register_scope` controls whether the local is declared in the
+/// enclosing scope (true) or left unregistered (false). The latter is
+/// used for rhs of `&&`/`||` where the release must happen inside the
+/// short-circuit rhs basic block, not at scope exit.
+fn hoist_root(
+    heap: &HeapBearing,
+    expr: &mut TypedExpr,
+    fresh: &mut FreshIds,
+    scopes: &mut Scopes,
+    out: &mut Vec<TypedStmt>,
+    root_is_transfer: bool,
+    register_scope: bool,
+) {
     if !root_is_transfer && heap.is(&expr.ty) && is_owned_temp(expr) {
         let local = fresh.alloc();
         let ty = expr.ty.clone();
         let init =
             std::mem::replace(expr, TypedExpr::new(TypedExprKind::LocalRef(local), ty.clone()));
-        scopes.declare(local, ty, true);
+        if register_scope {
+            scopes.declare(local, ty, true);
+        }
         out.push(TypedStmt::Let(kai_tast::TypedLet {
             local,
             name: "$tmp".into(),
@@ -386,7 +429,7 @@ pub(crate) fn walk_expr(
         TypedExprKind::Neg(inner) | TypedExprKind::Not(inner) | TypedExprKind::Retain(inner) => {
             walk_expr(heap, inner, scopes, fresh)
         }
-        TypedExprKind::Binary { op: _, lhs, rhs } => {
+        TypedExprKind::Binary { op: _, lhs, rhs, .. } => {
             walk_expr(heap, lhs, scopes, fresh);
             walk_expr(heap, rhs, scopes, fresh);
         }

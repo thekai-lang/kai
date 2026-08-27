@@ -190,6 +190,7 @@ fn jit_call_argument_flows_into_result() {
                         TypedExprKind::LocalRef(LocalId(1)),
                         KaiType::Int32,
                     )),
+                    rhs_hoists: Vec::new(),
                 },
                 KaiType::Int32,
             )))],

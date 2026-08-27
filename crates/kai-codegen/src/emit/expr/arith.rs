@@ -359,13 +359,14 @@ pub(crate) fn binary<'ctx>(
     op: BinaryOp,
     lhs: &TypedExpr,
     rhs: &TypedExpr,
+    rhs_hoists: &[kai_tast::TypedStmt],
     span: kai_diagnostics::Span,
 ) -> BasicValueEnum<'ctx> {
     match op {
         // `a && b`: evaluate b only when a is true.
         // `a || b`: evaluate b only when a is false.
-        BinaryOp::And => short_circuit(ctx, frame, lhs, rhs, false),
-        BinaryOp::Or => short_circuit(ctx, frame, lhs, rhs, true),
+        BinaryOp::And => short_circuit(ctx, frame, lhs, rhs, rhs_hoists, false),
+        BinaryOp::Or => short_circuit(ctx, frame, lhs, rhs, rhs_hoists, true),
         _ => {
             let l = emit(ctx, frame, lhs);
             let r = emit(ctx, frame, rhs);
@@ -383,6 +384,7 @@ pub(crate) fn short_circuit<'ctx>(
     frame: &mut Frame<'ctx>,
     lhs_expr: &TypedExpr,
     rhs_expr: &TypedExpr,
+    rhs_hoists: &[kai_tast::TypedStmt],
     is_or: bool,
 ) -> BasicValueEnum<'ctx> {
     let name = if is_or { "or" } else { "and" };
@@ -407,10 +409,32 @@ pub(crate) fn short_circuit<'ctx>(
         .builder
         .build_conditional_branch(lhs_val, true_target, false_target);
 
+    // --- rhs_block ---------------------------------------------------
     ctx.builder.position_at_end(rhs_block);
+
+    // Emit hoisted owned temps from the rhs of `&&`/`||`. These Let
+    // statements create allocas + kai_string_new calls (or other heap
+    // allocations) inside the rhs_block so they only execute when the
+    // rhs branch is actually taken, preserving short-circuit semantics.
+    for stmt in rhs_hoists {
+        if let kai_tast::TypedStmt::Let(binding) = stmt {
+            let value = super::emit(ctx, frame, &binding.init);
+            let slot = crate::emit::alloca_in_entry(ctx, function, value.get_type(), &binding.name);
+            let _ = ctx.builder.build_store(slot, value);
+            frame.bind(binding.local, slot);
+        }
+    }
+
     let rhs_val = emit(ctx, frame, rhs_expr).into_int_value();
     let rhs_end: BasicBlock = ctx.builder.get_insert_block().expect("insert position");
     if rhs_end.get_terminator().is_none() {
+        // Release the hoisted owned temps before leaving rhs_block.
+        for stmt in rhs_hoists {
+            if let kai_tast::TypedStmt::Let(binding) = stmt {
+                let slot = frame.slot(binding.local);
+                crate::emit::ownership::emit_release_slot(ctx, &binding.init.ty, slot);
+            }
+        }
         let _ = ctx.builder.build_unconditional_branch(merge_block);
     }
 
