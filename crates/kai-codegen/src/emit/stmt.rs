@@ -13,7 +13,7 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
         TypedStmt::Return(value) => ret(ctx, frame, value.as_ref()),
         TypedStmt::Let(binding) => let_stmt(ctx, frame, binding),
         TypedStmt::Assign(assign) => assign_stmt(ctx, frame, assign),
-        TypedStmt::If(if_) => if_stmt(ctx, frame, if_),
+        TypedStmt::If(if_) => self::if_stmt(ctx, frame, if_),
         TypedStmt::Block(block) => {
             for inner in &block.stmts {
                 emit(ctx, frame, inner);
@@ -117,11 +117,6 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
         }
         TypedStmt::For(f) => for_stmt(ctx, frame, f),
         TypedStmt::While(w) => while_stmt(ctx, frame, w),
-        // §5.3.1 ledger push: resolves the Place (same root/path as the
-        // following Assign), loads the OLD value, retains it if heap-bearing
-        // (snapshot owns the claim), then appends to the current activation's
-        // ledger (§5.3.5). E2 snapshot emission.
-        TypedStmt::ReversiblePush(push) => crate::emit::reversible::emit_push(ctx, frame, push),
         // Ownership marker from the pass: the local's heap content leaves
         // scope here (§9.4). The slot points at storage of `ty`.
         TypedStmt::ReleaseLocal { local, ty } => {
@@ -233,13 +228,14 @@ fn for_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, f: &TypedFor) {
 }
 
 fn ret<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, value: Option<&kai_tast::TypedExpr>) {
-    crate::emit::reversible::commit_if_reversible(ctx, frame);
     match value {
         Some(e) => {
             let value = expr::emit(ctx, frame, e);
+            crate::emit::reversible::commit_if_reversible(ctx, frame);
             let _ = ctx.builder.build_return(Some(&value));
         }
         None => {
+            crate::emit::reversible::commit_if_reversible(ctx, frame);
             let _ = ctx.builder.build_return(None);
         }
     }
@@ -260,6 +256,11 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
     // element storage. The index expression re-evaluates at THIS site —
     // it rides in the step (§9.3).
     let ptr = resolve_place(ctx, frame, assign.root, &assign.path, &assign.value.ty);
+    
+    if assign.push_reversible {
+        crate::emit::reversible::emit_push_inline(ctx, ptr, &assign.value.ty);
+    }
+
 
     // Prepare the replacement FIRST — the RHS may alias the destination
     // (`arr[0] = arr[0]`), so nothing at the destination may be released

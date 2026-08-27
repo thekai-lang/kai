@@ -57,13 +57,6 @@ fn check_stmt(
             check_block(&w.body, all_fns, diagnostics);
         }
         TypedStmt::Block(b) => check_block(b, all_fns, diagnostics),
-        TypedStmt::ReversiblePush(p) => {
-            for step in &p.path {
-                if let kai_tast::TypedPlaceStep::Index(idx) = step {
-                    check_expr(idx, all_fns, false, diagnostics);
-                }
-            }
-        }
         TypedStmt::Return(Some(e))
         | TypedStmt::Expr(e)
         | TypedStmt::Require(e)

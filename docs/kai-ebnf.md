@@ -5,9 +5,7 @@ covering the v0.0.7 trust-aware layer's syntax (`@local`/`@wallclock`,
 locked in whitepaper v0.15 and refined through v0.17's §5.1.7) and §9a
 covering the v0.0.8 `require`/`observe` pair — **syntax AND semantics both
 locked** (whitepaper v0.20–v0.22, §5.2). The rest of the trust-aware layer —
-`reversible`, `compensate`, `dsl sql`, `dsl api`, `@override` — remains
-excluded: those sections of §5 aren't locked yet, so their grammar isn't
-written until they are, same discipline as before.
+`dsl sql`, `dsl api`, `@override` — remains **excluded**: those sections of §5 aren't locked yet, so their grammar isn't written until they are, **same discipline as before.**
 
 **Method:** every rule below is derived from an example that already exists in
 the whitepaper or the actual v0.0.1/v0.0.2 implementation. Nothing here is
@@ -407,7 +405,7 @@ ClosureLit   ::= 'fn' '(' [ ParamList ] ')' '->' Type Block
 
 ## 9. Trust-aware layer grammar — v0.0.7 (`@local`/`@wallclock` only)
 
-Only §5.1 (temporal types), locked in whitepaper v0.15, gets grammar here alongside §9a below. `require`/`observe` (§5.2) is **v0.0.8** scope per roadmap §7 — syntax stable since v0.2, semantics formalized in whitepaper v0.20–v0.22 (§5.2.1–§5.2.2); kept separate so a reader doesn't infer v0.0.7 implements it. `reversible`/`compensate` (§5.3) and `dsl sql`/`dsl api` (§5.4) stay excluded entirely until those sections go through the same lock-then-grammar sequence §5.1 just did.
+Only §5.1 (temporal types), locked in whitepaper v0.15, gets grammar here alongside §9a below. `require`/`observe` (§5.2) is **v0.0.8** scope per roadmap §7 — syntax stable since v0.2, semantics formalized in whitepaper v0.20–v0.22 (§5.2.1–§5.2.2); kept separate so a reader doesn't infer v0.0.7 implements it. `reversible`/`compensate` (§5.3) is **v0.0.9** scope, locked in v0.25. `dsl sql`/`dsl api` (§5.4) stay excluded entirely until those sections go through the same lock-then-grammar sequence.
 
 ```ebnf
 DurationLit  ::= DecimalInt DurationUnit
@@ -494,3 +492,9 @@ own changelog.
 12. ~~Cyclic struct definitions — undefined behavior.~~ **Resolved: compile error**, detected via DFS over the `TypeDecl` dependency graph, diagnostic reports the cycle path. Indirection/boxing to legitimately express self-referential types remains undesigned — tracked as its own open item in the whitepaper's Appendix A, not here (it's a semantic/type-system question, not a grammar one).
 13. ~~Discarding a non-`unit` call result.~~ **Resolved.** Allowed silently for v0.0.3–v0.0.5 (no correctness risk for scalars/structs). From v0.0.6, both `Result` **and** `Optional` require a diagnostic when discarded silently — symmetric, not `Result`-only (whitepaper §9.9a, implemented v0.0.6.2, 295 passing tests). `_ = expr;` (§9.9b) is the sole escape hatch. This remains a typecheck-phase rule, not a grammar one — `CallExprStmt ::= Expr ';'` accepts the shape regardless; the checker decides.
 14. **NEW — type/function namespace separation.** `type Point = {...}` and a hypothetical `fn Point(...)` don't collide: struct-literal syntax (`Point { ... }`) and call syntax (`Point(...)`) are already unambiguous to the parser via lookahead on the token following the identifier, so type names and function names can be treated as separate namespaces at the resolver level without any grammar ambiguity. Recorded here as the working assumption; not yet exercised by real code.
+## 10. Reversible grammar — v0.0.9 (`reversible`/`compensate`)
+
+```ebnf
+FnDecl ::= "fn" Ident "(" ParamList ")" [ "->" Type ] [ "reversible" ] Block
+Expr   ::= CallExpr [ "compensate" Block ]
+```

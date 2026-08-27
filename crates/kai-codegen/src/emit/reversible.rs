@@ -18,7 +18,7 @@ use crate::emit::ownership;
 use crate::frame::Frame;
 use inkwell::types::BasicType;
 use inkwell::values::FunctionValue;
-use kai_tast::{KaiType, ReversiblePush};
+use kai_tast::{KaiType};
 
 /// Emits `kai_reversible_commit` (release this activation's snapshot claims
 /// before leaving) when `frame` is inside a `reversible` function (§5.3).
@@ -51,22 +51,20 @@ pub(crate) fn unwind_if_active<'ctx>(ctx: &Ctx<'ctx>) {
 /// hit the SAME element — index expressions (pure in Kai) re-evaluate to the
 /// same slot with no intervening store. The ledger stores this resolved slot
 /// pointer, so UNWIND never re-evaluates a path expression.
-pub(crate) fn emit_push<'ctx>(
+pub(crate) fn emit_push_inline<'ctx>(
     ctx: &Ctx<'ctx>,
-    frame: &mut Frame<'ctx>,
-    push: &ReversiblePush,
+    place: inkwell::values::PointerValue<'ctx>,
+    ty: &kai_tast::KaiType,
 ) {
-    let place = crate::emit::stmt::resolve_place(ctx, frame, push.root, &push.path, &push.ty);
-
     // Snapshot buffer holds the OLD value WITH its heap claims retained.
-    let snap_ty = crate::types::to_llvm(ctx, &push.ty);
+    let snap_ty = crate::types::to_llvm(ctx, ty);
     let snapshot_slot =
         crate::emit::alloca_in_entry(ctx, crate::emit::current_function(ctx), snap_ty, "rev.snap");
-    let retained = ownership::emit_retain_slot(ctx, &push.ty, place);
+    let retained = ownership::emit_retain_slot(ctx, ty, place);
     let _ = ctx.builder.build_store(snapshot_slot, retained);
 
     let size = snap_ty.size_of().expect("reversible value is sized");
-    let dtor = snapshot_dtor(ctx, &push.ty);
+    let dtor = snapshot_dtor(ctx, ty);
 
     let args = [
         place.into(),
@@ -102,6 +100,7 @@ pub(crate) fn snapshot_dtor<'ctx>(
     let function: FunctionValue<'ctx> = ctx.module.add_function(&name, llvm, None);
     ctx.snapshot_dtors.borrow_mut().insert(key, function);
 
+    let saved_active = ctx.reversible_active.replace(false);
     let saved_block = ctx.builder.get_insert_block();
     let entry = ctx.context.append_basic_block(function, "entry");
     ctx.builder.position_at_end(entry);
@@ -114,6 +113,7 @@ pub(crate) fn snapshot_dtor<'ctx>(
     if let Some(block) = saved_block {
         ctx.builder.position_at_end(block);
     }
+    ctx.reversible_active.set(saved_active);
 
     function.as_global_value().as_pointer_value()
 }

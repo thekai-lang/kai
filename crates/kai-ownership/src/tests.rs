@@ -29,7 +29,7 @@ use super::*;
             path,
             op: None,
             value,
-            release_old: false,
+            release_old: false, push_reversible: false,
             span: kai_diagnostics::Span::new(0, 0),
         }
     }
@@ -238,7 +238,7 @@ use super::*;
             path: vec![],
             op: Some(BinaryOp::Add),
             value: int_lit(1),
-            release_old: false,
+            release_old: false, push_reversible: false,
             span: kai_diagnostics::Span::new(0, 0),
         };
         let body = block(vec![

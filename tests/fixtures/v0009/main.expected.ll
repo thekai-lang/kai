@@ -8,36 +8,32 @@ source_filename = "kai_module"
 @kai.panic.msg = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
 @kai.src.file = private unnamed_addr constant [9 x i8] c"main.kai\00", align 1
 @kai.panic.msg.1 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
+@kai.str = private unnamed_addr constant [5 x i8] c"moved"
 @kai.panic.msg.2 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
 @kai.panic.msg.3 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
-@kai.str = private unnamed_addr constant [5 x i8] c"moved"
-@kai.panic.msg.4 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
+@kai.panic.msg.4 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
 @kai.panic.msg.5 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
-@kai.panic.msg.6 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
-@kai.panic.msg.7 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
-@kai.panic.msg.8 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
+@kai.str.6 = private unnamed_addr constant [1 x i8] c"a"
+@kai.str.7 = private unnamed_addr constant [1 x i8] c"b"
+@kai.str.8 = private unnamed_addr constant [1 x i8] c"p"
 @kai.panic.msg.9 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
-@kai.str.10 = private unnamed_addr constant [1 x i8] c"a"
-@kai.str.11 = private unnamed_addr constant [1 x i8] c"b"
-@kai.str.12 = private unnamed_addr constant [1 x i8] c"p"
-@kai.panic.msg.13 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
-@kai.panic.msg.14 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
-@kai.panic.msg.15 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
-@kai.panic.msg.16 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
-@kai.str.17 = private unnamed_addr constant [5 x i8] c"moved"
-@kai.panic.msg.18 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
+@kai.panic.msg.10 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.panic.msg.11 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
+@kai.panic.msg.12 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.str.13 = private unnamed_addr constant [5 x i8] c"moved"
+@kai.panic.msg.14 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
+@kai.panic.msg.15 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
+@kai.str.16 = private unnamed_addr constant [1 x i8] c"p"
+@kai.panic.msg.17 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
+@kai.panic.msg.18 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
 @kai.panic.msg.19 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
-@kai.str.20 = private unnamed_addr constant [1 x i8] c"p"
-@kai.panic.msg.21 = private unnamed_addr constant [26 x i8] c"array index out of bounds\00", align 1
-@kai.panic.msg.22 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
-@kai.panic.msg.23 = private unnamed_addr constant [17 x i8] c"integer overflow\00", align 1
 
 define void @rework(ptr %ns, ptr %words, %Point %pt) {
 entry:
-  %rev.snap89 = alloca ptr, align 8
-  %rev.snap54 = alloca i32, align 4
-  %rev.snap40 = alloca i32, align 4
-  %rev.snap27 = alloca ptr, align 8
+  %rev.snap55 = alloca ptr, align 8
+  %rev.snap31 = alloca i32, align 4
+  %rev.snap18 = alloca i32, align 4
+  %rev.snap16 = alloca ptr, align 8
   %rev.snap = alloca i32, align 4
   %pt4 = alloca %Point, align 8
   %words2 = alloca ptr, align 8
@@ -72,8 +68,9 @@ in.bounds:                                        ; preds = %entry
   %retained = load i32, ptr %place.elem, align 4
   store i32 %retained, ptr %rev.snap, align 4
   call void @kai_reversible_push(ptr %place.elem, ptr %rev.snap, i64 ptrtoint (ptr getelementptr (i32, ptr null, i32 1) to i64), ptr null)
-  %arr.hdr5 = load ptr, ptr %ns1, align 8
-  %arr.len.p6 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr5, i32 0, i32 1
+  store i32 9, ptr %place.elem, align 4
+  %arr.hdr5 = load ptr, ptr %words2, align 8
+  %arr.len.p6 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr5, i32 0, i32 1
   %arr.len7 = load i64, ptr %arr.len.p6, align 4
   %bnd.high8 = icmp slt i64 0, %arr.len7
   %bnd.ok9 = and i1 true, %bnd.high8
@@ -82,180 +79,110 @@ in.bounds:                                        ; preds = %entry
 
 panic11:                                          ; preds = %in.bounds
   call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.1, i64 25, ptr @kai.src.file, i64 8, i64 8)
+  call void @kai_panic(ptr @kai.panic.msg.1, i64 25, ptr @kai.src.file, i64 9, i64 11)
   unreachable
 
 in.bounds12:                                      ; preds = %in.bounds
-  %arr.elems.p13 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr5, i32 0, i32 3
+  %arr.elems.p13 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr5, i32 0, i32 3
   %arr.elems14 = load ptr, ptr %arr.elems.p13, align 8
-  %place.elem15 = getelementptr inbounds i32, ptr %arr.elems14, i64 0
-  store i32 9, ptr %place.elem15, align 4
-  %arr.hdr16 = load ptr, ptr %words2, align 8
-  %arr.len.p17 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr16, i32 0, i32 1
-  %arr.len18 = load i64, ptr %arr.len.p17, align 4
-  %bnd.high19 = icmp slt i64 0, %arr.len18
-  %bnd.ok20 = and i1 true, %bnd.high19
-  %bnd.bad21 = xor i1 %bnd.ok20, true
-  br i1 %bnd.bad21, label %panic22, label %in.bounds23
-
-panic22:                                          ; preds = %in.bounds12
-  call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.2, i64 25, ptr @kai.src.file, i64 9, i64 11)
-  unreachable
-
-in.bounds23:                                      ; preds = %in.bounds12
-  %arr.elems.p24 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr16, i32 0, i32 3
-  %arr.elems25 = load ptr, ptr %arr.elems.p24, align 8
-  %place.elem26 = getelementptr inbounds ptr, ptr %arr.elems25, i64 0
-  %ret.hdr28 = load ptr, ptr %place.elem26, align 8
-  call void @kai_retain(ptr %ret.hdr28)
-  store ptr %ret.hdr28, ptr %rev.snap27, align 8
-  call void @kai_reversible_push(ptr %place.elem26, ptr %rev.snap27, i64 ptrtoint (ptr getelementptr (ptr, ptr null, i32 1) to i64), ptr @kai.snapREL_string)
-  %arr.hdr29 = load ptr, ptr %words2, align 8
-  %arr.len.p30 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr29, i32 0, i32 1
-  %arr.len31 = load i64, ptr %arr.len.p30, align 4
-  %bnd.high32 = icmp slt i64 0, %arr.len31
-  %bnd.ok33 = and i1 true, %bnd.high32
-  %bnd.bad34 = xor i1 %bnd.ok33, true
-  br i1 %bnd.bad34, label %panic35, label %in.bounds36
-
-panic35:                                          ; preds = %in.bounds23
-  call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.3, i64 25, ptr @kai.src.file, i64 9, i64 11)
-  unreachable
-
-in.bounds36:                                      ; preds = %in.bounds23
-  %arr.elems.p37 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr29, i32 0, i32 3
-  %arr.elems38 = load ptr, ptr %arr.elems.p37, align 8
-  %place.elem39 = getelementptr inbounds ptr, ptr %arr.elems38, i64 0
+  %place.elem15 = getelementptr inbounds ptr, ptr %arr.elems14, i64 0
+  %ret.hdr17 = load ptr, ptr %place.elem15, align 8
+  call void @kai_retain(ptr %ret.hdr17)
+  store ptr %ret.hdr17, ptr %rev.snap16, align 8
+  call void @kai_reversible_push(ptr %place.elem15, ptr %rev.snap16, i64 ptrtoint (ptr getelementptr (ptr, ptr null, i32 1) to i64), ptr @kai.snapREL_string)
   %str = call ptr @kai_string_new(ptr @kai.str, i64 5)
-  %rel.hdr = load ptr, ptr %place.elem39, align 8
+  %rel.hdr = load ptr, ptr %place.elem15, align 8
   call void @kai_release(ptr %rel.hdr)
-  store ptr %str, ptr %place.elem39, align 8
+  store ptr %str, ptr %place.elem15, align 8
   %place = getelementptr inbounds nuw %Point, ptr %pt4, i32 0, i32 0
-  %retained41 = load i32, ptr %place, align 4
-  store i32 %retained41, ptr %rev.snap40, align 4
-  call void @kai_reversible_push(ptr %place, ptr %rev.snap40, i64 ptrtoint (ptr getelementptr (i32, ptr null, i32 1) to i64), ptr null)
-  %place42 = getelementptr inbounds nuw %Point, ptr %pt4, i32 0, i32 0
-  store i32 41, ptr %place42, align 4
-  %arr.hdr43 = load ptr, ptr %ns1, align 8
-  %arr.len.p44 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr43, i32 0, i32 1
-  %arr.len45 = load i64, ptr %arr.len.p44, align 4
-  %bnd.high46 = icmp slt i64 1, %arr.len45
-  %bnd.ok47 = and i1 true, %bnd.high46
-  %bnd.bad48 = xor i1 %bnd.ok47, true
-  br i1 %bnd.bad48, label %panic49, label %in.bounds50
+  %retained19 = load i32, ptr %place, align 4
+  store i32 %retained19, ptr %rev.snap18, align 4
+  call void @kai_reversible_push(ptr %place, ptr %rev.snap18, i64 ptrtoint (ptr getelementptr (i32, ptr null, i32 1) to i64), ptr null)
+  store i32 41, ptr %place, align 4
+  %arr.hdr20 = load ptr, ptr %ns1, align 8
+  %arr.len.p21 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr20, i32 0, i32 1
+  %arr.len22 = load i64, ptr %arr.len.p21, align 4
+  %bnd.high23 = icmp slt i64 1, %arr.len22
+  %bnd.ok24 = and i1 true, %bnd.high23
+  %bnd.bad25 = xor i1 %bnd.ok24, true
+  br i1 %bnd.bad25, label %panic26, label %in.bounds27
 
-panic49:                                          ; preds = %in.bounds36
+panic26:                                          ; preds = %in.bounds12
   call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.4, i64 25, ptr @kai.src.file, i64 11, i64 8)
+  call void @kai_panic(ptr @kai.panic.msg.2, i64 25, ptr @kai.src.file, i64 11, i64 8)
   unreachable
 
-in.bounds50:                                      ; preds = %in.bounds36
-  %arr.elems.p51 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr43, i32 0, i32 3
-  %arr.elems52 = load ptr, ptr %arr.elems.p51, align 8
-  %place.elem53 = getelementptr inbounds i32, ptr %arr.elems52, i64 1
-  %retained55 = load i32, ptr %place.elem53, align 4
-  store i32 %retained55, ptr %rev.snap54, align 4
-  call void @kai_reversible_push(ptr %place.elem53, ptr %rev.snap54, i64 ptrtoint (ptr getelementptr (i32, ptr null, i32 1) to i64), ptr null)
-  %arr.hdr56 = load ptr, ptr %ns1, align 8
-  %arr.len.p57 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr56, i32 0, i32 1
-  %arr.len58 = load i64, ptr %arr.len.p57, align 4
-  %bnd.high59 = icmp slt i64 1, %arr.len58
-  %bnd.ok60 = and i1 true, %bnd.high59
-  %bnd.bad61 = xor i1 %bnd.ok60, true
-  br i1 %bnd.bad61, label %panic62, label %in.bounds63
-
-panic62:                                          ; preds = %in.bounds50
-  call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.5, i64 25, ptr @kai.src.file, i64 11, i64 8)
-  unreachable
-
-in.bounds63:                                      ; preds = %in.bounds50
-  %arr.elems.p64 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr56, i32 0, i32 3
-  %arr.elems65 = load ptr, ptr %arr.elems.p64, align 8
-  %place.elem66 = getelementptr inbounds i32, ptr %arr.elems65, i64 1
+in.bounds27:                                      ; preds = %in.bounds12
+  %arr.elems.p28 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr20, i32 0, i32 3
+  %arr.elems29 = load ptr, ptr %arr.elems.p28, align 8
+  %place.elem30 = getelementptr inbounds i32, ptr %arr.elems29, i64 1
+  %retained32 = load i32, ptr %place.elem30, align 4
+  store i32 %retained32, ptr %rev.snap31, align 4
+  call void @kai_reversible_push(ptr %place.elem30, ptr %rev.snap31, i64 ptrtoint (ptr getelementptr (i32, ptr null, i32 1) to i64), ptr null)
   %tmp = load ptr, ptr %ns1, align 8
-  %arr.len.p67 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %tmp, i32 0, i32 1
-  %arr.len68 = load i64, ptr %arr.len.p67, align 4
-  %bnd.high69 = icmp slt i64 0, %arr.len68
-  %bnd.ok70 = and i1 true, %bnd.high69
-  %bnd.bad71 = xor i1 %bnd.ok70, true
-  br i1 %bnd.bad71, label %panic72, label %in.bounds73
+  %arr.len.p33 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %tmp, i32 0, i32 1
+  %arr.len34 = load i64, ptr %arr.len.p33, align 4
+  %bnd.high35 = icmp slt i64 0, %arr.len34
+  %bnd.ok36 = and i1 true, %bnd.high35
+  %bnd.bad37 = xor i1 %bnd.ok36, true
+  br i1 %bnd.bad37, label %panic38, label %in.bounds39
 
-panic72:                                          ; preds = %in.bounds63
+panic38:                                          ; preds = %in.bounds27
   call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.6, i64 25, ptr @kai.src.file, i64 11, i64 13)
+  call void @kai_panic(ptr @kai.panic.msg.3, i64 25, ptr @kai.src.file, i64 11, i64 13)
   unreachable
 
-in.bounds73:                                      ; preds = %in.bounds63
-  %arr.elems.p74 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %tmp, i32 0, i32 3
-  %arr.elems75 = load ptr, ptr %arr.elems.p74, align 8
-  %elem.slot = getelementptr inbounds i32, ptr %arr.elems75, i64 0
+in.bounds39:                                      ; preds = %in.bounds27
+  %arr.elems.p40 = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %tmp, i32 0, i32 3
+  %arr.elems41 = load ptr, ptr %arr.elems.p40, align 8
+  %elem.slot = getelementptr inbounds i32, ptr %arr.elems41, i64 0
   %elem = load i32, ptr %elem.slot, align 4
   %field = getelementptr inbounds nuw %Point, ptr %pt4, i32 0, i32 0
-  %field76 = load i32, ptr %field, align 4
-  %ovf = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %elem, i32 %field76)
+  %field42 = load i32, ptr %field, align 4
+  %ovf = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %elem, i32 %field42)
   %ovf.flag = extractvalue { i32, i1 } %ovf, 1
-  br i1 %ovf.flag, label %panic77, label %arith.ok
+  br i1 %ovf.flag, label %panic43, label %arith.ok
 
-panic77:                                          ; preds = %in.bounds73
+panic43:                                          ; preds = %in.bounds39
   call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.7, i64 16, ptr @kai.src.file, i64 11, i64 13)
+  call void @kai_panic(ptr @kai.panic.msg.4, i64 16, ptr @kai.src.file, i64 11, i64 13)
   unreachable
 
-arith.ok:                                         ; preds = %in.bounds73
+arith.ok:                                         ; preds = %in.bounds39
   %add = extractvalue { i32, i1 } %ovf, 0
-  store i32 %add, ptr %place.elem66, align 4
-  %arr.hdr78 = load ptr, ptr %words2, align 8
-  %arr.len.p79 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr78, i32 0, i32 1
-  %arr.len80 = load i64, ptr %arr.len.p79, align 4
-  %bnd.high81 = icmp slt i64 1, %arr.len80
-  %bnd.ok82 = and i1 true, %bnd.high81
-  %bnd.bad83 = xor i1 %bnd.ok82, true
-  br i1 %bnd.bad83, label %panic84, label %in.bounds85
+  store i32 %add, ptr %place.elem30, align 4
+  %arr.hdr44 = load ptr, ptr %words2, align 8
+  %arr.len.p45 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr44, i32 0, i32 1
+  %arr.len46 = load i64, ptr %arr.len.p45, align 4
+  %bnd.high47 = icmp slt i64 1, %arr.len46
+  %bnd.ok48 = and i1 true, %bnd.high47
+  %bnd.bad49 = xor i1 %bnd.ok48, true
+  br i1 %bnd.bad49, label %panic50, label %in.bounds51
 
-panic84:                                          ; preds = %arith.ok
+panic50:                                          ; preds = %arith.ok
   call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.8, i64 25, ptr @kai.src.file, i64 12, i64 11)
+  call void @kai_panic(ptr @kai.panic.msg.5, i64 25, ptr @kai.src.file, i64 12, i64 11)
   unreachable
 
-in.bounds85:                                      ; preds = %arith.ok
-  %arr.elems.p86 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr78, i32 0, i32 3
-  %arr.elems87 = load ptr, ptr %arr.elems.p86, align 8
-  %place.elem88 = getelementptr inbounds ptr, ptr %arr.elems87, i64 1
-  %ret.hdr90 = load ptr, ptr %place.elem88, align 8
-  call void @kai_retain(ptr %ret.hdr90)
-  store ptr %ret.hdr90, ptr %rev.snap89, align 8
-  call void @kai_reversible_push(ptr %place.elem88, ptr %rev.snap89, i64 ptrtoint (ptr getelementptr (ptr, ptr null, i32 1) to i64), ptr @kai.snapREL_string)
-  %arr.hdr91 = load ptr, ptr %words2, align 8
-  %arr.len.p92 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr91, i32 0, i32 1
-  %arr.len93 = load i64, ptr %arr.len.p92, align 4
-  %bnd.high94 = icmp slt i64 1, %arr.len93
-  %bnd.ok95 = and i1 true, %bnd.high94
-  %bnd.bad96 = xor i1 %bnd.ok95, true
-  br i1 %bnd.bad96, label %panic97, label %in.bounds98
-
-panic97:                                          ; preds = %in.bounds85
-  call void @kai_reversible_unwind()
-  call void @kai_panic(ptr @kai.panic.msg.9, i64 25, ptr @kai.src.file, i64 12, i64 11)
-  unreachable
-
-in.bounds98:                                      ; preds = %in.bounds85
-  %arr.elems.p99 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr91, i32 0, i32 3
-  %arr.elems100 = load ptr, ptr %arr.elems.p99, align 8
-  %place.elem101 = getelementptr inbounds ptr, ptr %arr.elems100, i64 1
-  %field102 = getelementptr inbounds nuw %Point, ptr %pt4, i32 0, i32 1
-  %field103 = load ptr, ptr %field102, align 8
-  call void @kai_retain(ptr %field103)
-  %rel.hdr104 = load ptr, ptr %place.elem101, align 8
-  call void @kai_release(ptr %rel.hdr104)
-  store ptr %field103, ptr %place.elem101, align 8
+in.bounds51:                                      ; preds = %arith.ok
+  %arr.elems.p52 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr.hdr44, i32 0, i32 3
+  %arr.elems53 = load ptr, ptr %arr.elems.p52, align 8
+  %place.elem54 = getelementptr inbounds ptr, ptr %arr.elems53, i64 1
+  %ret.hdr56 = load ptr, ptr %place.elem54, align 8
+  call void @kai_retain(ptr %ret.hdr56)
+  store ptr %ret.hdr56, ptr %rev.snap55, align 8
+  call void @kai_reversible_push(ptr %place.elem54, ptr %rev.snap55, i64 ptrtoint (ptr getelementptr (ptr, ptr null, i32 1) to i64), ptr @kai.snapREL_string)
+  %field57 = getelementptr inbounds nuw %Point, ptr %pt4, i32 0, i32 1
+  %field58 = load ptr, ptr %field57, align 8
+  call void @kai_retain(ptr %field58)
+  %rel.hdr59 = load ptr, ptr %place.elem54, align 8
+  call void @kai_release(ptr %rel.hdr59)
+  store ptr %field58, ptr %place.elem54, align 8
   call void @kai.release_Point(ptr %pt4)
-  %rel.hdr105 = load ptr, ptr %words2, align 8
-  call void @kai_release(ptr %rel.hdr105)
-  %rel.hdr106 = load ptr, ptr %ns1, align 8
-  call void @kai_release(ptr %rel.hdr106)
+  %rel.hdr60 = load ptr, ptr %words2, align 8
+  call void @kai_release(ptr %rel.hdr60)
+  %rel.hdr61 = load ptr, ptr %ns1, align 8
+  call void @kai_release(ptr %rel.hdr61)
   call void @kai_reversible_commit()
   ret void
 }
@@ -280,16 +207,16 @@ entry:
   %arr2 = call ptr @kai_array_new(i64 2, i64 ptrtoint (ptr getelementptr (ptr, ptr null, i32 1) to i64), ptr @kai.dtor.elems_string)
   %arr.elems.p3 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %arr2, i32 0, i32 3
   %arr.elems4 = load ptr, ptr %arr.elems.p3, align 8
-  %str = call ptr @kai_string_new(ptr @kai.str.10, i64 1)
+  %str = call ptr @kai_string_new(ptr @kai.str.6, i64 1)
   %arr.slot5 = getelementptr inbounds ptr, ptr %arr.elems4, i64 0
   store ptr %str, ptr %arr.slot5, align 8
-  %str6 = call ptr @kai_string_new(ptr @kai.str.11, i64 1)
+  %str6 = call ptr @kai_string_new(ptr @kai.str.7, i64 1)
   %arr.slot7 = getelementptr inbounds ptr, ptr %arr.elems4, i64 1
   store ptr %str6, ptr %arr.slot7, align 8
   store ptr %arr2, ptr %words, align 8
   %f = getelementptr inbounds nuw %Point, ptr %tmp, i32 0, i32 0
   store i32 0, ptr %f, align 4
-  %str8 = call ptr @kai_string_new(ptr @kai.str.12, i64 1)
+  %str8 = call ptr @kai_string_new(ptr @kai.str.8, i64 1)
   %f9 = getelementptr inbounds nuw %Point, ptr %tmp, i32 0, i32 1
   store ptr %str8, ptr %f9, align 8
   %lit = load %Point, ptr %tmp, align 8
@@ -308,7 +235,7 @@ entry:
   br i1 %bnd.bad, label %panic, label %in.bounds
 
 panic:                                            ; preds = %entry
-  call void @kai_panic(ptr @kai.panic.msg.13, i64 25, ptr @kai.src.file, i64 21, i64 8)
+  call void @kai_panic(ptr @kai.panic.msg.9, i64 25, ptr @kai.src.file, i64 21, i64 8)
   unreachable
 
 in.bounds:                                        ; preds = %entry
@@ -335,7 +262,7 @@ if.end:                                           ; preds = %arith.ok, %in.bound
   br i1 %bnd.bad22, label %panic23, label %in.bounds24
 
 panic16:                                          ; preds = %if.then
-  call void @kai_panic(ptr @kai.panic.msg.14, i64 16, ptr @kai.src.file, i64 21, i64 21)
+  call void @kai_panic(ptr @kai.panic.msg.10, i64 16, ptr @kai.src.file, i64 21, i64 21)
   unreachable
 
 arith.ok:                                         ; preds = %if.then
@@ -344,7 +271,7 @@ arith.ok:                                         ; preds = %if.then
   br label %if.end
 
 panic23:                                          ; preds = %if.end
-  call void @kai_panic(ptr @kai.panic.msg.15, i64 25, ptr @kai.src.file, i64 22, i64 8)
+  call void @kai_panic(ptr @kai.panic.msg.11, i64 25, ptr @kai.src.file, i64 22, i64 8)
   unreachable
 
 in.bounds24:                                      ; preds = %if.end
@@ -362,7 +289,7 @@ if.then30:                                        ; preds = %in.bounds24
   br i1 %ovf.flag34, label %panic35, label %arith.ok36
 
 if.end31:                                         ; preds = %arith.ok36, %in.bounds24
-  %str38 = call ptr @kai_string_new(ptr @kai.str.17, i64 5)
+  %str38 = call ptr @kai_string_new(ptr @kai.str.13, i64 5)
   store ptr %str38, ptr %"$tmp", align 8
   %tmp39 = load ptr, ptr %words, align 8
   %arr.len.p40 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %tmp39, i32 0, i32 1
@@ -373,7 +300,7 @@ if.end31:                                         ; preds = %arith.ok36, %in.bou
   br i1 %bnd.bad44, label %panic45, label %in.bounds46
 
 panic35:                                          ; preds = %if.then30
-  call void @kai_panic(ptr @kai.panic.msg.16, i64 16, ptr @kai.src.file, i64 22, i64 22)
+  call void @kai_panic(ptr @kai.panic.msg.12, i64 16, ptr @kai.src.file, i64 22, i64 22)
   unreachable
 
 arith.ok36:                                       ; preds = %if.then30
@@ -382,7 +309,7 @@ arith.ok36:                                       ; preds = %if.then30
   br label %if.end31
 
 panic45:                                          ; preds = %if.end31
-  call void @kai_panic(ptr @kai.panic.msg.18, i64 25, ptr @kai.src.file, i64 23, i64 8)
+  call void @kai_panic(ptr @kai.panic.msg.14, i64 25, ptr @kai.src.file, i64 23, i64 8)
   unreachable
 
 in.bounds46:                                      ; preds = %if.end31
@@ -402,7 +329,7 @@ if.then52:                                        ; preds = %in.bounds46
   br i1 %ovf.flag56, label %panic57, label %arith.ok58
 
 if.end53:                                         ; preds = %arith.ok58, %in.bounds46
-  %str60 = call ptr @kai_string_new(ptr @kai.str.20, i64 1)
+  %str60 = call ptr @kai_string_new(ptr @kai.str.16, i64 1)
   store ptr %str60, ptr %"$tmp61", align 8
   %tmp62 = load ptr, ptr %words, align 8
   %arr.len.p63 = getelementptr inbounds nuw %"KaiArray.\22ptr\22", ptr %tmp62, i32 0, i32 1
@@ -413,7 +340,7 @@ if.end53:                                         ; preds = %arith.ok58, %in.bou
   br i1 %bnd.bad67, label %panic68, label %in.bounds69
 
 panic57:                                          ; preds = %if.then52
-  call void @kai_panic(ptr @kai.panic.msg.19, i64 16, ptr @kai.src.file, i64 23, i64 30)
+  call void @kai_panic(ptr @kai.panic.msg.15, i64 16, ptr @kai.src.file, i64 23, i64 30)
   unreachable
 
 arith.ok58:                                       ; preds = %if.then52
@@ -422,7 +349,7 @@ arith.ok58:                                       ; preds = %if.then52
   br label %if.end53
 
 panic68:                                          ; preds = %if.end53
-  call void @kai_panic(ptr @kai.panic.msg.21, i64 25, ptr @kai.src.file, i64 24, i64 8)
+  call void @kai_panic(ptr @kai.panic.msg.17, i64 25, ptr @kai.src.file, i64 24, i64 8)
   unreachable
 
 in.bounds69:                                      ; preds = %if.end53
@@ -448,7 +375,7 @@ if.end78:                                         ; preds = %arith.ok83, %in.bou
   br i1 %eq86, label %if.then87, label %if.end88
 
 panic82:                                          ; preds = %if.then77
-  call void @kai_panic(ptr @kai.panic.msg.22, i64 16, ptr @kai.src.file, i64 24, i64 26)
+  call void @kai_panic(ptr @kai.panic.msg.18, i64 16, ptr @kai.src.file, i64 24, i64 26)
   unreachable
 
 arith.ok83:                                       ; preds = %if.then77
@@ -476,7 +403,7 @@ if.end88:                                         ; preds = %arith.ok93, %if.end
   ret i32 %tmp95
 
 panic92:                                          ; preds = %if.then87
-  call void @kai_panic(ptr @kai.panic.msg.23, i64 16, ptr @kai.src.file, i64 25, i64 20)
+  call void @kai_panic(ptr @kai.panic.msg.19, i64 16, ptr @kai.src.file, i64 25, i64 20)
   unreachable
 
 arith.ok93:                                       ; preds = %if.then87

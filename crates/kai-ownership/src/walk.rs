@@ -121,16 +121,8 @@ pub(crate) fn walk_stmt(
                 }
             }
             hoist_borrow_temps(heap, &mut assign.value, fresh, scopes, &mut out, true);
-            // C1: ownership-inserted ledger push (§5.3.1) — before the write,
-            // captures pre-mutation Place value (heap-bearing retains later in
-            // codegen). Push rides the dynamic ledger, not the effect checker.
             if is_reversible {
-                let ty = assign.value.ty.clone();
-                out.push(TypedStmt::ReversiblePush(kai_tast::ReversiblePush {
-                    root: assign.root,
-                    path: assign.path.clone(),
-                    ty,
-                }));
+                assign.push_reversible = true;
             }
             out.push(TypedStmt::Assign(walk_assign(
                 heap, assign, scopes, fresh, is_reversible,
@@ -211,12 +203,7 @@ pub(crate) fn walk_stmt(
             out.push(TypedStmt::Expr(e));
             out
         }
-        TypedStmt::ReversiblePush(push) => {
-            // Ledger push marker (§5.3.1): no additional ownership work — the
-            // snapshot load/retain and ledger append are codegen's job.
-            // Path indices were already hoisted for the following Assign.
-            vec![TypedStmt::ReversiblePush(push)]
-        }
+
         // Handled by the caller (return needs surrounding-scope context).
         TypedStmt::Return(_) => unreachable!("returns handled by walk_block"),
         TypedStmt::ReleaseLocal { .. } | TypedStmt::ReturnCleanup { .. } => {

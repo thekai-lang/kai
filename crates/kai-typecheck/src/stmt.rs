@@ -219,8 +219,8 @@ fn assign(
         path: steps,
         op: compound,
         value: typed_value,
-        // Ownership markers land in the ownership pass (phase after this).
         release_old: false,
+        push_reversible: false,
         span: stmt_span,
     }))
 }

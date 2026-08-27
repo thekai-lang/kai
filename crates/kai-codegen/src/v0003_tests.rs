@@ -95,7 +95,7 @@ fn jit_params_are_copies_and_field_places_write_locally() {
                     })],
                     op: Some(kai_tast::BinaryOp::Add),
                     value: TypedExpr::new(TypedExprKind::IntLit(5), KaiType::Int32),
-                    release_old: false,
+                    release_old: false, push_reversible: false,
                     span: kai_diagnostics::Span::new(0, 0),
                 }),
                 TypedStmt::Return(None),

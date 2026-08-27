@@ -66,14 +66,6 @@ fn seed_stmts(stmts: &[TypedStmt], max: &mut u32) {
                 seed_stmts(&w.body.stmts, max);
             }
             TypedStmt::Block(b) => seed_stmts(&b.stmts, max),
-            TypedStmt::ReversiblePush(p) => {
-                *max = (*max).max(p.root.0);
-                for step in &p.path {
-                    if let kai_tast::TypedPlaceStep::Index(idx) = step {
-                        seed_expr(idx, max);
-                    }
-                }
-            }
             TypedStmt::Expr(e)
             | TypedStmt::Require(e)
             | TypedStmt::Observe(e)
