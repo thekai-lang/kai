@@ -1,0 +1,43 @@
+// Stress: churn heap — retain/release string, array, closure, Result/Optional
+// di dalam loop. 4 pemeriksaan per iterasi x 10 iterasi = hits 40.
+fn mk(flag: bool, s: string) -> Result<string, string> {
+    if flag { return Ok(s); }
+    return Err("nope");
+}
+
+fn main() -> int32 {
+    let zero: int64 = 0;
+    var hits: int32 = 0;
+    let days: int64[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    for d in days {
+        // array of string baru per iterasi + replace elemen (ordering §9.4)
+        var w = ["alpha", "beta", "gamma", "delta"];
+        w[1] = w[1];
+        if w[0] == "alpha" && w[3] == "delta" {
+            hits += 1;
+        }
+
+        // Result Ok lintas fungsi dengan payload string (heap)
+        let picked = mk(true, "payload-x").unwrap_or("fallback");
+        let missed = mk(false, "y").unwrap_or("fallback");
+        if picked == "payload-x" && missed == "fallback" {
+            hits += 1;
+        }
+
+        // Err dipulihkan catch; tail = payload error sendiri
+        let rescued = mk(false, "q") catch |e| { e };
+        if rescued == "nope" {
+            hits += 1;
+        }
+
+        // closure baru per iterasi menangkap variabel loop (env heap)
+        let add_d = fn(x: int64) -> int64 { return x + d; };
+        if add_d(zero) == d {
+            hits += 1;
+        }
+    }
+    if hits == 40 {
+        return 99;
+    }
+    return 3;
+}

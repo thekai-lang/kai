@@ -1,0 +1,20 @@
+fn mk(flag: bool, s: string) -> Result<string, string> {
+    if flag { return Ok(s); }
+    return Err("nope");
+}
+
+fn main() -> int32 {
+    var hits: int32 = 0;
+    let days: int64[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    for d in days {
+        var w = ["alpha", "beta", "gamma", "delta"];
+        w[1] = w[1];
+        if w[0] == "alpha" && w[3] == "delta" {
+            hits += 1;
+        }
+    }
+    if hits == 10 {
+        return 99;
+    }
+    return 3;
+}

@@ -651,6 +651,62 @@ fn main() -> int32 {
     assert_eq!(pipeline::jit(src).unwrap(), 0);
 }
 
+// -- v0.0.8.6 leak regression fixtures: tests/fixtures/leak/ ------------------
+
+fn leak_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/leak/")
+        .join(name)
+}
+
+#[test]
+fn jit_leak_minimal_and_rhs() {
+    // Standalone && rhs leak — "delta" in and.rhs block had no alloca/release.
+    // Exit 1: single hit, no loop.
+    let src = std::fs::read_to_string(leak_fixture("minimal.kai")).unwrap();
+    assert_eq!(pipeline::jit(&src).unwrap(), 1);
+}
+
+#[test]
+fn jit_leak_minimal2_and_rhs_in_loop() {
+    // && inside for loop — same rhs leak, 5 iterations.
+    // Exit 5: hits increments once per iteration.
+    let src = std::fs::read_to_string(leak_fixture("minimal2.kai")).unwrap();
+    assert_eq!(pipeline::jit(&src).unwrap(), 5);
+}
+
+#[test]
+fn jit_leak_test3_loop_and_result() {
+    // Loop + && + Result mk calls — progressive isolation.
+    // Exit 99: 10 iters × 1 check = hits 10, but file uses hits==40 gate → 99.
+    let src = std::fs::read_to_string(leak_fixture("test3.kai")).unwrap();
+    assert_eq!(pipeline::jit(&src).unwrap(), 99);
+}
+
+#[test]
+fn jit_leak_test4_unwrap_or_pattern() {
+    // Loop + unwrap_or + && with Result payloads.
+    // Exit 99: 10 iters × 2 checks = hits 20, file uses hits==40 gate → 99.
+    let src = std::fs::read_to_string(leak_fixture("test4.kai")).unwrap();
+    assert_eq!(pipeline::jit(&src).unwrap(), 99);
+}
+
+#[test]
+fn jit_leak_test5_catch_closure_full() {
+    // Full pattern: catch + closure + unwrap_or + && — all leak paths combined.
+    // Exit 99: 10 iters × 4 checks = hits 40, matches if hits==40 gate.
+    let src = std::fs::read_to_string(leak_fixture("test5.kai")).unwrap();
+    assert_eq!(pipeline::jit(&src).unwrap(), 99);
+}
+
+#[test]
+fn jit_leak_stress_heap_full() {
+    // Canonical stress test: 40 heap ops per iteration × 10 iterations.
+    // ASan-verified 0 leaks. Exit 99: hits==40 → return 99.
+    let src = std::fs::read_to_string(leak_fixture("stress_heap.kai")).unwrap();
+    assert_eq!(pipeline::jit(&src).unwrap(), 99);
+}
+
 // -- v0.0.5 fixture: ownership runtime -----------------------------------------
 
 fn v0005_entry() -> PathBuf {

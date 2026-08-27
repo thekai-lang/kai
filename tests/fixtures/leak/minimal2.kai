@@ -1,0 +1,11 @@
+fn main() -> int32 {
+    var hits: int32 = 0;
+    let days: int64[] = [1, 2, 3, 4, 5];
+    for d in days {
+        var w = ["alpha", "beta", "gamma", "delta"];
+        if w[0] == "alpha" && w[3] == "delta" {
+            hits += 1;
+        }
+    }
+    return hits;
+}

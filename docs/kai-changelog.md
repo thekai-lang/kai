@@ -10,6 +10,13 @@
 - **co.fallback Temporal retain/release**: `else_bb` was missing the `KaiType::Temporal` arm in both step 1 (retain for consumer) and step 2 (release creation claim), causing double-free of `@wallclock` headers and leak of `@local` temporals. Fixed by mirroring the `some_bb` pattern. Also fixed `release_header_value` call path for wallclock headers: it used generic `kai_release` instead of `kai_wallclock_release` — now routes through `emit_release_slot` which dispatches correctly.
 - **IntLit in `fallback_is_fresh`**: scalar temporal literals like `int32 @wallclock(30m) = 42` were not identified as fresh owned temps, skipping the step 2 release.
 
+## v0.0.8.6 — Leak regression fixtures + ASan CI gate
+
+- **Leak regression fixtures**: all isolation artifacts from the v0.0.8.4–v0.0.8.5 leak investigations (`minimal.kai`, `minimal2.kai`, `test3.kai`–`test5.kai`, `stress_heap.kai`) promoted to permanent `tests/fixtures/leak/` fixtures. Each JIT-compiles and asserts a verified exit code: `minimal.kai` → 1, `minimal2.kai` → 5, `test3–test5/stress_heap` → 99. Catches ownership-pass regressions on every PR without ASan.
+- **ASan CI gate**: `scripts/asan-test.sh` runs all leak fixtures under `ASAN_OPTIONS=detect_leaks=1` with per-file invocation, explicit LeakSanitizer vs exit-code separation, and clear diagnostic output. GitHub Actions: fast test (cargo test + clippy) on every PR; ASan nightly (daily 03:00 UTC + push to main + manual).
+- **CI infrastructure**: `.github/workflows/ci.yml` (PR + push: test + clippy), `.github/workflows/asan-nightly.yml` (nightly: ASan build + leak fixtures).
+- **Tests**: 332 → 338 passing (6 new `jit_leak_*` regression tests in `end_to_end.rs`).
+
 ## v0.0.8.5 — B1 exemption resolved: `&&`/`||` rhs borrow-temp leak fix
 
 - **B1 exemption resolved — `&&`/`||` rhs borrow-position temporaries no longer leak**: the ownership pass now recurses into both sides of `&&`/`||`. Lhs children are hoisted normally (always evaluated); rhs children are hoisted with throwaway scopes whose Let bindings are stored in `rhs_hoists` and emitted inside the `and.rhs` basic block — only executed when short-circuit doesn't skip. This completes the B1 exemption declared in v0.0.5.1 and deferred in v0.0.6: "real materialization nodes for `&&`/`||` borrow-position temporaries." Whitepaper §9.11 (scope-exit release) already specifies this behavior; the implementation now matches.

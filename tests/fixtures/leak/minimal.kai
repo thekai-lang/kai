@@ -1,0 +1,8 @@
+fn main() -> int32 {
+    var hits: int32 = 0;
+    var w = ["alpha", "beta", "gamma", "delta"];
+    if w[0] == "alpha" && w[3] == "delta" {
+        hits += 1;
+    }
+    return hits;
+}

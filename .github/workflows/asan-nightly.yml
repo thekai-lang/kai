@@ -1,0 +1,46 @@
+name: ASan (Nightly)
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # daily at 03:00 UTC
+  push:
+    branches: [main]
+  workflow_dispatch:        # manual trigger
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  asan:
+    name: ASan Leak Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install ASan target component
+        run: rustup component add rust-src --toolchain nightly
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target-asan
+          key: ${{ runner.os }}-asan-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build ASan binary
+        run: |
+          CARGO_TARGET_DIR=target-asan \
+          RUSTFLAGS="-Zsanitizer=address" \
+            cargo +nightly build --release \
+            --target x86_64-unknown-linux-gnu \
+            -p kai-driver
+
+      - name: Run leak detection on fixtures
+        run: ./scripts/asan-test.sh --no-build
