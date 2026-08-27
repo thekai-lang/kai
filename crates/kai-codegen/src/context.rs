@@ -89,6 +89,10 @@ pub(crate) struct Ctx<'ctx> {
     pub retain_helpers: std::cell::RefCell<HashMap<String, FunctionValue<'ctx>>>,
     pub release_helpers: std::cell::RefCell<HashMap<String, FunctionValue<'ctx>>>,
     pub elem_dtors: std::cell::RefCell<HashMap<String, FunctionValue<'ctx>>>,
+    /// Cached per-type reversible snapshot release thunks (§5.3): a function
+    /// `void @kai.snapREL.<T>(ptr value)` that releases one value of `T`, used
+    /// by the runtime ledger to drop snapshot/current heap claims generically.
+    pub snapshot_dtors: std::cell::RefCell<HashMap<String, FunctionValue<'ctx>>>,
     /// Module-file name globals baked for panic sites, one per module key.
     pub file_globals: std::cell::RefCell<HashMap<String, inkwell::values::PointerValue<'ctx>>>,
     /// Monotonic counter for per-literal closure artifacts (body functions,
@@ -97,6 +101,10 @@ pub(crate) struct Ctx<'ctx> {
     /// §5.2.2/v0.21: project root for the `.kai/observe.log` / `.kai/debt.log`
     /// sinks. `None` = string API (documented recording no-op, never CWD).
     pub sink_root: Option<PathBuf>,
+    /// `true` while emitting a `reversible` function body (§5.3): runtime
+    /// panic blocks emit `kai_reversible_unwind` before §10.1 `kai_panic`.
+    /// Reset to `false` for ordinary/helper emission so golden IR stays stable.
+    pub reversible_active: std::cell::Cell<bool>,
 }
 
 impl<'ctx> Ctx<'ctx> {
@@ -119,9 +127,11 @@ impl<'ctx> Ctx<'ctx> {
             retain_helpers: Default::default(),
             release_helpers: Default::default(),
             elem_dtors: Default::default(),
+            snapshot_dtors: Default::default(),
             file_globals: Default::default(),
             closure_seq: std::cell::Cell::new(0),
             sink_root,
+            reversible_active: std::cell::Cell::new(false),
         }
     }
 

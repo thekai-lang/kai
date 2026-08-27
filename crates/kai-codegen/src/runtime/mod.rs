@@ -21,12 +21,16 @@
 //! co-owned arrays never double-release elements.
 
 pub(crate) mod observe;
+pub(crate) mod reversible;
 pub(crate) mod wallclock;
 use wallclock::{kai_wallclock_new, kai_wallclock_now, kai_wallclock_release};
 
 pub(crate) use wallclock::{wallclock_new_fn, wallclock_now_fn};
 #[allow(unused_imports)]
 pub(crate) use wallclock::wallclock_release_fn;
+pub(crate) use reversible::{
+    reversible_commit_fn, reversible_enter_fn, reversible_push_fn, reversible_unwind_fn,
+};
 
 use crate::context::Ctx;
 use inkwell::types::StructType;
@@ -356,7 +360,7 @@ pub(crate) fn panic_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
 /// (LLVM symbol, host address) pairs wired into the JIT via global mapping.
 /// Taking these addresses also keeps the functions alive in the linked
 /// binary; the linker may otherwise strip unreferenced `#[no_mangle]` fns.
-pub(crate) const INTRINSICS: [(&str, *const ()); 11] = [
+pub(crate) const INTRINSICS: [(&str, *const ()); 15] = [
     ("kai_string_new", kai_string_new as *const ()),
     ("kai_array_new", kai_array_new as *const ()),
     ("kai_string_eq", kai_string_eq as *const ()),
@@ -371,4 +375,20 @@ pub(crate) const INTRINSICS: [(&str, *const ()); 11] = [
     ),
     ("kai_observe_record", observe::kai_observe_record as *const ()),
     ("kai_debt_record", observe::kai_debt_record as *const ()),
+    (
+        "kai_reversible_enter",
+        reversible::kai_reversible_enter as *const (),
+    ),
+    (
+        "kai_reversible_push",
+        reversible::kai_reversible_push as *const (),
+    ),
+    (
+        "kai_reversible_commit",
+        reversible::kai_reversible_commit as *const (),
+    ),
+    (
+        "kai_reversible_unwind",
+        reversible::kai_reversible_unwind as *const (),
+    ),
 ];

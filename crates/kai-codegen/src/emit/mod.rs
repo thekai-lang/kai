@@ -5,6 +5,7 @@ pub(crate) mod expr;
 pub(crate) mod ownership;
 pub(crate) mod ownership_tagged;
 pub(crate) mod panic;
+pub(crate) mod reversible;
 pub(crate) mod stmt;
 pub(crate) mod wallclock;
 pub(crate) use stmt::fallback_return;
@@ -86,6 +87,15 @@ fn function_body<'ctx>(ctx: &Ctx<'ctx>, decl: &kai_tast::TypedFnDecl) {
     ctx.builder.position_at_end(entry);
 
     let mut frame = Frame::new(decl.module.clone());
+    frame.reversible = decl.is_reversible;
+    ctx.reversible_active.set(decl.is_reversible);
+
+    // §5.3.5: a `reversible` call opens a fresh per-activation ledger.
+    if decl.is_reversible {
+        ctx.builder
+            .build_call(crate::runtime::reversible_enter_fn(ctx), &[], "rev.enter")
+            .expect("kai_reversible_enter call");
+    }
 
     // Params become read-write locals: alloca + store the incoming copy.
     // Callers passed values BY VALUE, so callee mutation stays invisible.
@@ -104,7 +114,8 @@ fn function_body<'ctx>(ctx: &Ctx<'ctx>, decl: &kai_tast::TypedFnDecl) {
 
     // Control flow can leave the last block unterminated (both `if` arms
     // returned); close it with a dead fallback return so the module verifies.
-    stmt::fallback_return(ctx, &decl.ret);
+    stmt::fallback_return(ctx, &decl.ret, &frame);
+    ctx.reversible_active.set(false);
 }
 
 /// Codegen invariant: every stack allocation is emitted at the top of the

@@ -64,6 +64,10 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
                 .get(&frame.module)
                 .map_or((0, 0), |src| src.line_col(e.span.start));
             let i64_ty = ctx.context.i64_type();
+            // §5.3 unwind before the terminal §10.1 require-panic: roll back
+            // the current reversible activation's ledger (restore Places +
+            // release displaced values). Only inside `reversible` functions.
+            crate::emit::reversible::unwind_if_active(ctx);
             let panic_args = [
                 msg_global.as_pointer_value().into(),
                 i64_ty.const_int(msg.len() as u64, false).into(),
@@ -113,12 +117,11 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
         }
         TypedStmt::For(f) => for_stmt(ctx, frame, f),
         TypedStmt::While(w) => while_stmt(ctx, frame, w),
-        // §5.3.1 ledger push: captures pre-mutation Place value before the
-        // following Assign. Phase E will emit load + conditional retain +
-        // ledger push here. For now a no-op marker (Place mutation still
-        // emitted by the Assign below); heap snapshot retains are deferred
-        // to the unwind implementation so ASan stays clean on the commit path.
-        TypedStmt::ReversiblePush(_push) => {}
+        // §5.3.1 ledger push: resolves the Place (same root/path as the
+        // following Assign), loads the OLD value, retains it if heap-bearing
+        // (snapshot owns the claim), then appends to the current activation's
+        // ledger (§5.3.5). E2 snapshot emission.
+        TypedStmt::ReversiblePush(push) => crate::emit::reversible::emit_push(ctx, frame, push),
         // Ownership marker from the pass: the local's heap content leaves
         // scope here (§9.4). The slot points at storage of `ty`.
         TypedStmt::ReleaseLocal { local, ty } => {
@@ -133,6 +136,7 @@ pub(crate) fn emit<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, stmt: &TypedS
                 let slot = frame.slot(*local);
                 crate::emit::ownership::emit_release_slot(ctx, ty, slot);
             }
+            crate::emit::reversible::commit_if_reversible(ctx, frame);
             let _ = ctx
                 .builder
                 .build_return(value.as_ref().map(|v| v as &dyn inkwell::values::BasicValue<'_>));
@@ -229,6 +233,7 @@ fn for_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, f: &TypedFor) {
 }
 
 fn ret<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, value: Option<&kai_tast::TypedExpr>) {
+    crate::emit::reversible::commit_if_reversible(ctx, frame);
     match value {
         Some(e) => {
             let value = expr::emit(ctx, frame, e);
@@ -254,36 +259,7 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
     // hops deref the header pointer the current slot holds and GEP into
     // element storage. The index expression re-evaluates at THIS site —
     // it rides in the step (§9.3).
-    let mut ptr = frame.slot(assign.root);
-    for step in &assign.path {
-        ptr = match step {
-            kai_tast::TypedPlaceStep::Field(fs) => {
-                super::field_gep(ctx, fs.struct_id, ptr, u32::from(fs.field), "place")
-            }
-            kai_tast::TypedPlaceStep::Index(index) => {
-                let elem_ty = types::to_llvm(ctx, &assign.value.ty);
-                let header = expr::header_of_value(
-                    ctx.builder
-                        .build_load(
-                            ctx.context.ptr_type(Default::default()),
-                            ptr,
-                            "arr.hdr",
-                        )
-                        .expect("array value load"),
-                );
-                let idx64 = expr::widen_index(ctx, expr::emit(ctx, frame, index).into_int_value());
-                expr::elem_slot(
-                    ctx,
-                    frame,
-                    index.span,
-                    header,
-                    elem_ty,
-                    idx64,
-                    "place.elem",
-                )
-            }
-        };
-    }
+    let ptr = resolve_place(ctx, frame, assign.root, &assign.path, &assign.value.ty);
 
     // Prepare the replacement FIRST — the RHS may alias the destination
     // (`arr[0] = arr[0]`), so nothing at the destination may be released
@@ -309,6 +285,52 @@ fn assign_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, assign: &TypedAss
             let _ = ctx.builder.build_store(ptr, value);
         }
     }
+}
+
+/// Resolves a Place (`root` + `path`) to the concrete storage slot a mutation
+/// reads/writes. Used identically by `Assign` and the reversible `LedgerPush`
+/// that precedes it, so both snapshot and store hit the SAME element — index
+/// expressions (pure in Kai) re-evaluate to the same slot with no intervening
+/// store (§5.3 audit: the ledger stores this resolved slot pointer, so unwind
+/// never re-evaluates the index).
+pub(crate) fn resolve_place<'ctx>(
+    ctx: &Ctx<'ctx>,
+    frame: &mut Frame<'ctx>,
+    root: kai_tast::LocalId,
+    path: &[kai_tast::TypedPlaceStep],
+    value_ty: &kai_tast::KaiType,
+) -> inkwell::values::PointerValue<'ctx> {
+    let mut ptr = frame.slot(root);
+    for step in path {
+        ptr = match step {
+            kai_tast::TypedPlaceStep::Field(fs) => {
+                super::field_gep(ctx, fs.struct_id, ptr, u32::from(fs.field), "place")
+            }
+            kai_tast::TypedPlaceStep::Index(index) => {
+                let elem_ty = types::to_llvm(ctx, value_ty);
+                let header = expr::header_of_value(
+                    ctx.builder
+                        .build_load(
+                            ctx.context.ptr_type(Default::default()),
+                            ptr,
+                            "arr.hdr",
+                        )
+                        .expect("array value load"),
+                );
+                let idx64 = expr::widen_index(ctx, expr::emit(ctx, frame, index).into_int_value());
+                expr::elem_slot(
+                    ctx,
+                    frame,
+                    index.span,
+                    header,
+                    elem_ty,
+                    idx64,
+                    "place.elem",
+                )
+            }
+        };
+    }
+    ptr
 }
 
 fn if_stmt<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, if_: &TypedIf) {
@@ -358,11 +380,16 @@ fn branch_to<'ctx>(ctx: &Ctx<'ctx>, target: BasicBlock<'ctx>) {
 
 /// Emits a return for any block left unterminated by control flow (e.g. an
 /// `if/else` where both arms returned, followed by unreachable statements).
-pub(crate) fn fallback_return<'ctx>(ctx: &Ctx<'ctx>, ret: &kai_tast::KaiType) {
+pub(crate) fn fallback_return<'ctx>(
+    ctx: &Ctx<'ctx>,
+    ret: &kai_tast::KaiType,
+    frame: &Frame<'ctx>,
+) {
     let current: BasicBlock = ctx.builder.get_insert_block().expect("insert position");
     if current.get_terminator().is_some() {
         return;
     }
+    crate::emit::reversible::commit_if_reversible(ctx, frame);
     match types::zero_of(ctx, ret) {
         Some(zero) => {
             let _ = ctx.builder.build_return(Some(&zero));

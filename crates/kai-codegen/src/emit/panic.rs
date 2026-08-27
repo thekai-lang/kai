@@ -34,6 +34,11 @@ pub(crate) fn panic_block<'ctx>(
         .map_or((0, 0), |src| src.line_col(span.start));
 
     let i64_ty = ctx.context.i64_type();
+    // §5.3 unwind: when a `reversible` function's mutation context reaches a
+    // runtime panic, roll back ITS activation ledger (LIFO restore of every
+    // Place + release of displaced values) before the terminal §10.1 panic.
+    // Ordinary functions emit no unwind call, keeping golden IR stable.
+    crate::emit::reversible::unwind_if_active(ctx);
     let args = [
         msg.as_pointer_value().into(),
         i64_ty.const_int(message.len() as u64, false).into(),

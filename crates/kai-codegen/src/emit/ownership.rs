@@ -127,6 +127,62 @@ pub(crate) fn emit_release_slot<'ctx>(
     }
 }
 
+/// Retains the heap claims of the value of `ty` at `value_ptr`, then loads
+/// and returns it. The returned value carries +1 refs on every heap-bearing
+/// sub-value — the snapshot-ownership pattern (§5.3): the ledger's copy of
+/// these bytes OWNS a real refcount claim, so unwind/commit can release it
+/// without ever touching a bare pointer. Returns the value (bitwise copy).
+pub(crate) fn emit_retain_slot<'ctx>(
+    ctx: &Ctx<'ctx>,
+    ty: &KaiType,
+    value_ptr: inkwell::values::PointerValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    match ty {
+        KaiType::Temporal { inner, origin, .. } => match origin {
+            kai_tast::TemporalOrigin::Wallclock => {
+                // rc is at offset 0 of the wallclock header, mirroring the
+                // shared header — kai_retain bumps it; release uses the
+                // wallclock-specific free path (§5.1.7).
+                let hdr = load_ptr(ctx, value_ptr, "wallclock.hdr");
+                retain_header(ctx, hdr);
+                hdr
+            }
+            kai_tast::TemporalOrigin::Local => emit_retain_slot(ctx, inner, value_ptr),
+        },
+        KaiType::String | KaiType::Array(_) => {
+            let v = load_ptr(ctx, value_ptr, "ret.hdr");
+            retain_header(ctx, v);
+            v
+        }
+        KaiType::Struct(_) if heap_bearing(ctx, ty) => retain_struct_copy(ctx, ty, value_ptr),
+        KaiType::Optional(_) | KaiType::Result { .. } => {
+            super::ownership_tagged::retain_tagged_copy(ctx, ty, value_ptr)
+        }
+        KaiType::Closure { .. } => {
+            let env =
+                load_ptr(ctx, member_gep(ctx, value_ptr, 1, "clo.env.p"), "clo.env");
+            retain_header(ctx, env);
+            ctx.builder
+                .build_load(crate::types::to_llvm(ctx, ty), value_ptr, "clo.retained")
+                .expect("load retained closure")
+        }
+        _ => ctx
+            .builder
+            .build_load(crate::types::to_llvm(ctx, ty), value_ptr, "retained")
+            .expect("load"),
+    }
+}
+
+fn load_ptr<'ctx>(
+    ctx: &Ctx<'ctx>,
+    ptr: inkwell::values::PointerValue<'ctx>,
+    name: &str,
+) -> BasicValueEnum<'ctx> {
+    ctx.builder
+        .build_load(ctx.context.ptr_type(Default::default()), ptr, name)
+        .expect("load")
+}
+
 /// `%KaiFat{code,env}` second-member GEP on a POINTER to the aggregate.
 fn member_gep<'ctx>(
     ctx: &Ctx<'ctx>,

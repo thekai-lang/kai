@@ -1,3 +1,4 @@
 /target
+/target-asan
 Cargo.lock.orig
 *.ll.tmp

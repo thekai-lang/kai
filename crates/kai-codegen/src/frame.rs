@@ -11,6 +11,9 @@ pub(crate) struct Frame<'ctx> {
     /// Dotted module name of the function under construction (`""` =
     /// entry); selects the source that panic locations resolve against.
     pub module: String,
+    /// `true` inside a `reversible` function (§5.3): return sites emit
+    /// `kai_reversible_commit` to release the activation's snapshot claims.
+    pub reversible: bool,
     slots: HashMap<u32, PointerValue<'ctx>>,
 }
 
@@ -18,6 +21,7 @@ impl<'ctx> Frame<'ctx> {
     pub fn new(module: String) -> Self {
         Self {
             module,
+            reversible: false,
             slots: HashMap::new(),
         }
     }

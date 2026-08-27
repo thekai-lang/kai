@@ -216,7 +216,7 @@ pub(crate) fn emit_closure<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, clo: 
             for st in &clo.body.stmts {
                 crate::emit::stmt::emit(ctx, &mut inner, st);
             }
-            crate::emit::fallback_return(ctx, &ret_ty);
+            crate::emit::fallback_return(ctx, &ret_ty, &inner);
             if let Some(saved) = saved_block {
                 ctx.builder.position_at_end(saved);
             }
