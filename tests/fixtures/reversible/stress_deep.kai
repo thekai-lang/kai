@@ -1,0 +1,69 @@
+// v0.0.9 — reversible maturity STRESS: deep chained reversible calls (§5.3.5
+// per-activation ledgers). f0..f8 each own a ledger; each mutates a shared
+// string array and an array-of-structs row, then calls the next, then returns
+// (committing its own ledger). 9 activations deep with per-level string churn:
+// the strongest test of activation push/pop + commit release interleaving.
+// Exit 1023 truncated to the OS byte (255) via CLI; JIT asserts the full sum.
+type Node = { id: int32; tag: string; }
+fn f8(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[8] = "L8";
+    nodes[0].tag = "T8";
+    return;
+}
+fn f7(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[7] = "L7";
+    f8(buf, nodes);
+    return;
+}
+fn f6(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[6] = "L6";
+    f7(buf, nodes);
+    return;
+}
+fn f5(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[5] = "L5";
+    f6(buf, nodes);
+    return;
+}
+fn f4(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[4] = "L4";
+    f5(buf, nodes);
+    return;
+}
+fn f3(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[3] = "L3";
+    f4(buf, nodes);
+    return;
+}
+fn f2(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[2] = "L2";
+    f3(buf, nodes);
+    return;
+}
+fn f1(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[1] = "L1";
+    f2(buf, nodes);
+    return;
+}
+fn f0(mut buf: string[], mut nodes: Node[]) -> unit reversible {
+    buf[0] = "L0";
+    f1(buf, nodes);
+    return;
+}
+fn main() -> int32 {
+    var buf = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"];
+    var nodes = [Node { id: 0, tag: "x" }];
+    f0(buf, nodes);
+    var total = 0;
+    if buf[0] == "L0" { total += 1; }
+    if buf[1] == "L1" { total += 2; }
+    if buf[2] == "L2" { total += 4; }
+    if buf[3] == "L3" { total += 8; }
+    if buf[4] == "L4" { total += 16; }
+    if buf[5] == "L5" { total += 32; }
+    if buf[6] == "L6" { total += 64; }
+    if buf[7] == "L7" { total += 128; }
+    if buf[8] == "L8" { total += 256; }
+    if nodes[0].tag == "T8" { total += 512; }
+    return total;
+}

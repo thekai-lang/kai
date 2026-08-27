@@ -1,0 +1,42 @@
+// v0.0.9 — reversible maturity STRESS + unwind: 5 nested reversible activations
+// each push a long ledger; the DEEPEST panics. Every activation from deep to
+// shallow must unwind its own ledger (LIFO) and release displaced values
+// before the terminal §10.1 panic. Combined with heap fields, this is the
+// strongest test that nested ledgers pop cleanly on unwind (no leak, no
+// underflow). Exit 101.
+type N = { id: int32; tag: string; }
+fn g4(mut a: int32[], mut s: string[], mut ns: N[]) -> unit reversible {
+    a[4] = 44;
+    s[4] = "s4";
+    ns[0].id = 44;
+    require false;
+    return;
+}
+fn g3(mut a: int32[], mut s: string[], mut ns: N[]) -> unit reversible {
+    a[3] = 33;
+    s[3] = "s3";
+    g4(a, s, ns);
+    return;
+}
+fn g2(mut a: int32[], mut s: string[], mut ns: N[]) -> unit reversible {
+    a[2] = 22;
+    g3(a, s, ns);
+    return;
+}
+fn g1(mut a: int32[], mut s: string[], mut ns: N[]) -> unit reversible {
+    a[1] = 11;
+    g2(a, s, ns);
+    return;
+}
+fn g0(mut a: int32[], mut s: string[], mut ns: N[]) -> unit reversible {
+    a[0] = 1;
+    g1(a, s, ns);
+    return;
+}
+fn main() -> int32 {
+    var a = [0, 0, 0, 0, 0];
+    var s = ["a0", "a1", "a2", "a3", "a4"];
+    var ns = [N { id: 0, tag: "x" }];
+    g0(a, s, ns);
+    return 0;
+}

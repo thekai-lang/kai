@@ -783,7 +783,19 @@ fn corpus_flows_through_pipeline_without_rust_panics() {
     }
     // Every version's fixture set must actually be exercised.
     let seen: HashSet<&str> = checked.iter().filter_map(|s| s.split('/').next()).collect();
-    for ver in ["v0001", "v0002", "v0003", "v0004", "v0005", "v0006", "v0007", "v0008"] {
+    for ver in [
+        "v0001",
+        "v0002",
+        "v0003",
+        "v0004",
+        "v0005",
+        "v0006",
+        "v0007",
+        "v0008",
+        "v0009",
+        "reversible",
+        "leak",
+    ] {
         assert!(seen.contains(ver), "{ver} missing from corpus sweep");
     }
 }
@@ -1542,6 +1554,254 @@ fn v007_local_reads_as_plain_into_non_escaping_call() {
                fn main() -> int32 { let tok: string @local(30m) = \"hi\"; process(tok); return 0; }";
     assert_eq!(pipeline::jit(src).unwrap(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// v0.0.9: reversible functions (§5.3) — commit/unwind regression + maturity.
+// ---------------------------------------------------------------------------
+
+fn reversible_fixture(name: &str, use_entry: bool) -> (PathBuf, String) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/reversible/")
+        .join(name);
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("cannot read reversible fixture {name}: {err}"));
+    (path, src)
+}
+
+fn v0009_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v0009/main.kai")
+}
+
+/// Golden IR for the v0.0.9 reversible commit fixture — locks the
+/// kai_reversible_enter/_push/_commit call sites and the per-type snapshot
+/// dtors emitted for scalar, string, and array-of-struct mutations.
+#[test]
+fn v009_file_pipeline_matches_golden_ir() {
+    let ir = pipeline::compile_file_with_sink(&v0009_entry(), Path::new("/kai-fixture-root"))
+        .expect("v0.0.9 golden fixture should compile");
+    assert_golden("v0009/main.expected.ll", &ir);
+}
+
+/// §5.3 commit of scalar array-element mutations: every snapshot releases its
+/// retained OLD claim on commit and the NEW value stays live. Exact JIT value
+/// (no OS exit-code truncation).
+#[test]
+fn v009_commit_scalar_mutations() {
+    let (_, src) = reversible_fixture("scalar_commit.kai", false);
+    assert_eq!(pipeline::jit(&src).unwrap(), 7);
+}
+
+/// §5.3 commit of heap values (string array elements + by-value borrow struct)
+/// — regression for the pre-existing ownership UAF: mutating a heap field of a
+/// by-value borrow must NOT release the caller's claim. Caller's struct stays
+/// untouched; the string-array writes propagate. Exact value 31.
+#[test]
+fn v009_commit_heap_and_borrow_struct() {
+    let (_, src) = reversible_fixture("heap_commit.kai", false);
+    assert_eq!(pipeline::jit(&src).unwrap(), 31);
+}
+
+/// §5.3 wide-ledger commit: 6 mixed-type mutations (scalar + string +
+/// array-of-structs) pushed then committed. Every mutation propagates. Exact
+/// value 63.
+#[test]
+fn v009_commit_wide_heterogeneous_ledger() {
+    let (_, src) = reversible_fixture("lifo_commit.kai", false);
+    assert_eq!(pipeline::jit(&src).unwrap(), 63);
+}
+
+/// §5.3.5 nested reversible activations: each call owns a ledger that commits
+/// on its own return; all mutations reach the caller. Exact value 7.
+#[test]
+fn v009_commit_nested_activations() {
+    let (_, src) = reversible_fixture("nested_commit.kai", false);
+    assert_eq!(pipeline::jit(&src).unwrap(), 7);
+}
+
+/// §5.3 maturity stress: a single activation loops 32 times pushing a long
+/// scalar+string+struct ledger, then commits leak-free. Exact value 127.
+#[test]
+fn v009_stress_single_activation_loop_churn() {
+    let (_, src) = reversible_fixture("stress_loop.kai", false);
+    assert_eq!(pipeline::jit(&src).unwrap(), 127);
+}
+
+/// §5.3.5 maturity stress: 9 deep chained reversible calls, per-activation
+/// ledgers with string + array-of-struct churn, all commit. Exact value 1023
+/// (the OS truncates exit codes to a byte, so JIT's full value is the check).
+#[test]
+fn v009_stress_deep_nested_activations() {
+    let (_, src) = reversible_fixture("stress_deep.kai", false);
+    assert_eq!(pipeline::jit(&src).unwrap(), 1023);
+}
+
+/// §5.3 unwind: mutations heterogeneous (string + array-of-structs) then a
+/// failing require. §10.1 terminal exit 101, and the unwind must complete with
+/// NO refcount underflow (which would abort the process with a different code
+/// and message) before panicking.
+#[test]
+fn v009_unwind_rolls_back_without_underflow() {
+    let (path, _) = reversible_fixture("unwind_basic.kai", true);
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(101), "stderr:\n{stderr}");
+    assert!(
+        !stderr.contains("refcount underflow"),
+        "unwind must not double-release:\n{stderr}"
+    );
+}
+
+/// §5.3 unwind LIFO mid-loop: a long heterogeneous ledger pushed across loop
+/// iterations, then a require trips. Unwind must restore LIFO and release each
+/// displaced value exactly once (no underflow), exit 101.
+#[test]
+fn v009_unwind_lifo_mid_loop_no_underflow() {
+    let (path, _) = reversible_fixture("unwind_lifo.kai", true);
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(101), "stderr:\n{stderr}");
+    assert!(
+        !stderr.contains("refcount underflow"),
+        "LIFO unwind must not double-release:\n{stderr}"
+    );
+}
+
+/// §5.3.5 nested unwind: inner reversible panics → inner ledger unwinds, panic
+/// propagates to outer whose ledger ALSO unwinds, then terminal exit 101. Both
+/// must roll back cleanly with no underflow.
+#[test]
+fn v009_unwind_nested_activations_no_underflow() {
+    let (path, _) = reversible_fixture("nested_unwind.kai", true);
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(101), "stderr:\n{stderr}");
+    assert!(
+        !stderr.contains("refcount underflow"),
+        "nested unwind must not double-release:\n{stderr}"
+    );
+}
+
+/// §5.3 maturity stress + unwind: 5 deep nested activations, the deepest
+/// panics; every ledger unwinds LIFO before the terminal panic. No underflow,
+/// exit 101.
+#[test]
+fn v009_unwind_deep_stress_no_underflow() {
+    let (path, _) = reversible_fixture("unwind_deep.kai", true);
+    let out = run_cli(&["run", path.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(101), "stderr:\n{stderr}");
+    assert!(
+        !stderr.contains("refcount underflow"),
+        "deep unwind must not double-release:\n{stderr}"
+    );
+}
+
+/// §5.3 effect rule: a `reversible` fn may only call `reversible` targets or
+/// `compensate`-wrapped calls; a plain ordinary call is a compile error.
+#[test]
+fn v009_effect_rejects_ordinary_call_inside_reversible() {
+    assert_fails_at(
+        "fn ordinary() -> unit { return; }
+fn rev() -> unit reversible { ordinary(); return; }
+fn main() -> int32 { return 0; }",
+        "effect",
+        "must be wrapped in `compensate`",
+    );
+}
+
+/// §5.3 effect rule: an indirect closure call inside a `reversible` fn is
+/// rejected (indirect calls are not `reversible`).
+#[test]
+fn v009_effect_rejects_indirect_call_inside_reversible() {
+    assert_fails_at(
+        "fn rev_helper(c: () -> unit) -> unit reversible { c(); return; }
+fn main() -> int32 {
+    let cb: () -> unit = fn() -> unit { return; };
+    rev_helper(cb);
+    return 0;
+}",
+        "effect",
+        "indirect closure call",
+    );
+}
+
+/// §5.3 compensate: the compensation block's calls are exempt from the
+/// reversible-wrapper rule (they run on unwind, not the forward path), and the
+/// base reversible call executes. Compile + JIT succeed.
+#[test]
+fn v009_compensate_wrapped_side_effect_runs() {
+    let src = "fn refund() -> unit { return; }
+fn charge() -> unit { return; }
+fn pay(user: int32, fee: int32) -> unit reversible {
+    charge() compensate { refund(); };
+    return;
+}
+fn main() -> int32 {
+    pay(1, 2);
+    return 7;
+}";
+    assert_eq!(pipeline::jit(src).unwrap(), 7);
+}
+
+/// REGRESSION for the pre-existing ownership UAF this suite surfaced: mutating
+/// a heap FIELD of a by-value borrowed aggregate must not release the caller's
+/// claim. Plain (non-reversible) code — the ownership layer reversible depends
+/// on.
+#[test]
+fn v009_ownership_mutate_by_value_borrow_struct_field_is_safe() {
+    let src = "type User = { name: string; age: int32; }
+fn edit(mut u: User) -> unit {
+    u.name = \"grace\";
+    return;
+}
+fn main() -> int32 {
+    var u = User { name: \"ada\", age: 30 };
+    edit(u);
+    var t = 0;
+    if u.name == \"ada\" { t += 1; }
+    if u.age == 30 { t += 2; }
+    return t;
+}";
+    assert_eq!(pipeline::jit(src).unwrap(), 3);
+}
+
+/// REGRESSION for the same UAF on a bare by-value borrowed string param.
+#[test]
+fn v009_ownership_reassign_by_value_borrow_string_param_is_safe() {
+    let src = "fn check(mut s: string) -> int32 {
+    s = \"zzz\";
+    if s == \"zzz\" { return 1; }
+    return 0;
+}
+fn main() -> int32 {
+    var name = \"ada\";
+    check(name);
+    if name == \"ada\" { return 2; }
+    return 0;
+}";
+    assert_eq!(pipeline::jit(src).unwrap(), 2);
+}
+
+/// REGRESSION: array-element mutation through a BORROWED array param still
+/// releases the OLD element (the array owns element claims even under borrow)
+/// — the fix must not suppress release-old for array-element writes.
+#[test]
+fn v009_ownership_borrowed_array_element_mutation_still_releases() {
+    let src = "fn bump(mut a: int32[]) -> unit {
+    a[0] = 99;
+    return;
+}
+fn main() -> int32 {
+    var a = [1, 2];
+    bump(a);
+    return a[0];
+}";
+    assert_eq!(pipeline::jit(src).unwrap(), 99);
+}
+
+// ---------------------------------------------------------------------------
+// v0.0.7: @local/@wallclock, effects, DurationLit etc. (continued below)
+// ---------------------------------------------------------------------------
 
 #[test]
 fn v007_boundary_transitive_inference_rejects_whole_chain() {

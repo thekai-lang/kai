@@ -1,0 +1,25 @@
+// v0.0.9 — nested reversible + inner panic: inner mutates heap (string +
+// array-of-structs), then requires false. Its OWN ledger unwinds (restore +
+// release displaced), the panic propagates to outer whose ledger ALSO unwinds,
+// then terminal exit 101. Both ledgers must roll back cleanly — a leak or
+// underflow in either aborts.
+type N = { id: int32; tag: string; }
+fn inner(mut names: string[], mut ns: N[]) -> unit reversible {
+    names[0] = "inner-wrote";
+    ns[0].id = 11;
+    require false;
+    return;
+}
+fn outer(mut names: string[], mut ns: N[], mut trail: int32[]) -> unit reversible {
+    inner(names, ns);
+    trail[0] = 7;
+    names[0] = "outer-wrote";
+    return;
+}
+fn main() -> int32 {
+    var names = ["keep"];
+    var ns = [N { id: 0, tag: "x" }];
+    var trail = [0];
+    outer(names, ns, trail);
+    return 0;
+}

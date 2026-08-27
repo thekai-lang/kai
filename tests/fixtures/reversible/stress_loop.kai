@@ -1,0 +1,34 @@
+// v0.0.9 — reversible maturity STRESS: a single activation loops 32 times,
+// mutating scalar + string array elements and an array-of-structs row each
+// pass (element churn + string churn + heap-struct churn), then commits.
+// Every target is an array element so mutations propagate. A long ledger
+// pushed in a loop is the acid test for push/commit claim balance: each
+// retained OLD claim must release exactly once on commit, with NEW claims
+// surviving in the Place. ASan-verified leak-free; exit 127.
+type Row = { id: int32; tag: string; }
+fn churn(mut ids: int32[], mut tags: string[], mut rows: Row[]) -> unit reversible {
+    var i = 0;
+    while i < 32 {
+        ids[i % 4] = i;
+        tags[i % 3] = "t";
+        rows[0].id = rows[0].id + 1;
+        rows[0].tag = rows[0].tag;
+        i = i + 1;
+    }
+    return;
+}
+fn main() -> int32 {
+    var ids = [0, 0, 0, 0];
+    var tags = ["a", "b", "c"];
+    var rows = [Row { id: 0, tag: "x" }];
+    churn(ids, tags, rows);
+    var total = 0;
+    if ids[0] == 28 { total += 1; }
+    if ids[1] == 29 { total += 2; }
+    if ids[2] == 30 { total += 4; }
+    if ids[3] == 31 { total += 8; }
+    if tags[0] == "t" && tags[1] == "t" && tags[2] == "t" { total += 16; }
+    if rows[0].id == 32 { total += 32; }
+    if rows[0].tag == "x" { total += 64; }
+    return total;
+}

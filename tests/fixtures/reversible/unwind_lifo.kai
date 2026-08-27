@@ -1,0 +1,27 @@
+// v0.0.9 — reversible unwind, heterogeneous, mid-loop: a reversible fn LOOPS
+// pushing a long ledger of scalar + string + struct snapshots, then trips a
+// require in the middle. Unwind must restore every prior iteration's Place in
+// LIFO order and release each displaced value exactly once. No refcount
+// underflow, no leak, terminal exit 101.
+type Acc = { sum: int32; note: string; }
+fn spin(mut trail: int32[], mut notes: string[], mut accs: Acc[]) -> unit reversible {
+    var i = 0;
+    while i < 8 {
+        trail[i] = i * 10;
+        notes[i % 2] = "n";
+        accs[0].sum = accs[0].sum + 1;
+        accs[0].note = "N";
+        i = i + 1;
+        if i == 6 {
+            require false;
+        }
+    }
+    return;
+}
+fn main() -> int32 {
+    var trail = [0, 0, 0, 0, 0, 0, 0, 0];
+    var notes = ["a", "b"];
+    var accs = [Acc { sum: 0, note: "start" }];
+    spin(trail, notes, accs);
+    return 0;
+}

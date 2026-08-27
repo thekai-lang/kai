@@ -240,7 +240,21 @@ pub(crate) fn walk_assign(
 ) -> TypedAssign {
     walk_expr(heap, &mut assign.value, scopes, fresh, is_reversible);
 
-    assign.release_old = assign.op.is_none() && heap.is(&assign.value.ty);
+    // Releasing the OLD slot value on a plain heap assignment is only sound
+    // when the slot itself owns the claim we would drop:
+    //   - the root is an OWNING local or by-value HEAP parameter (tracked;
+    //     §9.4/§9.5/§9.6 — params are co-owners via the call-site retain), OR
+    //   - the path passes through an array index — arrays are shared and the
+    //     ARRAY owns its element claims, so an element slot is always an
+    //     owner even when the array object itself rides as a plain borrow
+    //     (e.g. a nested structural borrow).
+    let has_index = assign
+        .path
+        .iter()
+        .any(|step| matches!(step, kai_tast::TypedPlaceStep::Index(_)));
+    let root_owned = scopes.is_owned(assign.root);
+    assign.release_old =
+        assign.op.is_none() && heap.is(&assign.value.ty) && (root_owned || has_index);
 
     // Owning slot: retain borrowed replacements (§9.5). Compound ops exist
     // only on numeric (non-heap) slots in v0.0.5, so this is plain stores
@@ -327,8 +341,13 @@ pub(crate) fn walk_expr(
                 wrap_retain_if_borrowed(heap, e);
             }
         }
-        // Call arguments are BORROWED (§9.6): no retain, but nested
-        // expressions inside argument positions still get walked.
+        // By-value HEAP arguments co-own via the callee's function-ENTRY
+        // retention (codegen), not by wrapping here: wrapping at the call
+        // site is fragile because the hoist pass can lift a call result (and
+        // its argument tree) into a hidden `$tmp` local that never passes
+        // back through this walk (e.g. a catch base), which would silently
+        // drop the retained wrapper and under-release the callee's slot.
+        // Nested expressions inside argument positions still get walked.
         TypedExprKind::Call { args, .. } => {
             for a in args.iter_mut() {
                 walk_expr(heap, a, scopes, fresh, is_reversible);
@@ -391,9 +410,11 @@ pub(crate) fn walk_expr(
             }
             walk_expr(heap, tail, scopes, fresh, is_reversible);
         }
-        // Arguments borrow as usual; the callee VALUE walks too. Capture
-        // retains happen at construction inside codegen (compile-time keyed
-        // per capture type), so the pass adds nothing here.
+        // Co-owning args are retained in the callee prologue; the indirect
+        // target's parameters are heap params like any other. The callee
+        // VALUE walks too. Closure capture retains happen at construction
+        // inside codegen (compile-time keyed per capture type), so the pass
+        // adds nothing for those.
         TypedExprKind::CallIndirect { callee, args } => {
             walk_expr(heap, callee, scopes, fresh, is_reversible);
             for a in args.iter_mut() {

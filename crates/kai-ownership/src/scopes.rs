@@ -38,4 +38,14 @@ impl Scopes {
         }
         out
     }
+
+    /// Whether `local` is an OWNING local (declared with `tracked=true`), as
+    /// opposed to a BORROWED function parameter. Parameters are declared with
+    /// `tracked=false` and never enter a frame, so their absence from every
+    /// open frame identifies them as borrows.
+    pub(crate) fn is_owned(&self, local: LocalId) -> bool {
+        self.frames
+            .iter()
+            .any(|frame| frame.iter().any(|(id, _)| *id == local))
+    }
 }

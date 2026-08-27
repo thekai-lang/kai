@@ -1,0 +1,18 @@
+// v0.0.9 — reversible commit: scalar array elements mutated then normal-return.
+// Regression: each §5.3 snapshot must retain-then-commit without releasing the
+// NEW value's claim. Exit 21 = 1 (ns[0]) + 4 (ns[1]) + 16 (ns[2]).
+fn bump(mut ns: int32[]) -> unit reversible {
+    ns[0] = 1;
+    ns[1] = 2;
+    ns[2] = 3;
+    return;
+}
+fn main() -> int32 {
+    var ns = [0, 0, 0];
+    bump(ns);
+    var total = 0;
+    if ns[0] == 1 { total += 1; }
+    if ns[1] == 2 { total += 2; }
+    if ns[2] == 3 { total += 4; }
+    return total;
+}

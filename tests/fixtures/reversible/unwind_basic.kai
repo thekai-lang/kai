@@ -1,0 +1,25 @@
+// v0.0.9 — reversible unwind rollback: mutate heap values (string array +
+// array-of-structs) then REQUIRE fails. §5.3 unwind walks the activation
+// ledger restoring each Place and releasing the displaced value; the
+// snapshot's retained claim transfers back to the Place. The terminal §10.1
+// panic fires only AFTER a clean unwind — a refcount underflow here would
+// abort (not exit 101) and leak. Asserted with that exit code, a quiet
+// "no underflow" stderr, and ASan leak-freeness.
+type Node = { id: int32; tag: string; }
+fn mutate(mut a: int32[], mut words: string[], mut nodes: Node[]) -> unit reversible {
+    a[0] = 5;
+    words[0] = "delta";
+    nodes[0].id = 99;
+    nodes[0].tag = "hi";
+    a[1] = 7;
+    words[1] = "omega";
+    require false;
+    return;
+}
+fn main() -> int32 {
+    var a = [1, 2];
+    var words = ["one", "two"];
+    var nodes = [Node { id: 3, tag: "lo" }];
+    mutate(a, words, nodes);
+    return 0;
+}

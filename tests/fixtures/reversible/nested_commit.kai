@@ -1,0 +1,23 @@
+// v0.0.9 — nested reversible activations (§5.3.5): each reversible call gets
+// its OWN ledger; the inner commits on its normal return, the outer commits on
+// ITS return. Both sets of mutations reach the caller. Exit 31.
+fn inner(mut a: int32[]) -> unit reversible {
+    a[0] = 10;
+    return;
+}
+fn outer(mut a: int32[], mut b: int32[]) -> unit reversible {
+    inner(a);
+    b[0] = 20;
+    a[1] = a[0] + 1;
+    return;
+}
+fn main() -> int32 {
+    var a = [0, 0];
+    var b = [0];
+    outer(a, b);
+    var total = 0;
+    if a[0] == 10 { total += 1; }
+    if a[1] == 11 { total += 2; }
+    if b[0] == 20 { total += 4; }
+    return total;
+}

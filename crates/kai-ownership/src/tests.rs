@@ -143,8 +143,13 @@ use super::*;
         let TypedExprKind::Retain(inner) = &inner.kind else { panic!("expected retain") };
         assert!(matches!(inner.kind, TypedExprKind::LocalRef(_)));
         assert_eq!(inner.ty, KaiType::String);
-        // Params borrow — they are never in any release list.
-        assert!(releases.is_empty());
+        // By-value HEAP params are co-owners (§9.6): the callee's frame-0
+        // release nets against the call-site retain, so the return path lists
+        // the string param for release. Scalars/non-heap structs stay borrows
+        // and never appear here.
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].0, LocalId(0));
+        assert_eq!(releases[0].1, KaiType::String);
     }
 
     #[test]
@@ -295,8 +300,10 @@ use super::*;
     }
 
     #[test]
-    fn call_arguments_are_borrowed_never_retained() {
-        // callee(p); — argument position borrows (§9.6)
+    fn call_args_are_borrowed_not_wrapped_at_site() {
+        // callee(p); — argument position borrows (§9.6); co-ownership is
+        // established by the callee's function-entry retention in codegen,
+        // not by a Retain marker wrapped here at the call site.
         let callee_call = TypedExpr::new(
             TypedExprKind::Call {
                 func: kai_tast::FunctionId(1),

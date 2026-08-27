@@ -34,8 +34,12 @@ define ptr @id(ptr %s) {
 entry:
   %s1 = alloca ptr, align 8
   store ptr %s, ptr %s1, align 8
+  %ret.hdr = load ptr, ptr %s1, align 8
+  call void @kai_retain(ptr %ret.hdr)
   %tmp = load ptr, ptr %s1, align 8
   call void @kai_retain(ptr %tmp)
+  %rel.hdr = load ptr, ptr %s1, align 8
+  call void @kai_release(ptr %rel.hdr)
   ret ptr %tmp
 }
 
@@ -43,6 +47,8 @@ define void @set_first(ptr %arr) {
 entry:
   %arr1 = alloca ptr, align 8
   store ptr %arr, ptr %arr1, align 8
+  %ret.hdr = load ptr, ptr %arr1, align 8
+  call void @kai_retain(ptr %ret.hdr)
   %arr.hdr = load ptr, ptr %arr1, align 8
   %arr.len.p = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %arr.hdr, i32 0, i32 1
   %arr.len = load i64, ptr %arr.len.p, align 4
@@ -60,6 +66,8 @@ in.bounds:                                        ; preds = %entry
   %arr.elems = load ptr, ptr %arr.elems.p, align 8
   %place.elem = getelementptr inbounds i32, ptr %arr.elems, i64 0
   store i32 42, ptr %place.elem, align 4
+  %rel.hdr = load ptr, ptr %arr1, align 8
+  call void @kai_release(ptr %rel.hdr)
   ret void
 }
 
@@ -70,6 +78,8 @@ entry:
   %total = alloca i32, align 4
   %a1 = alloca ptr, align 8
   store ptr %a, ptr %a1, align 8
+  %ret.hdr = load ptr, ptr %a1, align 8
+  call void @kai_retain(ptr %ret.hdr)
   store i32 0, ptr %total, align 4
   %tmp = load ptr, ptr %a1, align 8
   %arr.len.p = getelementptr inbounds nuw %"KaiArray.\22i32\22", ptr %tmp, i32 0, i32 1
@@ -96,6 +106,8 @@ for.body:                                         ; preds = %for.cond
 
 for.end:                                          ; preds = %for.cond
   %tmp3 = load i32, ptr %total, align 4
+  %rel.hdr = load ptr, ptr %a1, align 8
+  call void @kai_release(ptr %rel.hdr)
   ret i32 %tmp3
 
 panic:                                            ; preds = %for.body
@@ -454,6 +466,8 @@ arith.ok153:                                      ; preds = %if.then147
 
 declare void @kai_retain(ptr)
 
+declare void @kai_release(ptr)
+
 declare void @kai_panic(ptr, i64, ptr, i64, i64)
 
 ; Function Attrs: nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none)
@@ -462,8 +476,6 @@ declare { i32, i1 } @llvm.sadd.with.overflow.i32(i32, i32) #0
 declare ptr @kai_string_new(ptr, i64)
 
 declare i8 @kai_string_eq(ptr, ptr)
-
-declare void @kai_release(ptr)
 
 declare ptr @kai_array_new(i64, i64, ptr)
 

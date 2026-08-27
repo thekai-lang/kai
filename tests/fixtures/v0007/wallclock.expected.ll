@@ -9,6 +9,10 @@ define void @expire_check(ptr %t) {
 entry:
   %t1 = alloca ptr, align 8
   store ptr %t, ptr %t1, align 8
+  %wallclock.hdr = load ptr, ptr %t1, align 8
+  call void @kai_retain(ptr %wallclock.hdr)
+  %wallclock.hdr2 = load ptr, ptr %t1, align 8
+  call void @kai_wallclock_release(ptr %wallclock.hdr2)
   ret void
 }
 
@@ -28,6 +32,10 @@ entry:
   ret i32 0
 }
 
+declare void @kai_retain(ptr)
+
+declare void @kai_wallclock_release(ptr)
+
 declare ptr @kai_string_new(ptr, i64)
 
 declare i64 @kai_wallclock_now()
@@ -43,5 +51,3 @@ entry:
 declare void @kai_release(ptr)
 
 declare ptr @kai_wallclock_new(i64, ptr, i64)
-
-declare void @kai_wallclock_release(ptr)

@@ -1,0 +1,24 @@
+// v0.0.9 — reversible commit: heap values (string array elements + heap struct
+// fields) mutated then normal-return. Regression: the per-type snapshot dtor
+// must release the retained OLD claim on commit, and the NEW claim must live
+// on in the committed Place — no leak, no double-free. Exit 21.
+type User = { name: string; age: int32; }
+fn edit(mut names: string[], mut u: User) -> unit reversible {
+    names[0] = "zed";
+    names[1] = names[0];
+    u.name = "grace";
+    u.age = 50;
+    return;
+}
+fn main() -> int32 {
+    var names = ["a", "b"];
+    var u = User { name: "ada", age: 30 };
+    edit(names, u);
+    var total = 0;
+    if names[0] == "zed" { total += 1; }
+    if names[1] == "zed" { total += 2; }
+    if u.name == "ada" { total += 4; }
+    if u.age == 30 { total += 8; }
+    if names[0] == names[1] { total += 16; }
+    return total;
+}

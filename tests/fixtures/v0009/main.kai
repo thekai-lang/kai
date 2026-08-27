@@ -1,0 +1,27 @@
+// v0.0.9 — reversible function commit path (§5.3)
+// Deterministic value trail: a `reversible` fn mutates a caller-visible
+// array element (scalar + string), a heap struct field, then normal-returns.
+// Every §5.3 snapshot commits; the caller observes all mutations. Golden IR
+// locks the kai_reversible_enter/_push/_commit call sites.
+type Point = { x: int32; label: string; }
+fn rework(mut ns: int32[], mut words: string[], mut pt: Point) -> unit reversible {
+    ns[0] = 9;
+    words[0] = "moved";
+    pt.x = 41;
+    ns[1] = ns[0] + pt.x;
+    words[1] = pt.label;
+    return;
+}
+fn main() -> int32 {
+    var ns = [0, 0];
+    var words = ["a", "b"];
+    var pt = Point { x: 0, label: "p" };
+    rework(ns, words, pt);
+    var total = 0;
+    if ns[0] == 9 { total += 1; }
+    if ns[1] == 50 { total += 2; }
+    if words[0] == "moved" { total += 4; }
+    if words[1] == "p" { total += 8; }
+    if pt.x == 0 { total += 16; }
+    return total;
+}

@@ -56,12 +56,17 @@ pub fn resolve(program: &mut TypedProgram) {
 }
 
 fn resolve_fn(heap: &HeapBearing, decl: &mut kai_tast::TypedFnDecl, fresh: &mut FreshIds) {
-    // Frame 0: parameters — they borrow, so they are never registered for
-    // release (the callee does not release what it does not own, §9.3).
+    // Frame 0: parameters. By-value HEAP parameters (string, array, heap-
+    // bearing struct/tagged/closure) are OWNERS: every call site retains the
+    // argument before handing it in (§9.6, walk.rs Call arms), so the callee
+    // carries its own co-ownership claim that this frame's exit releases.
+    // This is what makes REASSIGNING a heap param (`s = x`, `u.name = x`)
+    // leak-free — the fresh value is released with the slot. Scalars and
+    // non-heap structs borrow as always and are never tracked.
     let mut scopes = Scopes::default();
     scopes.push();
     for param in &decl.params {
-        scopes.declare(param.local, param.ty.clone(), false);
+        scopes.declare(param.local, param.ty.clone(), heap.is(&param.ty));
     }
     let body = std::mem::replace(&mut decl.body, TypedBlock { stmts: Vec::new() });
     decl.body = walk_block(heap, body, &mut scopes, fresh, decl.is_reversible);

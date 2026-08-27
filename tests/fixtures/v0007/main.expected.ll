@@ -7,8 +7,12 @@ define ptr @produce(ptr %t) {
 entry:
   %t1 = alloca ptr, align 8
   store ptr %t, ptr %t1, align 8
+  %ret.hdr = load ptr, ptr %t1, align 8
+  call void @kai_retain(ptr %ret.hdr)
   %tmp = load ptr, ptr %t1, align 8
   call void @kai_retain(ptr %tmp)
+  %rel.hdr = load ptr, ptr %t1, align 8
+  call void @kai_release(ptr %rel.hdr)
   ret ptr %tmp
 }
 
@@ -16,6 +20,10 @@ define i32 @consume(ptr %t) {
 entry:
   %t1 = alloca ptr, align 8
   store ptr %t, ptr %t1, align 8
+  %ret.hdr = load ptr, ptr %t1, align 8
+  call void @kai_retain(ptr %ret.hdr)
+  %rel.hdr = load ptr, ptr %t1, align 8
+  call void @kai_release(ptr %rel.hdr)
   ret i32 42
 }
 
@@ -23,6 +31,10 @@ define void @maybe_escape(ptr %t) {
 entry:
   %t1 = alloca ptr, align 8
   store ptr %t, ptr %t1, align 8
+  %ret.hdr = load ptr, ptr %t1, align 8
+  call void @kai_retain(ptr %ret.hdr)
+  %rel.hdr = load ptr, ptr %t1, align 8
+  call void @kai_release(ptr %rel.hdr)
   ret void
 }
 
@@ -30,8 +42,12 @@ define i32 @caller(ptr %t) {
 entry:
   %t1 = alloca ptr, align 8
   store ptr %t, ptr %t1, align 8
+  %ret.hdr = load ptr, ptr %t1, align 8
+  call void @kai_retain(ptr %ret.hdr)
   %tmp = load ptr, ptr %t1, align 8
   %call = call i32 @consume(ptr %tmp)
+  %rel.hdr = load ptr, ptr %t1, align 8
+  call void @kai_release(ptr %rel.hdr)
   ret i32 %call
 }
 
@@ -58,6 +74,6 @@ entry:
 
 declare void @kai_retain(ptr)
 
-declare ptr @kai_string_new(ptr, i64)
-
 declare void @kai_release(ptr)
+
+declare ptr @kai_string_new(ptr, i64)

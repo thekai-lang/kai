@@ -99,12 +99,24 @@ fn function_body<'ctx>(ctx: &Ctx<'ctx>, decl: &kai_tast::TypedFnDecl) {
 
     // Params become read-write locals: alloca + store the incoming copy.
     // Callers passed values BY VALUE, so callee mutation stays invisible.
+    //
+    // §9.6 co-ownership: by-value HEAP parameters (string, array, heap-
+    // bearing struct/tagged/closure) are co-owned — the callee retains its
+    // own claim HERE in the prologue, and the ownership pass tracks the
+    // param so this frame's exit releases it. Retaining at function entry
+    // (not at each call site) is robust against the hoist pass lifting a
+    // call's argument tree into a hidden `$tmp` local, and it makes
+    // REASSIGNING a heap param (`s = x`, `u.name = x`) leak-free: the fresh
+    // value is released with the slot. Net effect for the caller is zero.
     for (idx, param) in decl.params.iter().enumerate() {
         let arg = function
             .get_nth_param(idx as u32)
             .expect("parameter exists");
         let slot = alloca_in_entry(ctx, function, types::to_llvm(ctx, &param.ty), &param.name);
         let _ = ctx.builder.build_store(slot, arg);
+        if crate::emit::ownership::heap_bearing(ctx, &param.ty) {
+            crate::emit::ownership::emit_retain_slot(ctx, &param.ty, slot);
+        }
         frame.bind(param.local, slot);
     }
 
