@@ -16,6 +16,7 @@ fn minimal_program() -> TypedProgram {
             ret: KaiType::Int32,
             declared_effects: None,
             inferred_effects: EffectSet::default(),
+            is_reversible: false,
             body: TypedBlock {
                 stmts: vec![TypedStmt::Return(Some(ret_expr))],
             },
@@ -48,6 +49,7 @@ fn negative_literal_keeps_bit_pattern() {
             ret: KaiType::Int32,
             declared_effects: None,
             inferred_effects: EffectSet::default(),
+            is_reversible: false,
             body: TypedBlock {
                 stmts: vec![TypedStmt::Return(Some(expr))],
             },
@@ -66,6 +68,7 @@ pub(crate) fn fn_decl(id: u32, name: &str, ret: KaiType, stmts: Vec<TypedStmt>) 
         ret,
         declared_effects: None,
         inferred_effects: EffectSet::default(),
+        is_reversible: false,
         body: TypedBlock { stmts },
     }
 }

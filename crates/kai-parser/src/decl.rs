@@ -79,6 +79,9 @@ fn fn_decl(parser: &mut Parser) -> FnDecl {
     parser.expect_simple(&TokenKind::Arrow);
     let ret = ty::ty(parser);
     let effects = effects_annotation(parser);
+    // v0.0.9 (§5.3): `reversible` is a post-signature marker, before the body,
+    // analogous to the `effects { ... }` contract annotation position.
+    let is_reversible = parser.eat_simple(&TokenKind::Reversible);
     let body = stmt::block(parser);
     let span = Span::merge(start, body.span);
 
@@ -88,6 +91,7 @@ fn fn_decl(parser: &mut Parser) -> FnDecl {
         params,
         ret,
         effects,
+        is_reversible,
         body,
         span,
     }

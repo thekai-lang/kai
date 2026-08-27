@@ -162,6 +162,7 @@ fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> Typ
         ret,
         declared_effects,
         inferred_effects: kai_tast::EffectSet::default(),
+        is_reversible: decl.is_reversible,
         body,
     }
 }

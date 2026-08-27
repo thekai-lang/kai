@@ -33,6 +33,11 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         "Ok" => Some(TokenKind::OkKw),
         "Err" => Some(TokenKind::ErrKw),
         "catch" => Some(TokenKind::Catch),
+        // v0.0.9 keywords (§5.3): `reversible` marks a function whose Place
+        // mutations are transactionally reversible; `compensate` attaches an
+        // external-effect compensation block to a call.
+        "reversible" => Some(TokenKind::Reversible),
+        "compensate" => Some(TokenKind::Compensate),
         // v0.0.7 keywords (§5.1 temporal, §5.2 require/observe syntax stable)
         "require" => Some(TokenKind::Require),
         "observe" => Some(TokenKind::Observe),
@@ -66,5 +71,11 @@ mod tests {
     fn module_keywords() {
         assert_eq!(lookup("use"), Some(TokenKind::Use));
         assert_eq!(lookup("public"), Some(TokenKind::Public));
+    }
+
+    #[test]
+    fn reversible_keywords() {
+        assert_eq!(lookup("reversible"), Some(TokenKind::Reversible));
+        assert_eq!(lookup("compensate"), Some(TokenKind::Compensate));
     }
 }

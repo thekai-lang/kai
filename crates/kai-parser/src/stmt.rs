@@ -366,7 +366,12 @@ fn expr_or_assign(parser: &mut Parser) -> Stmt {
     let end = parser.expect_simple(&TokenKind::Semi);
     // EBNF §6 (v0.0.3): `ExprStmt ::= CallExprStmt` — bare expression
     // statements must be calls. `Invalid` stays silent: it already reported.
-    if !matches!(parsed.kind, ExprKind::Call(_) | ExprKind::Invalid) {
+    // `Compensate` (v0.0.9) is a call with a compensation block attached, so
+    // it is a valid expression statement (base must be a call).
+    if !matches!(
+        parsed.kind,
+        ExprKind::Call(_) | ExprKind::Invalid | ExprKind::Compensate(_)
+    ) {
         parser.diagnostics.push(error::custom(
             "only function calls can appear as expression statements",
             start,

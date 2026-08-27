@@ -29,6 +29,7 @@
 
 mod fresh;
 mod heap;
+mod hoist;
 mod scopes;
 mod walk;
 
@@ -39,9 +40,10 @@ use heap::HeapBearing;
 use scopes::Scopes;
 use walk::walk_block;
 #[allow(unused_imports)]
+pub(crate) use hoist::hoist_borrow_temps;
+#[allow(unused_imports)]
 pub(crate) use walk::{
-    finish_return, hoist_borrow_temps, push_frame_releases, walk_assign, walk_expr, walk_for,
-    walk_stmt, walk_stmt_rest,
+    finish_return, push_frame_releases, walk_assign, walk_expr, walk_for, walk_stmt, walk_stmt_rest,
 };
 
 /// Runs the pass over a typechecked program, annotating it in place.

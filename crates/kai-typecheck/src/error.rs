@@ -281,6 +281,13 @@ pub(crate) fn catch_tail_mismatch(expected: KaiType, found: KaiType, span: Span)
     )
 }
 
+pub(crate) fn compensate_on_non_call(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        "`compensate` can only be attached to a function call (§5.3)",
+        span,
+    )
+}
+
 pub(crate) fn closure_needs_return(ret: KaiType, span: Span) -> Diagnostic {
     Diagnostic::error(
         format!("closure with return type `{ret}` must end in a value or return"),

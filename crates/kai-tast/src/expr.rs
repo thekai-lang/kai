@@ -144,6 +144,18 @@ pub enum TypedExprKind {
         /// evaluates (ownership pass fills this; codegen emits them).
         releases: Vec<(crate::symbol::LocalId, KaiType)>,
     },
+    /// `base compensate { stmts }` (v0.0.9, §5.3) — an external-effect
+    /// compensation block attached to an ordinary call inside a `reversible`
+    /// function. `base` must be a call to a non-reversible (external) effect
+    /// fn; the block is executed on unwind in reverse. The expression's own
+    /// value is the call's result (the block never produces a value here).
+    Compensate {
+        base: Box<TypedExpr>,
+        stmts: Vec<crate::stmt::TypedStmt>,
+        /// Locals declared by the compensation block, released after `stmts`
+        /// evaluate (ownership pass fills this; codegen emits them).
+        releases: Vec<(crate::symbol::LocalId, KaiType)>,
+    },
     /// Call through a closure VALUE (`f(x)` where `f: Closure{..}`, v0.0.6):
     /// argument/result types already unified against the signature.
     CallIndirect {

@@ -80,6 +80,43 @@ pub(crate) fn catch_expr(checker: &mut Checker, c: &CatchExpr) -> TypedExpr {
     )
 }
 
+/// `base compensate { stmts }` (v0.0.9, §5.3) — an external-effect compensation
+/// block attached to a call inside a `reversible` function. The base must be a
+/// call expression; the compensation block is statement-only and executes on
+/// unwind in reverse. The expression's value is the base call's result (the
+/// block never produces a value here). The structural rule that this may only
+/// appear inside a `reversible` function is enforced by the effect checker
+/// (§8 constraint 8), not here.
+pub(crate) fn compensate_expr(checker: &mut Checker, c: &CompensateExpr) -> TypedExpr {
+    let base = lower(checker, &c.base, None);
+    let call_ty = base.ty.clone();
+    match &base.kind {
+        TypedExprKind::Call { .. } | TypedExprKind::CallIndirect { .. } => {}
+        _ => {
+            checker.error(error::compensate_on_non_call(c.base.span));
+            return poisoned();
+        }
+    }
+
+    checker.locals.push_scope();
+    let ret_hint = KaiType::Unit;
+    let stmts: Vec<_> = c
+        .stmts
+        .iter()
+        .filter_map(|s| stmt::lower_stmt(checker, s, &ret_hint))
+        .collect();
+    checker.locals.pop_scope();
+
+    TypedExpr::new(
+        TypedExprKind::Compensate {
+            base: Box::new(base),
+            stmts,
+            releases: Vec::new(),
+        },
+        call_ty,
+    )
+}
+
 pub(crate) fn closure_literal(checker: &mut Checker, clo: &kai_ast::ClosureLitExpr) -> TypedExpr {
     let boundary = checker.locals.next_id();
 

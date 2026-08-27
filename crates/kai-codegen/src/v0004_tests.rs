@@ -63,6 +63,7 @@ fn qualified_struct_type_names_follow_the_same_rule() {
         ret: KaiType::Unit,
         declared_effects: None,
         inferred_effects: EffectSet::default(),
+        is_reversible: false,
         body: TypedBlock {
             stmts: vec![TypedStmt::Return(None)],
         },

@@ -128,6 +128,12 @@ fn seed_expr(expr: &TypedExpr, max: &mut u32) {
             }
             seed_expr(tail, max);
         }
+        TypedExprKind::Compensate { base, stmts, .. } => {
+            seed_expr(base, max);
+            for s in stmts {
+                seed_stmts(std::slice::from_ref(s), max);
+            }
+        }
         // Closure bodies/captures are scoped to the literal; their ids were
         // seeded while walking it (captures reference pre-existing locals).
         TypedExprKind::ClosureLit(clo) => {

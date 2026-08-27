@@ -169,6 +169,18 @@ pub struct CatchExpr {
     pub tail: Box<Expr>,
 }
 
+/// `base compensate { stmts }` (v0.0.9, §5.3) — an external-effect
+/// compensation block attached to a call inside a `reversible` function. Mirrors
+/// `Catch`'s postfix-block shape, but the block is statement-only (no trailing
+/// value expression): the compensation is executed on unwind, never produces a
+/// value at the call site.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompensateExpr {
+    pub base: Box<Expr>,
+    /// Compensation statements, executed on unwind in reverse.
+    pub stmts: Vec<Stmt>,
+}
+
 /// `fn(params) -> ret { body }` — closure literal (v0.0.6, §3.5). The value
 /// syntax keeps its `fn` head; only the closure TYPE dropped it.
 #[derive(Debug, Clone, PartialEq)]
@@ -206,6 +218,9 @@ pub enum ExprKind {
     Coalesce(CoalesceExpr),
     Catch(CatchExpr),
     ClosureLit(ClosureLitExpr),
+    /// v0.0.9 (§5.3) — postfix compensation block on a call inside a
+    /// `reversible` function.
+    Compensate(CompensateExpr),
     /// Poisoned node produced only by parser error recovery (e.g. an
     /// expression nested past the recursion budget). Downstream phases treat
     /// it as an error marker, never as compilable code.

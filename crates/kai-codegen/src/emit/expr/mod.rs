@@ -141,6 +141,9 @@ pub(crate) fn emit<'ctx>(
         // the payload; the Err path binds the error, runs the block, then
         // evaluates the tail — releases run AFTER the tail (it may read the
         // locals being released).
+        // `base compensate { stmts }` (v0.0.9, §5.3): normal path just evaluates the base call;
+        // the compensation block executes only on unwind (Phase E). For now emit the base.
+        TypedExprKind::Compensate { base, .. } => emit(ctx, frame, base),
         TypedExprKind::Catch { base, err_binding, err_ty, stmts, tail, releases } => {
             let recv = emit(ctx, frame, base).into_struct_value();
             let tag = ctx

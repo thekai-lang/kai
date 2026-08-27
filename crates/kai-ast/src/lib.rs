@@ -13,7 +13,7 @@ pub mod use_decl;
 
 pub use assign::{AssignOp, AssignTarget, PlaceStep};
 pub use expr::{
-    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, CatchExpr, ClosureLitExpr, CoalesceExpr, ErrLitExpr, Expr,
+    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, CatchExpr, ClosureLitExpr, CoalesceExpr, CompensateExpr, ErrLitExpr, Expr,
     ExprKind, FieldAccessExpr, FieldInit, FloatLit, IndexExpr, IntLit, OkLitExpr, SomeLitExpr, StrLitExpr,
     StructLitExpr, UnaryExpr, UnaryOp,
 };

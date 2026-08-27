@@ -5,6 +5,7 @@
 //! own execution point, with nothing for a caller to propagate (see `trust.rs`, v0.20–v0.22).
 
 pub mod trust;
+mod reversible;
 
 use kai_diagnostics::{Diagnostic, Span};
 use kai_tast::{Effect, EffectSet, KaiType, TemporalOrigin, TypedProgram, TypedStmt};
@@ -104,6 +105,12 @@ pub fn analyze(program: &mut TypedProgram) -> Vec<Diagnostic> {
         check_temporal_reachability(f, &program.fns, &mut diagnostics);
     }
 
+    // --- 6b. Reversible structure (§5.3, §8 constraint 8): inside a `reversible`
+    // function, every call must be a Place mutation, `compensate`-wrapped, or
+    // call another `reversible` function. This is a structural validator, not
+    // an effect inferrer — it never emits LedgerPush (§5.3.2 phase split).
+    reversible::check_program(program, &mut diagnostics);
+
     // --- 7. @wallclock → @local no conversion (v0.0.7: no conversion at all) ---
     // Typecheck already prevents implicit conversion, but we also need to reject any explicit attempt?
     // For v0.0.7, there is no syntax for conversion, so nothing to check. The invariant is that no @wallclock value is used where @local is expected.
@@ -201,6 +208,10 @@ fn collect_expr_calls(expr: &kai_tast::TypedExpr, out: &mut Vec<u32>) {
             collect_expr_calls(base, out);
             for s in stmts { collect_stmt_calls(s, out); }
             collect_expr_calls(tail, out);
+        }
+        kai_tast::TypedExprKind::Compensate { base, stmts, .. } => {
+            collect_expr_calls(base, out);
+            for s in stmts { collect_stmt_calls(s, out); }
         }
         kai_tast::TypedExprKind::ClosureLit(clo) => {
             for s in &clo.body.stmts { collect_stmt_calls(s, out); }
@@ -346,6 +357,10 @@ fn check_expr_temporal(expr: &kai_tast::TypedExpr, all_fns: &[kai_tast::TypedFnD
                     for s in stmts { check_stmt_temporal(s, all_fns, diagnostics); }
                     check_expr_temporal(tail, all_fns, diagnostics);
                 }
+                kai_tast::TypedExprKind::Compensate { base, stmts, .. } => {
+                    check_expr_temporal(base, all_fns, diagnostics);
+                    for s in stmts { check_stmt_temporal(s, all_fns, diagnostics); }
+                }
                 kai_tast::TypedExprKind::SomeLit(v) | kai_tast::TypedExprKind::OkLit(v) | kai_tast::TypedExprKind::ErrLit(v) | kai_tast::TypedExprKind::Neg(v) | kai_tast::TypedExprKind::Not(v) | kai_tast::TypedExprKind::Retain(v) => {
                     check_expr_temporal(v, all_fns, diagnostics);
                 }
@@ -367,6 +382,7 @@ fn check_stmt_temporal(stmt: &TypedStmt, all_fns: &[kai_tast::TypedFnDecl], diag
         _ => check_block_temporal(&kai_tast::TypedBlock { stmts: vec![stmt.clone()] }, all_fns, diagnostics),
     }
 }
+
 
 fn is_local_temporal(ty: &KaiType) -> bool {
     match ty {

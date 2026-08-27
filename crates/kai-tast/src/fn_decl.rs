@@ -29,6 +29,9 @@ pub struct TypedFnDecl {
     pub declared_effects: Option<EffectSet>,
     /// Inferred effects `effect(f) = direct_effects(f) ∪ ⋃ effect(g)` (§5.1.2), least-fixed-point over SCCs.
     pub inferred_effects: EffectSet,
+    /// `reversible` (§5.3): every Place mutation is transactionally reversible;
+    /// external-effect calls must be `compensate`-wrapped. `false` = ordinary.
+    pub is_reversible: bool,
     pub body: TypedBlock,
 }
 

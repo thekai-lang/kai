@@ -84,6 +84,7 @@ fn jit_params_are_copies_and_field_places_write_locally() {
         ret: KaiType::Unit,
         declared_effects: None,
         inferred_effects: EffectSet::default(),
+        is_reversible: false,
         body: TypedBlock {
             stmts: vec![
                 TypedStmt::Assign(kai_tast::TypedAssign {
@@ -109,6 +110,7 @@ fn jit_params_are_copies_and_field_places_write_locally() {
         ret: KaiType::Int32,
         declared_effects: None,
         inferred_effects: EffectSet::default(),
+        is_reversible: false,
         body: TypedBlock {
             stmts: vec![
                 TypedStmt::Let(kai_tast::TypedLet {
@@ -178,6 +180,7 @@ fn jit_call_argument_flows_into_result() {
         ret: KaiType::Int32,
         declared_effects: None,
         inferred_effects: EffectSet::default(),
+        is_reversible: false,
         body: TypedBlock {
             stmts: vec![TypedStmt::Return(Some(TypedExpr::new(
                 TypedExprKind::Binary {
@@ -204,6 +207,7 @@ fn jit_call_argument_flows_into_result() {
         ret: KaiType::Int32,
         declared_effects: None,
         inferred_effects: EffectSet::default(),
+        is_reversible: false,
         body: TypedBlock {
             stmts: vec![TypedStmt::Return(Some(TypedExpr::new(
                 TypedExprKind::Call {

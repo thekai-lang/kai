@@ -10,8 +10,8 @@ use crate::error;
 use crate::scope::DeclareOutcome;
 use crate::stmt;
 use kai_ast::{
-    ArrayLitExpr, BinaryExpr, BinaryOp as AstBinaryOp, CallExpr, CatchExpr, CoalesceExpr, Expr,
-    ExprKind, FieldAccessExpr, Ident, IndexExpr, StructLitExpr, UnaryOp,
+    ArrayLitExpr, BinaryExpr, BinaryOp as AstBinaryOp, CallExpr, CatchExpr, CoalesceExpr,
+    CompensateExpr, Expr, ExprKind, FieldAccessExpr, Ident, IndexExpr, StructLitExpr, UnaryOp,
 };
 use kai_diagnostics::Span;
 use kai_tast::{
@@ -28,7 +28,7 @@ mod tagged;
 mod collect;
 pub(crate) use struct_lit::{field_access, resolve_field_hop, resolve_index_hop, struct_lit};
 pub(crate) use array::{array_lit, index_expr};
-pub(crate) use tagged::{capture_poisoned, catch_expr, closure_literal, coalesce_expr};
+pub(crate) use tagged::{capture_poisoned, catch_expr, closure_literal, coalesce_expr, compensate_expr};
 pub(crate) use collect::{collect_local_refs, collect_refs_expr, collect_refs_stmt, is_import_alias};
 pub(crate) use call::{call_expr, qualified_callee, try_closure_call, unwrap_or_builtin};
 pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType>) -> TypedExpr {
@@ -132,6 +132,7 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         }
         ExprKind::Coalesce(c) => tagged::coalesce_expr(checker, c),
         ExprKind::Catch(c) => tagged::catch_expr(checker, c),
+        ExprKind::Compensate(c) => tagged::compensate_expr(checker, c),
         ExprKind::ClosureLit(clo) => tagged::closure_literal(checker, clo),
         // Poisoned parser-recovery node. The program already failed upstream;
         // this defensive diagnostic keeps the phase contract explicit.

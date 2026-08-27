@@ -23,6 +23,10 @@ pub struct FnDecl {
     /// `effects { ... }` verified contract (§5.1.2): `inferred ⊆ declared`, checked, never trusted.
     /// `None` = omitted (purely inferred), `Some(empty)` = `effects {}` declared empty.
     pub effects: Option<EffectSet>,
+    /// `reversible` (§5.3): every Place mutation in the body is transactionally
+    /// reversible (pre-mutation snapshot) and external-effect calls must be
+    /// `compensate`-wrapped. `false` = ordinary transactional-unaware fn.
+    pub is_reversible: bool,
     pub body: Block,
     pub span: Span,
 }

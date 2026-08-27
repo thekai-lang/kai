@@ -51,6 +51,7 @@ use super::*;
             ret: ret_ty,
             declared_effects: None,
             inferred_effects: EffectSet::default(),
+            is_reversible: false,
             body,
         }
     }

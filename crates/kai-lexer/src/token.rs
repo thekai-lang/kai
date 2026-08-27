@@ -26,6 +26,11 @@ pub enum TokenKind {
     OkKw,
     ErrKw,
     Catch,
+    // v0.0.9 keywords (§5.3): `reversible` marks a function whose Place
+    // mutations are transactionally reversible; `compensate` is the postfix
+    // operator that attaches an external-effect compensation block to a call.
+    Reversible,
+    Compensate,
     /// Bare `_`, carved out of `Ident` as of v0.0.6 (§9.9b): reserved
     /// exclusively for the discard statement, never a binding name.
     Underscore,
@@ -141,6 +146,8 @@ impl TokenKind {
             TokenKind::OkKw => "`Ok`".into(),
             TokenKind::ErrKw => "`Err`".into(),
             TokenKind::Catch => "`catch`".into(),
+            TokenKind::Reversible => "`reversible`".into(),
+            TokenKind::Compensate => "`compensate`".into(),
             TokenKind::Underscore => "`_`".into(),
             TokenKind::True | TokenKind::False => "boolean literal".into(),
             TokenKind::Ident(name) => format!("identifier `{name}`"),

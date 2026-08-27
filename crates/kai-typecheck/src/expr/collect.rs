@@ -96,6 +96,12 @@ pub(crate) fn collect_refs_expr(e: &TypedExpr, out: &mut Vec<LocalId>) {
             }
             collect_refs_expr(tail, out);
         }
+        TypedExprKind::Compensate { base, stmts, .. } => {
+            collect_refs_expr(base, out);
+            for s in stmts {
+                collect_refs_stmt(s, out);
+            }
+        }
         // Nested closures own their captures; literals carry nothing.
         TypedExprKind::ClosureLit(_) | TypedExprKind::NoneLit => {}
         TypedExprKind::IntLit(_) | TypedExprKind::FloatLit(_) | TypedExprKind::BoolLit(_)

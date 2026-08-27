@@ -6,9 +6,9 @@ use crate::error;
 use crate::parser::Parser;
 use crate::{decl, stmt, ty as ty_parser};
 use kai_ast::{
-    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, ClosureLitExpr, CatchExpr, CoalesceExpr, ErrLitExpr, Expr,
-    ExprKind, FieldAccessExpr, FieldInit, FloatLit, IndexExpr, IntLit, OkLitExpr, SomeLitExpr, StrLitExpr,
-    StructLitExpr, UnaryExpr, UnaryOp,
+    ArrayLitExpr, BinaryExpr, BinaryOp, CallExpr, ClosureLitExpr, CatchExpr, CoalesceExpr, CompensateExpr,
+    ErrLitExpr, Expr, ExprKind, FieldAccessExpr, FieldInit, FloatLit, IndexExpr, IntLit, OkLitExpr, SomeLitExpr,
+    StrLitExpr, StructLitExpr, UnaryExpr, UnaryOp,
 };
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
@@ -214,6 +214,20 @@ fn postfix(parser: &mut Parser) -> Expr {
                         err_binding,
                         stmts: catch_stmts,
                         tail: Box::new(tail),
+                    }),
+                }
+            }
+            TokenKind::Compensate => {
+                // `base compensate { stmts }` (v0.0.9, §5.3). Postfix, same
+                // binding level as `catch`. The block is statement-only.
+                parser.bump(); // `compensate`
+                let block = stmt::block(parser);
+                let span = Span::merge(e.span, block.span);
+                e = Expr {
+                    span,
+                    kind: ExprKind::Compensate(CompensateExpr {
+                        base: Box::new(e),
+                        stmts: block.stmts,
                     }),
                 }
             }

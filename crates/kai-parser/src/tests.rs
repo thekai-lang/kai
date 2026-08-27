@@ -1,4 +1,5 @@
 use super::*;
+use kai_ast::{ExprKind, StmtKind};
 use kai_lexer::lex;
 
 pub(crate) fn parse_src(src: &str) -> Result<Program, Vec<Diagnostic>> {
@@ -22,6 +23,42 @@ fn parses_minimal_program() {
         other => panic!("expected named type, got {other:?}"),
     }
     assert_eq!(main.body.stmts.len(), 1);
+}
+
+#[test]
+fn parses_reversible_fn_marker() {
+    let program = parse_src("fn transferMoney() -> int32 reversible { return 0; }").unwrap();
+    let f = &program.fns[0];
+    assert!(f.is_reversible, "expected is_reversible = true");
+}
+
+#[test]
+fn parses_non_reversible_fn_marker() {
+    let program = parse_src("fn ordinary() -> int32 { return 0; }").unwrap();
+    let f = &program.fns[0];
+    assert!(!f.is_reversible, "expected is_reversible = false");
+}
+
+#[test]
+fn parses_compensate_postfix() {
+    let program = parse_src(
+        "fn f() -> int32 reversible { chargeCard(user, fee) compensate { refundCard(user, fee); }; return 0; }",
+    )
+    .unwrap();
+    let f = &program.fns[0];
+    assert!(f.is_reversible);
+    let stmts = &f.body.stmts;
+    let first = stmts.first().expect("one statement");
+    let StmtKind::Expr(expr) = &first.kind else {
+        panic!("expected expression statement");
+    };
+    let ExprKind::Compensate(comp) = &expr.kind else {
+        panic!("expected Compensate expr, got {:?}", expr.kind);
+    };
+    let ExprKind::Call(_) = comp.base.kind else {
+        panic!("compensate base must be a call");
+    };
+    assert_eq!(comp.stmts.len(), 1);
 }
 
 #[test]

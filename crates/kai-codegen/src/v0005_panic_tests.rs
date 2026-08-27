@@ -14,6 +14,7 @@ fn returns(expr: TypedExpr) -> TypedProgram {
             ret: expr.ty.clone(),
             declared_effects: None,
             inferred_effects: EffectSet::default(),
+            is_reversible: false,
             body: TypedBlock {
                 stmts: vec![TypedStmt::Return(Some(expr))],
             },
