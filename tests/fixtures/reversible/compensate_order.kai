@@ -1,0 +1,15 @@
+// exit: 101
+fn push(msg: string) -> unit { return; }
+fn crash() -> unit reversible { require false; return; }
+
+fn onboard() -> unit reversible {
+    push("1") compensate { push("A"); };
+    push("2") compensate { push("B"); };
+    crash();
+    return;
+}
+
+fn main() -> int32 {
+    onboard();
+    return 1;
+}

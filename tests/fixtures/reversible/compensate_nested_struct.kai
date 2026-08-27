@@ -1,0 +1,23 @@
+// exit: 1
+type Order = { item: string; }
+type Foo = { name: string; orders: Order[]; }
+
+fn push(msg: string) -> unit { return; }
+
+fn onboard() -> unit reversible {
+    var f = Foo {
+        name: "foo",
+        orders: [Order { item: "laptop" }]
+    };
+    push("started") compensate {
+        if f.name == "foo" {
+            push("refunded");
+        }
+    };
+    return;
+}
+
+fn main() -> int32 {
+    onboard();
+    return 1;
+}

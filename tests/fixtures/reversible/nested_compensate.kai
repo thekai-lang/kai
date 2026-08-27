@@ -1,0 +1,14 @@
+fn push(msg: string) -> unit { return; }
+
+fn onboard() -> unit reversible {
+    push("A") compensate {
+        push("B") compensate {
+            push("C");
+        };
+    };
+    return;
+}
+fn main() -> int32 {
+    onboard();
+    return 1;
+}

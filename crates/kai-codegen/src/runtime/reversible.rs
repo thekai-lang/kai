@@ -15,8 +15,33 @@ use crate::context::Ctx;
 use crate::runtime::get_or_declare;
 use inkwell::values::FunctionValue;
 use std::cell::RefCell;
+use std::alloc::{Layout, alloc, dealloc};
 
 type ReversibleDtor = extern "C" fn(*mut u8);
+
+struct AlignedBuffer {
+    ptr: *mut u8,
+    layout: Layout,
+}
+
+impl AlignedBuffer {
+    fn new(size: usize, align: usize) -> Self {
+        if size == 0 {
+            return Self { ptr: std::ptr::null_mut(), layout: Layout::from_size_align(0, 1).unwrap() };
+        }
+        let layout = Layout::from_size_align(size, align).unwrap();
+        let ptr = unsafe { alloc(layout) };
+        Self { ptr, layout }
+    }
+}
+
+impl Drop for AlignedBuffer {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() && self.layout.size() > 0 {
+            unsafe { dealloc(self.ptr, self.layout) };
+        }
+    }
+}
 
 enum ReversibleEntry {
     Snapshot {
@@ -25,7 +50,7 @@ enum ReversibleEntry {
         dtor: Option<ReversibleDtor>,
     },
     Compensate {
-        env: Vec<u8>,
+        env: AlignedBuffer,
         thunk: extern "C" fn(*mut u8),
         release: Option<ReversibleDtor>,
     },
@@ -78,14 +103,14 @@ pub unsafe extern "C" fn kai_reversible_push_compensate(
     thunk: *const (),
     release: *const (),
 ) {
-    // println!("push_comp env: {:?}, size: {}, thunk: {:?}, release: {:?}", env_ptr, env_size, thunk, release);
     if thunk.is_null() {
         return;
     }
     let sz = usize::try_from(env_size).unwrap_or(0);
-    let mut buf = vec![0u8; sz];
+    // Align to 16 bytes minimum, enough for all LLVM types in Kai (ptr, struct, vector).
+    let mut buf = AlignedBuffer::new(sz, 16);
     if sz > 0 && !env_ptr.is_null() {
-        unsafe { std::ptr::copy_nonoverlapping(env_ptr, buf.as_mut_ptr(), sz) };
+        unsafe { std::ptr::copy_nonoverlapping(env_ptr, buf.ptr, sz) };
     }
     let entry = ReversibleEntry::Compensate {
         env: buf,
@@ -114,7 +139,7 @@ pub extern "C" fn kai_reversible_commit() {
             }
             ReversibleEntry::Compensate { env, release, .. } => {
                 if let Some(release_fn) = release {
-                    release_fn(env.as_ptr() as *mut u8);
+                    release_fn(env.ptr);
                 }
             }
         }
@@ -140,9 +165,9 @@ pub unsafe extern "C" fn kai_reversible_unwind() {
                 }
             }
             ReversibleEntry::Compensate { env, thunk, release } => {
-                thunk(env.as_mut_ptr());
+                thunk(env.ptr);
                 if let Some(release_fn) = release {
-                    release_fn(env.as_mut_ptr());
+                    release_fn(env.ptr);
                 }
             }
         }

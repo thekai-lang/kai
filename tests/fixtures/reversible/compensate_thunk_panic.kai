@@ -1,0 +1,16 @@
+// exit: 101
+fn crash() -> unit reversible { require false; return; }
+
+fn onboard() -> unit reversible {
+    var x = "A";
+    crash() compensate {
+        crash(); // Panic inside thunk
+    };
+    crash();
+    return;
+}
+
+fn main() -> int32 {
+    onboard();
+    return 1;
+}
