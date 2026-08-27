@@ -1,12 +1,13 @@
 # Kai
 ### A trust-aware programming language
 
-**Status:** Draft v0.24 — pre-implementation specification
+**Status:** Draft v0.25 — pre-implementation specification
 **Purpose:** Freeze scope before writing any compiler code. Nothing described here is authoritative until it appears in this document. Feature ideas that arise during implementation go into an `IDEAS.md` backlog, not into the compiler.
 
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
 
 **Changelog**
+- **v0.25** — Formalized §5.3's transactional mechanism as the **pre-mutation Place snapshot**, replacing the earlier "automatic inverse" framing. Transactional rollback is snapshot-and-restore (capture the Place's value before the write; restore it during reverse-order unwind) — never a symbolically derived operator inverse, which cannot be guaranteed exact (integer rounding, float64 IEEE, compound traps). Scope widened (signed off) from arithmetic-only to all assignments to writable Places per §9.3's Place-model consistency; heap-bearing snapshots participate in §9's ownership model, holding an independent retain sufficient to restore safely. The `.rollback()` explicit API is removed from v0.0.9 scope — panic-triggered unwind is the sole reversal path. §10.4, §5.0's table, and §7's roadmap row updated to match. Applies the §2 amendment process: entry drafted in §5.3, discussed, then promoted; no §0.0.9 implementation before §5.3.1's ownership-safe snapshot semantics are locked.
 - **v0.24** — Added Appendix A entry: memory hardening framework proposal (3 pillars: CI regression fixtures, ASan gate, panic-path memory test). Separates immediate work (v0.0.8.6: move leak repros to `tests/fixtures/`, ASan CI gate) from deferred framework (v0.0.12: heap profiling, static lifetime, fuzzing, concurrency). Documents the 4-level production standard (P0–P3). Explicitly does NOT touch §2/§4/§5 — Appendix A only, per amendment process.
 - **v0.23** — Locked temporal equality semantics in §5.1.7 (found unspecified during v0.0.8.4 stabilization, when `==` on `@wallclock` values was first compiled): **equality on Temporal values is inner-value equality — the instant participates only in verification machinery (§5.1's still-open runtime checks) and never in `==`.** Rationale: folding the instant into `==` would define equality as issuance-time identity, breaking `==`'s fundamental property as a pure function of value contents — `t == t` could flip to false after expiry or when two copies were created microseconds apart; validity status is orthogonal to value identity and belongs to the verification machinery (`Trust<C>`, §5.0/§5.1), not `==`. Precedent: string `==` compares content, never allocation identity (§9.7). Gate stays strict — both sides must be `Temporal` with identical origin, duration, *and* inner type; mixed temporal/plain is rejected at typecheck. Any future need for claim-level identity (same text *and* same issuance time) must surface as a separate accessor/verification API, never as `==` overloading.
 - **v0.22** — Locked the last open detail for v0.0.8: condition text in `require`'s panic message and `observe`'s JSONL records is the raw source-text span (§5.2.1), never an AST pretty-print — reuses existing `Diagnostic`/TAST span infrastructure, guarantees the rendered text always matches what the programmer wrote verbatim, and needs no new pretty-printing machinery. §5.2's semantics are now fully specified end to end.
@@ -261,7 +262,7 @@ Trust⟨C⟩ = (Claim, Origin, Verification, Decay, Violation)
 ```
 
 - **Claim** — a proposition about `C` that the code depends on, which the compiler cannot guarantee from the code alone.
-- **Origin** — the authority the claim rests on: a schema snapshot, the wall clock, an accumulated history of observation, a declared inverse operation.
+- **Origin** — the authority the claim rests on: a schema snapshot, the wall clock, an accumulated history of observation, a compiler-captured pre-mutation Place snapshot.
 - **Verification** — when/how the claim is checked: statically (compile-time, against a snapshot of Origin) and/or dynamically (runtime, against a live Origin).
 - **Decay** — the mechanism by which a claim that was once true can become false **without the depending code itself changing** (a vendor changes a spec, time passes, state mutates, an external system goes down).
 - **Violation** — the consequence when Verification finds Claim false. This is **mandatory, not optional**, and always one of exactly two kinds: hard failure (panic, terminal) or a defined non-terminating signal. Never silent.
@@ -289,11 +290,11 @@ The four Trust instances, and the one non-Trust Signal, as one table:
 | Contract (§5.4) | external shape matches TAST | build snapshot / live schema | vendor changes spec | build warning / runtime panic + debt (§10.6) |
 | Temporal (§5.1) | value still within its valid window | logical flow position or wall clock | time passes | compile error (unhandled expiry) / panic |
 | Correctness (§5.2, `require`) | a program invariant holds | programmer declaration | state changes | panic, always, no exception |
-| Reversibility — Transactional (§5.3) | mutation has a true inverse (`state_after + inverse = state_before`) | declared or automatically derived inverse operation | — | rollback failure is a distinct trap |
+| Reversibility — Transactional (§5.3) | the mutation's pre-mutation Place value is captured before the write and can be restored exactly during unwind | compiler-captured pre-mutation snapshot of the Place | — | rollback failure is a distinct trap |
 | Reversibility — Compensatable (§5.3) | mutation has an explicit compensating action (`state_after + compensator ≈ acceptable_new_state`, not a true inverse) | declared `compensate` block | — | compensation failure is a distinct trap |
 | *(Signal, not Trust)* `observe` | none — pure observation | history of observed values | — | none; has no Violation, so it does not qualify as Trust at all |
 
-`reversible` remains the single user-facing keyword — a function marked `reversible` may contain both Transactional and Compensatable effects — but the compiler internally treats them as two distinct Trust kinds with two distinct guarantees, precisely so the keyword never promises a stronger guarantee (true inverse) than what a given effect can actually provide (best-effort compensation). This is why "rollback" and "compensation failed" are reported as different trap messages in §10.4, not a single generic "reversal failed."
+`reversible` remains the single user-facing keyword — a function marked `reversible` may contain both Transactional and Compensatable effects — but the compiler internally treats them as two distinct Trust kinds with two distinct guarantees, precisely so the keyword never promises a stronger guarantee (exact restoration from a pre-mutation snapshot) than what a given effect can actually provide (best-effort compensation). This is why "rollback" and "compensation failed" are reported as different trap messages in §10.4, not a single generic "reversal failed."
 
 Compiler, runtime, and `kai debt` are all, structurally, just different points in the same lifecycle: **produce → consume → invalidate → verify** a Trust. A new feature only belongs in Kai if it can be written into this table with all five fields filled in (or explicitly marked as a Signal, if it has no Violation).
 
@@ -587,34 +588,70 @@ If a `require` invariant should instead be soft-tracked for now while a fix is p
 
 ### 5.3 Reversibility — `reversible`, and why "rollback" isn't always the right word
 
-A function marked `reversible` must have every mutation inside it be either automatically invertible or explicitly paired with a manual reversal — but these are not the same guarantee, and conflating them was a real gap in the original draft. Database-style rollback is atomic and guaranteed once it runs: `state_after + inverse = state_before`, exactly. A compensating action against an external side effect (an email already sent, a webhook already fired) is not — it is a best-effort action that can itself fail, and it only reaches `state_after + compensator ≈ acceptable_new_state`, an approximation, not a true inverse. Kai keeps these as two distinct Reversibility subtypes at the semantic level (§5.0's table: Transactional vs. Compensatable) and reserves "rollback" for the first one only.
+A function marked `reversible` must have every mutation inside it be either automatically restorable from a captured pre-mutation snapshot or explicitly paired with a manual reversal — but these are not the same guarantee, and conflating them was a real gap in the original draft. Database-style rollback is atomic and guaranteed once it runs, restoring the exact prior state from a snapshot. A compensating action against an external side effect (an email already sent, a webhook already fired) is not — it is a best-effort action that can itself fail, and it only reaches `state_after + compensator ≈ acceptable_new_state`, an approximation, not a true inverse. Kai keeps these as two distinct Reversibility subtypes at the semantic level (§5.0's table: Transactional vs. Compensatable) and reserves "rollback" for the first one only.
 
 ```kai
 fn transferMoney(from: Account, to: Account, amt: Money) reversible {
-    from.balance -= amt;   // transactional — automatic inverse, "rollback" is accurate here
-    to.balance += amt;
+    from.balance += amt;   // transactional — pre-mutation Place snapshot captured
+    to.balance += amt;     //   same: snapshot of to.balance taken before the write
 }
-
-transferMoney(a, b, 100).rollback();
+// On panic: the runtime restores both snapshots in reverse order (§10.4).
+// On normal return: the snapshots are released and the mutations commit.
 ```
 
 ```kai
 fn onboardUser(user: User, fee: Money) reversible {
-    db.insert(user);                              // transactional — automatic inverse
+    user.status = "onboarded";                        // transactional — pre-mutation Place snapshot
 
-    sendEmail(user.email) compensate {              // compensating — never automatic, must be declared
+    sendEmail(user.email) compensate {                // a call: compensating — never automatic, must be declared
         sendEmail(user.email, "disregard previous email")
     }
 
     chargeCard(user, fee) compensate {
-        refundCard(user, fee)                       // still just a best-effort action, not a guarantee
+        refundCard(user, fee)                         // still just a best-effort action, not a guarantee
     }
 }
 ```
 
-The compiler never generates a compensating action automatically — unlike arithmetic inverses, there is no general rule for "the opposite of sending an email," so it must always be authored by hand. Anything with neither an automatic inverse nor a declared `compensate` block is a compile error, not a silent gap (unchanged from the original rule — only the vocabulary around external effects has changed).
+The compiler never generates a compensating action automatically — unlike a Place snapshot, there is no general rule for "the opposite of sending an email," so it must always be authored by hand. Anything with neither an automatically-restorable Place mutation nor a declared `compensate` block is a compile error, not a silent gap (unchanged from the original rule — only the vocabulary around external effects has changed).
 
 If a `reversible` function panics partway through, the mutations already applied are not left dangling — see §10.4 for the mandatory unwind behavior, which now distinguishes rollback (transactional) from compensation (external, best-effort, and itself fallible).
+
+#### 5.3.1 Pre-Mutation Place Snapshot
+
+**Scope decision (signed off): all assignments whose destination is a writable Place are transactionally reversible, subject to the Place's ownership and storage semantics.** This is a deliberate widening from §7's original wording ("automatic invertibility for arithmetic mutations"). The Place model (§9.3) exists precisely to unify plain bindings, struct fields, and array elements under one rule — restricting snapshot tracking to arithmetic operators (`+=`/`-=`/`*=`/`/=`/`%=`) would reintroduce the per-operator special cases §9.3 was built to eliminate ("one rule, not a struct-field rule and a separate array-index rule"). A snapshot taken from a Place does not care whether the destination was reached via `x +=`, `x =`, `arr[i]`, or `p.a.b =`. Arithmetic was the illustrative case in the roadmap, not the actual boundary.
+
+**Pre-Mutation Place Snapshot** is the formal term for the Transactional mechanism: the value a Place held immediately before the compiler performs a write to it, captured and retained for possible restoration during unwind. A transactional snapshot captures the *semantic value* of the Place, not an arbitrary raw memory image. For stack-only values (`int32`, `float64`, `bool`, `unit`) this is equivalent to a bitwise copy. For heap-bearing values (`string`, `array`, `struct`-with-heap-field, `closure`) the snapshot participates in the ownership model (§9): it holds an independent retain on the prior value, sufficient to restore it safely during unwind. It is therefore an owning reference with its own lifetime — created at the mutation site, released on commit (normal return, the value was never restored), or consumed during unwind (the value is written back to the Place and the displaced current value is released).
+
+Mutating a heap-bearing Place:
+
+```
+mutate(place, new_value):                          // inside a reversible fn
+    old = read(place)
+    if heap_bearing(type_of(place)):
+        retain(old)                                 // snapshot holds an owning ref
+    ledger.push(Transactional { place, snapshot: old })
+    store(place, new_value)                          // ordinary §9.4 write
+
+// commit path (normal return):
+    for entry in ledger:
+        if heap_bearing(entry.place):
+            release(entry.snapshot)                  // never restored, drop the retain
+
+// unwind path (panic):
+    for entry in ledger.reverse():
+        current = read(entry.place)
+        store(entry.place, entry.snapshot)           // restore prior value
+        if heap_bearing:
+            release(current)                         // release the displaced value
+            // snapshot's retain is consumed by the store (the Place now holds it)
+```
+
+This ordering is the direct extension of §9.4's existing "prepare replacement before releasing old" rule (which already guards self-aliasing cases like `arr[0] = arr[0]`). Inside a reversible activation the old value gains a second potential consumer — the unwind path — so its release is deferred and routed into the ledger's ownership until either commit or unwind resolves it. Multiple mutations to the same Place within one activation push multiple entries, restored in reverse order on unwind — exactly what §10.4's "unwinds the accumulated effect history in reverse order" commits to; this section only makes precise what an entry is.
+
+#### 5.3.2 Where the ledger nodes are emitted
+
+LedgerPush is emitted during ownership resolution because it is a runtime object-management node attached to a mutation, analogous to the retain/release nodes already emitted by that phase (§9.5). The effect checker remains responsible only for validating whether the resulting transactional or compensatable effect is permitted — consistent with §8 constraint 8's uniform Trust<C> model, where ownership resolution produces the runtime nodes and codegen reads them mechanically (never inferring them ad hoc), and the effect checker validates the Trust semantics rather than emitting runtime structure.
 
 ### 5.4 External contracts — `dsl sql`, `dsl api`
 
@@ -713,7 +750,7 @@ Strict ordering. A version does not start until the previous one has a working, 
 | v0.0.6 | `Optional`, `Result`, closures, `_ = expr;` discard statement, `Ok`/`Err`/`Some`/`None` constructors | Tagged-union ownership (§9.9a) — active-payload-only, heap-bearing-only retain/release, one mechanism for both types; `T?`/`Optional<T>` parse to one canonical node, no desugar pass; `??` short-circuits (lazy RHS); `Ok`/`Err` construct `Result` with context-typing for the unconstrained type parameter (same mechanism as `None`/empty-array); `.unwrap_or()` works on both `Optional`/`Result` (no dedicated grammar production — resolved at typecheck via receiver type + field name), `catch` stays `Result`-only via the dedicated `CatchBlock` (the only trailing-expression block in the language); discarding `Optional`/`Result` as a bare statement is a diagnostic, `_ = expr;` is the sole escape hatch, `_` never valid as a normal binding/param/loop-variable name (§9.9b); closures unconditionally heap-bearing regardless of capture (§9.10); closure-cycle rejection enforced via closure-bearing-type poisoning over the existing `TypeDecl` DFS graph (§9.10, extends §3.3); no user-facing generic syntax anywhere — Optional/Result/closures are the only parametric machinery, and it's built-in |
 | v0.0.7 | `@local`, `@wallclock`, `DurationLit`, `escapes-local-context` effect inference, `effects { ... }` contract annotation | Boundary table (§5.1.1) enforced; effect inference transitive over call/closure graph with SCC/fixpoint cycle handling (§5.1.2); declared-effect contract verified (`inferred ⊆ declared`), never trusted blindly; closures as first-class graph nodes with capture-provenance summaries (§5.1.3), covering direct call, statically-known closure invocation, closure-as-argument, closure-returned-or-stored, and conservative union-of-targets for dynamic dispatch; `@wallclock`→`@local` has no conversion path; wire format round-trips (`deserialize(serialize(t)) == t`); `@wallclock` unconditionally heap-bearing (header, compact integer instant — not RFC 3339 in memory), `@local` pure zero-footprint delegation to inner (§5.1.7), verified uniformly across `heap_bearing`, retain, release (two-step cascade when inner is heap-bearing, tested specifically for `T @wallclock` with heap-bearing `T`), and closure-environment dtors |
 | v0.0.8 | `require`, `observe` | `require` violation always panics per §10.3, recorded to debt ledger before exit; `observe` never panics, tracked as Signal only, not debt |
-| v0.0.9 | `reversible` (transactional + `compensate`) | Automatic invertibility for arithmetic mutations; mandatory unwind on panic per §10.4, distinguishing rollback from compensation |
+| v0.0.9 | `reversible` (transactional + `compensate`) | Transactional mutation snapshots for writable Places; compiler-captured pre-mutation Place snapshots with ownership-safe restoration for heap-bearing values; mandatory reverse-order unwind on panic per §10.4, distinguishing rollback from compensation |
 | v0.0.10 | `dsl sql` + snapshot mechanism | `kai sync` for at least one DB (e.g. Postgres) |
 | v0.0.11 | `dsl api` + OpenAPI sync | |
 | v0.0.12 | `@override` + `kai debt` unified ledger | |
@@ -1072,11 +1109,11 @@ An `observe` recording a false condition does the opposite: it updates the Signa
 
 A panic occurring partway through a `reversible` function must not leave partially-applied effects in an undefined state. Before the process terminates, the runtime walks the accumulated effect history up to the point of the panic and unwinds it in reverse order — but *how* each step unwinds depends on its subtype (§5.3):
 
-1. **Transactional mutations** (automatic inverses, e.g. `+=` → `-=`) are rolled back — this is a real, guaranteed rollback, because the inverse is mathematically exact.
+1. **Transactional mutations** are rolled back by restoring each mutated Place to the compiler-captured value it held immediately before the mutation. The snapshot is captured before the write and restored during reverse-order unwind. This is exact by construction: restoring the literal prior value has no case analysis per operator and no rounding risk.
 2. **Compensating actions** (`compensate` blocks around external effects) are executed as declared — but this is a best-effort compensation, not a guaranteed undo. The runtime does not and cannot claim the external world has been restored to its prior state, only that the declared compensating action was attempted.
 3. Only after all unwind steps have been attempted does the panic proceed to §10.1's terminal format and exit.
 
-This makes the `reversible` guarantee hold on the error path for the transactional subtype, and makes the *attempt* (not a guarantee) explicit for the compensating subtype — the whitepaper no longer uses "rollback" to describe both, since conflating them overstates what actually happens to an already-sent email or an already-fired webhook (§5.3). If a transactional rollback or a compensating action itself fails (e.g. the inverse operation also panics, or `refundCard` in a `compensate` block throws), that is treated as a distinct, more severe trap — `kai runtime panic: rollback failed after partial transfer` for the transactional case, `kai runtime panic: compensation failed after partial transfer` for the compensating case — rather than silently giving up. An unrecoverable unwind must still be loud, and the message must not falsely imply a guarantee that didn't hold.
+This makes the `reversible` guarantee hold on the error path for the transactional subtype, and makes the *attempt* (not a guarantee) explicit for the compensating subtype — the whitepaper no longer uses "rollback" to describe both, since conflating them overstates what actually happens to an already-sent email or an already-fired webhook (§5.3). If a transactional restore or a compensating action itself fails (e.g. the snapshot restore write fails, or `refundCard` in a `compensate` block throws), that is treated as a distinct, more severe trap — `kai runtime panic: rollback failed after partial transfer` for the transactional case, `kai runtime panic: compensation failed after partial transfer` for the compensating case — rather than silently giving up. An unrecoverable unwind must still be loud, and the message must not falsely imply a guarantee that didn't hold.
 
 ### 10.5 Numeric policy
 
