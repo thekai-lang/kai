@@ -360,7 +360,7 @@ pub(crate) fn panic_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
 /// (LLVM symbol, host address) pairs wired into the JIT via global mapping.
 /// Taking these addresses also keeps the functions alive in the linked
 /// binary; the linker may otherwise strip unreferenced `#[no_mangle]` fns.
-pub(crate) const INTRINSICS: [(&str, *const ()); 15] = [
+pub(crate) const INTRINSICS: [(&str, *const ()); 16] = [
     ("kai_string_new", kai_string_new as *const ()),
     ("kai_array_new", kai_array_new as *const ()),
     ("kai_string_eq", kai_string_eq as *const ()),
@@ -378,6 +378,10 @@ pub(crate) const INTRINSICS: [(&str, *const ()); 15] = [
     (
         "kai_reversible_enter",
         reversible::kai_reversible_enter as *const (),
+    ),
+    (
+        "kai_reversible_push_compensate",
+        reversible::kai_reversible_push_compensate as *const (),
     ),
     (
         "kai_reversible_push",

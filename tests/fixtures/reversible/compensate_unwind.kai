@@ -1,0 +1,20 @@
+// exit: 101
+fn push(msg: string) -> unit { return; return; }
+fn charge() -> unit reversible { require false; }
+
+fn onboard() -> unit reversible {
+    var x = "original";
+    push("started") compensate {
+        if x == "original" {
+            push("refunded");
+        }
+    };
+    
+    charge();
+    return;
+}
+
+fn main() -> int32 {
+    onboard();
+    return 1;
+}

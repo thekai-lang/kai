@@ -1,0 +1,18 @@
+// exit: 1
+fn push(msg: string) -> unit { return; return; }
+
+fn onboard(fail: bool) -> unit reversible {
+    var msg = "hello";
+    push("started") compensate {
+        // use msg
+        if msg == "hello" {
+            push("refunded");
+        }
+    };
+    return;
+}
+
+fn main() -> int32 {
+    onboard(false);
+    return 1;
+}

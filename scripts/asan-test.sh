@@ -42,6 +42,11 @@ declare -A REV_EXPECTED=(
     ["unwind_lifo.kai"]=101
     ["nested_unwind.kai"]=101
     ["unwind_deep.kai"]=101
+    ["compensate_scalar.kai"]=1
+    ["compensate_string.kai"]=1
+    ["compensate_heap_struct.kai"]=1
+    ["compensate_after_mut.kai"]=1
+    ["compensate_unwind.kai"]=101
 )
 
 # Fixtures whose expected exit is 101 (terminal panic) additionally require the

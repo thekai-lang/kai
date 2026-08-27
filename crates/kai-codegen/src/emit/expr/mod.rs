@@ -15,6 +15,7 @@ mod arith;
 mod heap;
 mod tagged;
 mod closure;
+mod compensate;
 pub(crate) use heap::{array_lit, bounds_check, call, elem_slot, elems_storage_of, field_read, header_len, header_of_value, place_ptr, string_lit, struct_lit, widen_index};
 pub(crate) use tagged::{i64_const, lazy_select, tagged_none_const, terminated_here, zero_of};
 pub(crate) use closure::emit_closure;
@@ -143,7 +144,7 @@ pub(crate) fn emit<'ctx>(
         // locals being released).
         // `base compensate { stmts }` (v0.0.9, §5.3): normal path just evaluates the base call;
         // the compensation block executes only on unwind (Phase E). For now emit the base.
-        TypedExprKind::Compensate { base, .. } => emit(ctx, frame, base),
+        TypedExprKind::Compensate { base, stmts, captures, .. } => compensate::emit_compensate(ctx, frame, base, stmts, captures, &ty),
         TypedExprKind::Catch { base, err_binding, err_ty, stmts, tail, releases } => {
             let recv = emit(ctx, frame, base).into_struct_value();
             let tag = ctx

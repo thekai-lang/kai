@@ -1,0 +1,19 @@
+// exit: 1
+struct User { id: int32, name: string }
+
+fn push(msg: string) -> unit { return; return; }
+
+fn onboard() -> unit reversible {
+    var u = User { id: 1, name: "bob" };
+    push("started") compensate {
+        if u.name == "bob" {
+            push("refunded");
+        }
+    };
+    return;
+}
+
+fn main() -> int32 {
+    onboard();
+    return 1;
+}
