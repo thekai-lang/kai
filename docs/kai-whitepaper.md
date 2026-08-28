@@ -1,12 +1,13 @@
 # Kai
 ### A trust-aware programming language
 
-**Status:** Draft v0.29 — pre-implementation specification
+**Status:** Draft v0.30 — pre-implementation specification
 **Purpose:** Freeze scope before writing any compiler code. Nothing described here is authoritative until it appears in this document. Feature ideas that arise during implementation go into an `IDEAS.md` backlog, not into the compiler.
 
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
 
 **Changelog**
+- **v0.30** — Formally locked §5.4 (`dsl sql`, `dsl api`) with the **Versioned Contracts** model. Imposed the strict philosophy: *Structured DSL by default, raw external syntax only as an explicit escape hatch*. `dsl sql(vN)` is now natively parsed as an AST for deep compile-time column/type validation against a local snapshot, while `dsl sql raw(vN)` captures a string string to explicitly demote trust for complex queries. `kai build` validates strictly against the local snapshot without network access. External drift is exposed exclusively via explicit tooling (`kai check --schema` and `kai debt`).
 - **v0.29** — Formalized §5.3.7 covering closure isolation within reversible contexts and rollback failure debt semantics. Resolved the three remaining Appendix A items regarding first-class reversible closures (rejected), closures escaping reversible scopes (rejected if carrying effects), and panic-path memory logging for unwind/rollback failures (synchronous `.kai/debt.log` writes with `rollback-failed` or `compensation-failed` events).
 - **v0.28** — Stabilized v0.0.9's `reversible` model by closing three critical soundness holes (v0.0.9.x patch): First, first-class reversible closures (`fn() reversible`) are explicitly rejected by the parser (deferred to Appendix A). Second, closures declared inside a `reversible` activation are rejected by the effect checker to prevent them from carrying activation-bound transactional effects out of scope, while codegen explicitly isolates their bodies from the parent's ledger lifecycle. Third, unwind failures (panics or refcount underflows occurring *during* a rollback or compensation thunk) now synchronously emit a `reversibility` JSON record (`"rollback-failed"` or `"compensation-failed"`) to `.kai/debt.log` before terminating the process with exit code 101.
 - **v0.27** — v0.0.9 is complete. Marks §5.3 (`reversible`, transactional + `compensate`) as implemented and tested against its §7 exit criteria: transaction snapshots covering all writable Places with ownership-safe restoration for heap-bearing values, mandatory reverse-order unwind on panic per §10.4 distinguishing rollback from compensation, plus the `CompensateThunk` (§5.3.6) with capture-by-value, recursive retain/release of heap captures, 16-byte aligned ledger storage, and reentrant-unwind panic isolation — verified by the full suite (all green) and the ASan leak tests. This closes the same way v0.18 closed v0.0.7 ("v0.0.7 is complete"). §5.3's transactional mechanism was formally re-specified at v0.25 (pre-mutation Place snapshot replacing the earlier automatic-inverse framing) ahead of this implementation; the `.rollback()` explicit API remains out of v0.0.9 scope per v0.25, with panic-triggered unwind the sole reversal path. No §2/§4/§5-taxonomy change — §5.3.6's CompensateThunk detail was already promoted at v0.25 and its grammar/semantics are captured in the EBNF; this entry only records version completion.
@@ -686,26 +687,46 @@ A catastrophic failure *during* a reverse-order unwind (e.g., a panic inside a `
 
 ### 5.4 External contracts — `dsl sql`, `dsl api`
 
-Queries and external API calls are validated against a committed **snapshot**, not a live connection, at build time.
+Kai abstracts external dependencies into **Versioned Contracts**. Queries and external API calls are validated against a locally committed **snapshot**, never a live connection, keeping `kai build` strictly deterministic and offline (§2.1).
+
+**Core Philosophy:** Structured DSL by default; raw external syntax only as an explicit escape hatch.
 
 ```kai
-dsl sql -> UserWithOrders[] {
-    select users.id, users.name, orders.total
-    from users join orders on users.id = orders.user_id
-    where orders.status = "PAID"
+// Default: Structured DSL, deep compiler verification
+dsl sql(v12) -> User[] {
+    select id, name, created_at
+    from users
+    join roles on users.role_id = roles.id
+    where status = 'ACTIVE'
 }
 ```
 
+By making the DSL a fully parsed subset of the language (a native SQL AST), Kai can provide strict structural guarantees: the compiler verifies that the table exists in snapshot `v12`, that `id` and `name` are valid columns, and that their types match the `User` struct perfectly.
+
+When a query exceeds the compiler's supported DSL subset, developers must use an explicit `raw` escape hatch. This makes the loss of structural validation *visible and deliberate* in the Trust model:
+
+```kai
+// Escape Hatch: Raw syntax, compiler delegates validation
+dsl sql raw(v12) -> User[] {
+    "WITH RECURSIVE subordinates AS (...) SELECT * FROM subordinates"
+}
+```
+
+The exact same principles apply to external APIs (`dsl api`):
 ```kai
 dsl api("stripe", v3) -> PaymentIntent {
     POST /payment_intents
     body: { amount: int, currency: string }
 }
-// warning: stripe v3 is 2 versions behind (v5)
-// breaking change in v4: 'currency' now requires ISO 4217 enum
 ```
 
-Snapshots are generated and refreshed only via `kai sync`, never implicitly during `kai build` (see §2.1, §6).
+**Identity vs. Reality (Schema Drift):**
+The version (`v12`) identifies the *contract* the code was compiled against. `kai build` does not care if the live database is currently at `v16`; it silently and deterministically builds against `v12`. 
+
+To measure how far the codebase has drifted from external reality, developers use explicit tooling:
+- `kai db sync`: Bumps the snapshot version and writes new introspection data from the live external system.
+- `kai check --schema`: Explicitly compares the compiled contracts against the latest snapshot (e.g., separating safe lag warnings from semantic break errors).
+- `kai debt`: Aggregates this drift into the global observability dashboard.
 
 ### 5.5 Overrides — escape hatch, always owned
 
