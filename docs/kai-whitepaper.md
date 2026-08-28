@@ -7,6 +7,7 @@
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
 
 **Changelog**
+- **v0.26** — Amended §3.7's stdlib gate. Records honestly, for the first time in this document, that the §3.7 boundary ("Everything above this line must be fully specified, implemented, and tested before Section 5 begins") was crossed implicitly: stdlib was formally deferred to v0.0.5 at v0.6, never landed, and was re-deferred to the `kai.toml` manifest design by only a one-line note in the v0.0.6.1 changelog — after which v0.0.7/v0.0.8/v0.0.9 (the §5 trust-aware layer) all shipped without it, and the whitepaper itself was never updated. This entry closes that gap. It distinguishes §3's *semantics* (types, ownership, modules, control flow — genuinely complete and tested before §5, satisfying the gate's intent) from §3.7's *stdlib surface* (pure API functions over those already-complete types, introducing no new type-system, ownership, or codegen rule §5 could unknowingly depend on). The former is why the deferral was safe; the testing record corroborates it — §3.6's own note that v0.0.4 needs no stdlib, and every v0.0.5–v0.0.9 suite running against user-defined fixtures alone, with zero stdlib dependency. **The gate is re-anchored, not deleted:** the stdlib becomes a hard requirement not merely for the §5 test suites but for any §5 feature (`dsl sql`/`dsl api`/`kai sync`) to be exercised by a real, non-fixture Kai program — concretely anchored to the `kai.toml` project-manifest design that v0.0.6.1 already deferred it to, which §5.6's per-project `kai debt` severity overrides likewise presuppose. In test/fixture-only form, §5 features continue not to require it. Amendment touches §3 only — no §2/§4/§5 taxonomy change, so the §2 amendment process's Appendix-A route is not implicated.
 - **v0.25** — Formalized §5.3's transactional mechanism as the **pre-mutation Place snapshot**, replacing the earlier "automatic inverse" framing. Transactional rollback is snapshot-and-restore (capture the Place's value before the write; restore it during reverse-order unwind) — never a symbolically derived operator inverse, which cannot be guaranteed exact (integer rounding, float64 IEEE, compound traps). Scope widened (signed off) from arithmetic-only to all assignments to writable Places per §9.3's Place-model consistency; heap-bearing snapshots participate in §9's ownership model, holding an independent retain sufficient to restore safely. The `.rollback()` explicit API is removed from v0.0.9 scope — panic-triggered unwind is the sole reversal path. §10.4, §5.0's table, and §7's roadmap row updated to match. Applies the §2 amendment process: entry drafted in §5.3, discussed, then promoted; no §0.0.9 implementation before §5.3.1's ownership-safe snapshot semantics are locked.
 - **v0.24** — Added Appendix A entry: memory hardening framework proposal (3 pillars: CI regression fixtures, ASan gate, panic-path memory test). Separates immediate work (v0.0.8.6: move leak repros to `tests/fixtures/`, ASan CI gate) from deferred framework (v0.0.12: heap profiling, static lifetime, fuzzing, concurrency). Documents the 4-level production standard (P0–P3). Explicitly does NOT touch §2/§4/§5 — Appendix A only, per amendment process.
 - **v0.23** — Locked temporal equality semantics in §5.1.7 (found unspecified during v0.0.8.4 stabilization, when `==` on `@wallclock` values was first compiled): **equality on Temporal values is inner-value equality — the instant participates only in verification machinery (§5.1's still-open runtime checks) and never in `==`.** Rationale: folding the instant into `==` would define equality as issuance-time identity, breaking `==`'s fundamental property as a pure function of value contents — `t == t` could flip to false after expiry or when two copies were created microseconds apart; validity status is orthogonal to value identity and belongs to the verification machinery (`Trust<C>`, §5.0/§5.1), not `==`. Precedent: string `==` compares content, never allocation identity (§9.7). Gate stays strict — both sides must be `Temporal` with identical origin, duration, *and* inner type; mixed temporal/plain is rejected at typecheck. Any future need for claim-level identity (same text *and* same issuance time) must surface as a separate accessor/verification API, never as `==` overloading.
@@ -221,11 +222,11 @@ fn main() -> int32 {
 - Circular imports are a diagnostic, not a silent stack overflow.
 - `public fn` and `public type` are visible through the module alias; plain `fn`/`type` stay module-private. Without `public type`, a struct could never cross a module boundary at all — a module could expose a constructor function but callers would have no way to name or read fields of the type it returns. Both keywords behave identically: `[ 'public' ] 'fn' ...` and `[ 'public' ] 'type' ...`.
 - Imports never inject into global scope — always namespace-qualified. **No exceptions, including stdlib.** `println` is always `io.println(...)`; there is no globally-injected builtin form. (This is a deliberate reversal of the v0.4.5 reference implementation, which called `println(msg)` unqualified — that form is not carried forward.)
-- **v0.0.4's own tests don't need the stdlib.** Module resolution, qualified calls, `public` visibility, and circular-import detection are all fully exercisable with user-defined modules alone (e.g. a local `support/math.kai` with `public fn add(a: int32, b: int32) -> int32`). The stdlib itself is deferred to v0.0.5 (§3.7) — implementing any of it now against types that don't exist yet would just be thrown-away work.
+- **v0.0.4's own tests don't need the stdlib.** Module resolution, qualified calls, `public` visibility, and circular-import detection are all fully exercisable with user-defined modules alone (e.g. a local `support/math.kai` with `public fn add(a: int32, b: int32) -> int32`). The stdlib itself is deferred (originally to v0.0.5, re-anchored to the `kai.toml` manifest design by v0.26, §3.7) — implementing any of it now against types that don't exist yet would just be thrown-away work.
 
 ### 3.7 Standard library (built-in, no disk resolution)
 
-**Version note:** deferred to v0.0.5. Every stdlib signature here depends on `string` and/or arrays, neither of which exist before v0.0.5 (Ownership runtime, §7) — implementing this earlier would be discarded once those types land.
+**Version note:** initially deferred to v0.0.5 — every stdlib signature here depends on `string` and/or arrays, neither of which exist before v0.0.5 (Ownership runtime, §7), so implementing any of it earlier would have been discarded once those types landed. That deferral was then re-anchored (whitepaper v0.26) from a fixed version to the `kai.toml` project-manifest design: every function here is surface API over already-existing types, so it introduces no core semantic rule of its own and is not a gate on §5's *test* builds — see the boundary line below.
 
 | Import | Surface |
 |---|---|
@@ -236,7 +237,12 @@ fn main() -> int32 {
 | `std.math` | `sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil`, `round`, `pow`, `abs`, `min`, `max` |
 | `std.time` | `now`, `millis`, `sleep_ms` |
 
-Everything above this line must be fully specified, implemented, and tested before Section 5 begins. This is the scope boundary for v0.0.1–v0.0.6 (the new v0.0.5 ownership-runtime slot plus what was v0.0.5 and is now v0.0.6).
+Everything above this line — **and every line of §3's semantics** (types, ownership, modules, control flow) — must be fully specified, implemented, and tested before Section 5 begins. This is the scope boundary for v0.0.1–v0.0.6 (the new v0.0.5 ownership-runtime slot plus what was v0.0.5 and is now v0.0.6).
+
+**Amended by v0.26.** The sentence above was historically read as a hard, absolute gate on the *entirety* of §3.7's stdlib surface, and was crossed implicitly when v0.0.7–v0.0.9 shipped before the stdlib ever landed (the deferral-to-manifest was only recorded as a v0.0.6.1 changelog note, never here). This amendment makes explicit what was in fact already true and safe:
+
+- The **gate's intent** — that §3's *semantics* be complete and tested before §5 — was satisfied and remains binding. The stdlib is not part of those semantics: §3.7 adds only API functions over types that already exist, and introduces no new type-system, ownership, or codegen rule that §5 could unknowingly depend on. No §5 test has ever needed the stdlib, so the deferral carried no testing risk.
+- The **stdlib's actual requirement** is re-anchored: it is mandatory before any §5 feature (`dsl sql`, `dsl api`, `kai sync`) is exercised by a **real, non-fixture Kai program** — concretely landed with, or before, the `kai.toml` project-manifest design that also scopes `dsl` snapshots and §5.6's per-project `kai debt` severity overrides. In test/fixture-only form, §5 features continue to not require it.
 
 ---
 
@@ -249,7 +255,7 @@ Everything above this line must be fully specified, implemented, and tested befo
 
 ---
 
-## 5. Trust-aware layer (v0.0.7+ scope — built only after Section 3 is complete and tested)
+## 5. Trust-aware layer (v0.0.7+ scope — built only after Section 3's semantics are complete and tested; the §3.7 stdlib surface is re-anchored to the `kai.toml` manifest design per v0.26, not a hard gate on this section's test builds)
 
 This is opt-in. None of it changes how a function looks unless the function actually depends on external trust.
 
@@ -765,6 +771,8 @@ Strict ordering. A version does not start until the previous one has a working, 
 | v0.0.10 | `dsl sql` + snapshot mechanism | `kai sync` for at least one DB (e.g. Postgres) |
 | v0.0.11 | `dsl api` + OpenAPI sync | |
 | v0.0.12 | `@override` + `kai debt` unified ledger | |
+
+**§3.7 stdlib re-anchor (v0.26):** none of the §5 rows above require the stdlib for their *test/fixture* exit criteria — that has been the actual record since v0.0.4, and this table's absence of any stdlib exit criterion is now accurate rather than an oversight. The stdlib becomes mandatory only before a §5 feature (`dsl sql`, `dsl api`, `kai sync`) is exercised by a real, non-fixture Kai program — landed with, or before, the `kai.toml` manifest design (see §3.7 and the v0.26 changelog entry). This does not add a new row; it reconciles this table with the amended §3.7.
 
 Anything not on this table is out of scope until this document is amended.
 
