@@ -5,7 +5,7 @@ use kai_diagnostics::Diagnostic;
 use std::collections::HashMap;
 
 pub mod snapshot;
-pub mod drift;
+
 
 pub(crate) fn check_dsl_block(checker: &mut Checker, expr: &DslBlockExpr) -> TypedExpr {
     let expected_ty = if let Some(ty_node) = &expr.return_ty {
@@ -14,7 +14,7 @@ pub(crate) fn check_dsl_block(checker: &mut Checker, expr: &DslBlockExpr) -> Typ
         KaiType::Unit
     };
 
-    if expr.kind != "sql" {
+    if expr.kind != "sql" && expr.kind != "api" {
         checker.error(Diagnostic::error(
             format!("unsupported dsl kind: `{}` (only `sql` is supported in v0.0.10)", expr.kind),
             expr.span,
@@ -23,6 +23,9 @@ pub(crate) fn check_dsl_block(checker: &mut Checker, expr: &DslBlockExpr) -> Typ
     }
 
     match &expr.variant {
+        DslVariant::StructuredApi(api_contract) => {
+            return crate::api::check_api_block(checker, expr, api_contract);
+        }
         DslVariant::StructuredSql(query) => {
             if let Some(tables) = checker.snapshots.get(&expr.version).map(|s| s.tables.clone()) {
                 let mut sources = HashMap::new();
@@ -57,27 +60,24 @@ pub(crate) fn check_dsl_block(checker: &mut Checker, expr: &DslBlockExpr) -> Typ
                 
                 // Validate ON conditions
                 for join in &query.joins {
-                    if let Some(ty) = resolve_sql_expr(&join.on_clause, &sources, expr.version, checker) {
-                        if unwrap_nullable(&ty) != &snapshot::SqlType::Bool {
+                    if let Some(ty) = resolve_sql_expr(&join.on_clause, &sources, expr.version, checker)
+                        && unwrap_nullable(&ty) != &snapshot::SqlType::Bool {
                             checker.error(Diagnostic::error(
                                 format!("JOIN ON condition must resolve to Bool, found {:?}", ty),
                                 join.table.span,
                             ));
                         }
-                    }
                 }
                 
                 // Validate WHERE conditions
-                if let Some(where_clause) = &query.where_clause {
-                    if let Some(ty) = resolve_sql_expr(where_clause, &sources, expr.version, checker) {
-                        if unwrap_nullable(&ty) != &snapshot::SqlType::Bool {
+                if let Some(where_clause) = &query.where_clause
+                    && let Some(ty) = resolve_sql_expr(where_clause, &sources, expr.version, checker)
+                        && unwrap_nullable(&ty) != &snapshot::SqlType::Bool {
                             checker.error(Diagnostic::error(
                                 format!("WHERE condition must resolve to Bool, found {:?}", ty),
                                 expr.span,
                             ));
                         }
-                    }
-                }
                 
                 // Validate ORDER BY conditions
                 for order in &query.order_by {
@@ -98,10 +98,12 @@ pub(crate) fn check_dsl_block(checker: &mut Checker, expr: &DslBlockExpr) -> Typ
                             for select_expr in &query.select {
                                 if let kai_ast::expr::SqlExpr::Column { qualifier, name, span } = &select_expr.expr {
                                     
+                                    let effective_name = select_expr.alias.as_ref().unwrap_or(name).clone();
+                                    
                                     // 1. Source resolution & Duplicate checking
-                                    if !seen_columns.insert(name.clone()) {
+                                    if !seen_columns.insert(effective_name.clone()) {
                                         checker.error(Diagnostic::error(
-                                            format!("duplicate column `{}` in select list", name),
+                                            format!("duplicate column `{}` in select list", effective_name),
                                             *span,
                                         ));
                                         continue;
@@ -110,16 +112,16 @@ pub(crate) fn check_dsl_block(checker: &mut Checker, expr: &DslBlockExpr) -> Typ
                                     let resolved_sql_ty = resolve_sql_column(name, qualifier, &sources, expr.version, *span, checker);
                                     // 2. Strict Extra Column validation & Type mapping
                                     if let Some(sql_ty) = resolved_sql_ty {
-                                        if let Some(field) = layout.fields.iter().find(|f| f.name == *name) {
+                                        if let Some(field) = layout.fields.iter().find(|f| f.name == effective_name) {
                                             if !is_compatible(&sql_ty, &field.ty) {
                                                 checker.error(Diagnostic::error(
-                                                    format!("type mismatch: SQL column `{}` is {:?}, but struct field `{}` expects {}", name, sql_ty, name, field.ty),
+                                                    format!("type mismatch: SQL column `{}` is {:?}, but struct field `{}` expects {}", name, sql_ty, effective_name, field.ty),
                                                     *span,
                                                 ));
                                             }
                                         } else {
                                             checker.error(Diagnostic::error(
-                                                format!("query result selects extra column `{}` which does not exist in struct `{}`", name, layout.name),
+                                                format!("query result selects extra column `{}` which does not exist in struct `{}`", effective_name, layout.name),
                                                 *span,
                                             ));
                                         }
@@ -132,7 +134,8 @@ pub(crate) fn check_dsl_block(checker: &mut Checker, expr: &DslBlockExpr) -> Typ
                                 let mut found = false;
                                 for select_expr in &query.select {
                                     if let kai_ast::expr::SqlExpr::Column { name, .. } = &select_expr.expr {
-                                        if name == &field.name {
+                                        let effective_name = select_expr.alias.as_ref().unwrap_or(name);
+                                        if effective_name == &field.name {
                                             found = true;
                                             break;
                                         }
@@ -198,8 +201,8 @@ fn resolve_sql_column(
     span: kai_diagnostics::Span,
     checker: &mut Checker,
 ) -> Option<snapshot::SqlType> {
-    let mut resolved_sql_ty = None;
-    let mut resolved_table = String::new();
+    let resolved_sql_ty;
+    let resolved_table;
     
     if let Some(q) = qualifier {
         if let Some(columns) = sources.get(q) {
@@ -249,29 +252,30 @@ fn resolve_sql_column(
     // DRIFT ENGINE INTEGRATION
     if let Some(live) = &checker.current_schema {
         let actual = live.tables.get(&resolved_table).and_then(|t| t.columns.get(name));
-        if let Some(drift) = crate::sql::drift::compare_column_drift(name, resolved_sql_ty.as_ref().unwrap(), actual) {
+        if let Some(drift) = crate::drift::compare_sql_column(name, resolved_sql_ty.as_ref().unwrap(), actual) {
             let msg = match drift.kind {
-                crate::sql::drift::DriftKind::ColumnRemoved => {
+                crate::drift::DriftKind::Sql(crate::drift::SqlDriftKind::ColumnRemoved) => {
                     format!("column '{}' was removed from current schema", name)
                 }
-                crate::sql::drift::DriftKind::IncompatibleType { old, new } => {
+                crate::drift::DriftKind::Sql(crate::drift::SqlDriftKind::IncompatibleType { old, new }) => {
                     format!("column '{}' type changed from {:?} to {:?} in current schema", name, old, new)
                 }
-                crate::sql::drift::DriftKind::NonNullBecameNullable => {
+                crate::drift::DriftKind::Sql(crate::drift::SqlDriftKind::NonNullBecameNullable) => {
                     format!("column '{}' became nullable in current schema", name)
                 }
-                crate::sql::drift::DriftKind::NullableBecameNonNull => {
+                crate::drift::DriftKind::Sql(crate::drift::SqlDriftKind::NullableBecameNonNull) => {
                     format!("column '{}' became non-nullable in current schema", name)
                 }
-                crate::sql::drift::DriftKind::MissingSnapshot => {
-                    format!("missing snapshot")
+                crate::drift::DriftKind::Api(_) => unreachable!(),
+                crate::drift::DriftKind::Sql(crate::drift::SqlDriftKind::MissingSnapshot) => {
+                    "missing snapshot".to_string()
                 }
             };
             
             let diag = match drift.severity {
-                crate::sql::drift::DriftSeverity::Error => Diagnostic::error(msg, span),
-                crate::sql::drift::DriftSeverity::Warning => Diagnostic::warning(msg, span),
-                crate::sql::drift::DriftSeverity::Quiet => Diagnostic::warning(msg, span), // Shouldn't happen
+                crate::drift::DriftSeverity::Error => Diagnostic::error(msg, span),
+                crate::drift::DriftSeverity::Warning => Diagnostic::warning(msg, span),
+                crate::drift::DriftSeverity::Quiet => Diagnostic::warning(msg, span), // Shouldn't happen
             };
             
             checker.error(diag);

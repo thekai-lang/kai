@@ -6,6 +6,8 @@ mod checker;
 pub mod decl;
 pub mod error;
 pub mod sql;
+pub mod drift;
+pub mod api;
 pub mod expr;
 mod scope;
 pub mod stmt;
@@ -22,7 +24,7 @@ use kai_tast::TypedProgram;
 /// so surface names cannot be resolved beyond primitives. The pipeline uses
 /// `analyze` + `check_with`.
 pub fn check(program: &Program) -> Result<TypedProgram, Vec<Diagnostic>> {
-    check_with(program, &Resolution::default(), std::collections::HashMap::new())
+    check_with(program, &Resolution::default(), std::collections::HashMap::new(), std::collections::HashMap::new())
 }
 
 /// Lowers a full program to TAST using the resolver's name tables. Returns
@@ -32,9 +34,11 @@ pub fn check_with(
     program: &Program,
     resolution: &Resolution,
     snapshots: std::collections::HashMap<u32, crate::sql::snapshot::SqlSnapshot>,
+    api_snapshots: std::collections::HashMap<(String, u32), crate::api::snapshot::ApiSnapshot>,
 ) -> Result<TypedProgram, Vec<Diagnostic>> {
     let mut state = checker::Checker::new(resolution);
     state.snapshots = snapshots;
+    state.api_snapshots = api_snapshots;
     let typed = decl::program(&mut state, program);
 
     if !state.failed() {
@@ -58,15 +62,19 @@ mod v0006_tests;
 mod v0005_string_extra;
 #[cfg(test)]
 mod v0010_tests;
+#[cfg(test)]
+mod v0011_tests;
 
 pub fn check_with_schema(
     program: &Program,
     resolution: &Resolution,
     snapshots: std::collections::HashMap<u32, crate::sql::snapshot::SqlSnapshot>,
+    api_snapshots: std::collections::HashMap<(String, u32), crate::api::snapshot::ApiSnapshot>,
     current_schema: Option<crate::sql::snapshot::SqlSnapshot>,
 ) -> Result<TypedProgram, Vec<Diagnostic>> {
     let mut state = checker::Checker::new(resolution);
     state.snapshots = snapshots;
+    state.api_snapshots = api_snapshots;
     state.current_schema = current_schema;
     let typed = decl::program(&mut state, program);
 

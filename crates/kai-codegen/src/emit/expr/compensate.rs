@@ -15,13 +15,13 @@ pub(crate) fn emit_compensate<'ctx>(
     base: &kai_tast::TypedExpr,
     stmts: &[TypedStmt],
     captures: &[TypedCapture],
-    ty: &KaiType,
+    _ty: &KaiType,
 ) -> BasicValueEnum<'ctx> {
     let seq = ctx.closure_seq.get();
     ctx.closure_seq.set(seq + 1);
 
     // 1. P2.2: Environment Lowering
-    let mut field_tys: Vec<BasicTypeEnum<'ctx>> = captures
+    let field_tys: Vec<BasicTypeEnum<'ctx>> = captures
         .iter()
         .map(|c| to_llvm(ctx, &c.ty))
         .collect();

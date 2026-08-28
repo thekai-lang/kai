@@ -120,6 +120,17 @@ fn function_body<'ctx>(ctx: &Ctx<'ctx>, decl: &kai_tast::TypedFnDecl) {
         frame.bind(param.local, slot);
     }
 
+    let symbol = qualified_name(&decl.module, &decl.name);
+    if symbol == "std.io.print" || symbol == "std.io.println" {
+        let param = function.get_nth_param(0).unwrap();
+        let intrinsic_name = if symbol == "std.io.println" { "kai_println" } else { "kai_print" };
+        let print_type = ctx.context.void_type().fn_type(&[param.get_type().into()], false);
+        let print_fn = ctx.module.get_function(intrinsic_name).unwrap_or_else(|| {
+            ctx.module.add_function(intrinsic_name, print_type, None)
+        });
+        let _ = ctx.builder.build_call(print_fn, &[param.into()], "");
+    }
+
     for stmt in &decl.body.stmts {
         stmt::emit(ctx, &mut frame, stmt);
     }

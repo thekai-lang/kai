@@ -5,7 +5,7 @@ use kai_tast::{KaiType, TypedExprKind};
 fn check_src(src: impl AsRef<str>) -> Result<TypedProgram, Vec<Diagnostic>> {
     let ast = parse_ok(src.as_ref());
     let resolution = kai_resolver::analyze(&ast).expect("resolution failed");
-    check_with(&ast, &resolution, std::collections::HashMap::new())
+    check_with(&ast, &resolution, std::collections::HashMap::new(), std::collections::HashMap::new())
 }
 
 fn first_error(src: impl AsRef<str>) -> String {

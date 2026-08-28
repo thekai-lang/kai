@@ -75,7 +75,7 @@ fn check_expr(
         kai_tast::TypedExprKind::Call { func, args } => {
             let callee_is_reversible = all_fns
                 .get(func.0 as usize)
-                .map_or(false, |f| f.is_reversible);
+                .is_some_and(|f| f.is_reversible);
             if !inside_compensate_base && !callee_is_reversible {
                 let callee_name = all_fns
                     .get(func.0 as usize)
@@ -104,7 +104,7 @@ fn check_expr(
                 check_expr(a, all_fns, false, diagnostics);
             }
         }
-        kai_tast::TypedExprKind::Compensate { base, stmts: _, .. } => {
+        kai_tast::TypedExprKind::Compensate { base, .. } => {
             // The compensation block executes on unwind, not as part of the
             // reversible forward path; its internal calls are not subject to
             // the `reversible` wrapper rule (§5.3 deems compensate stmts

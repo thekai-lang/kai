@@ -141,7 +141,7 @@ fn parse_tables(tokens: &[Token], pos: &mut usize) -> Result<HashMap<String, Sql
                 } else {
                     skip_value(tokens, pos)?;
                 }
-            } else if let Token::String(ref val) = tokens[*pos] {
+            } else if let Token::String(_) = tokens[*pos] {
                 // Direct column mapping "id": "uuid"
                 let col_type = expect_string(tokens, pos)?;
                 columns.insert(key, SqlType::from_str(&col_type));

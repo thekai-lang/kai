@@ -1,9 +1,8 @@
 use crate::error;
 use crate::Parser;
 use kai_ast::expr::{
-    DslBlockExpr, DslVariant, SqlExpr, SqlJoin, SqlOrderBy, SqlQuery, SqlSelectExpr,
+    DslBlockExpr, DslVariant,
 };
-use kai_ast::Ident;
 use kai_diagnostics::Span;
 use kai_lexer::TokenKind;
 
@@ -32,20 +31,32 @@ pub(crate) fn parse_dsl_block(parser: &mut Parser, start_span: Span) -> kai_ast:
 
     // Optional `raw`
     let mut is_raw = false;
-    if let TokenKind::Ident(name) = parser.peek().kind.clone() {
-        if name == "raw" {
+    if let TokenKind::Ident(name) = parser.peek().kind.clone()
+        && name == "raw" {
             is_raw = true;
             let token = parser.bump();
             span = Span::merge(span, token.span);
         }
-    }
 
-    // Expect `(vN)`
+    // Expect `(`
     if !parser.eat_simple(&TokenKind::LParen) {
         parser.diagnostics.push(error::custom(
-            "expected `(` for snapshot version (e.g., `(v12)`)",
+            "expected `(` for snapshot info",
             parser.span_here(),
         ));
+    }
+
+    let mut service_name = String::new();
+    if kind == "api" {
+        if let TokenKind::StrLit(s) = parser.peek().kind.clone() {
+            service_name = s;
+            parser.bump(); // consume string
+            if !parser.eat_simple(&TokenKind::Comma) {
+                parser.diagnostics.push(error::custom("expected `,` after service name", parser.span_here()));
+            }
+        } else {
+            parser.diagnostics.push(error::custom("expected service name string (e.g., \"stripe\")", parser.span_here()));
+        }
     }
 
     let version = match parser.peek().kind.clone() {
@@ -89,6 +100,8 @@ pub(crate) fn parse_dsl_block(parser: &mut Parser, start_span: Span) -> kai_ast:
 
     let variant = if is_raw {
         parse_raw_variant(parser)
+    } else if kind == "api" {
+        crate::api::parse_api_variant(parser, service_name, version)
     } else {
         parse_structured_variant(parser)
     };
@@ -159,13 +172,25 @@ fn parse_structured_variant(parser: &mut Parser) -> DslVariant {
                         }
                     }
                     
+                    let mut alias = None;
+                    if let TokenKind::Ident(as_kw) = parser.peek().kind.clone()
+                        && as_kw.eq_ignore_ascii_case("as") {
+                            parser.bump(); // consume 'as'
+                            if let TokenKind::Ident(alias_name) = parser.peek().kind.clone() {
+                                parser.bump();
+                                alias = Some(alias_name);
+                            } else {
+                                parser.diagnostics.push(crate::error::custom("expected alias name after `as`", parser.span_here()));
+                            }
+                        }
+                    
                     select.push(kai_ast::expr::SqlSelectExpr {
                         expr: kai_ast::expr::SqlExpr::Column {
                             qualifier,
                             name: col_name,
                             span,
                         },
-                        alias: None,
+                        alias,
                     });
                     
                     if parser.eat_simple(&TokenKind::Comma) {
@@ -243,17 +268,16 @@ fn parse_structured_variant(parser: &mut Parser) -> DslVariant {
 
     // Optional WHERE
     let mut where_clause = None;
-    if let TokenKind::Ident(name) = parser.peek().kind.clone() {
-        if name.eq_ignore_ascii_case("where") {
+    if let TokenKind::Ident(name) = parser.peek().kind.clone()
+        && name.eq_ignore_ascii_case("where") {
             parser.bump(); // consume 'where'
             where_clause = Some(parse_sql_expr(parser));
         }
-    }
 
     // Parse ORDER BY
     let mut order_by = Vec::new();
-    if let TokenKind::Ident(name) = parser.peek().kind.clone() {
-        if name.eq_ignore_ascii_case("order") {
+    if let TokenKind::Ident(name) = parser.peek().kind.clone()
+        && name.eq_ignore_ascii_case("order") {
             parser.bump(); // consume 'order'
             
             if let TokenKind::Ident(by_kw) = parser.peek().kind.clone() {
@@ -288,12 +312,11 @@ fn parse_structured_variant(parser: &mut Parser) -> DslVariant {
                 }
             }
         }
-    }
 
     // Parse LIMIT
     let mut limit = None;
-    if let TokenKind::Ident(name) = parser.peek().kind.clone() {
-        if name.eq_ignore_ascii_case("limit") {
+    if let TokenKind::Ident(name) = parser.peek().kind.clone()
+        && name.eq_ignore_ascii_case("limit") {
             parser.bump(); // consume 'limit'
             
             if let TokenKind::IntLit(val) = parser.peek().kind.clone() {
@@ -303,7 +326,6 @@ fn parse_structured_variant(parser: &mut Parser) -> DslVariant {
                 parser.diagnostics.push(crate::error::custom("expected integer literal after `limit`", parser.span_here()));
             }
         }
-    }
 
     // Consume until RBrace (for anything unsupported)
     while !parser.at_eof() && parser.peek().kind != TokenKind::RBrace {

@@ -8,17 +8,26 @@ pub enum DriftSeverity {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DriftKind {
-    /// Expected snapshot is completely missing (this is technically not drift, but a missing baseline)
+pub enum SqlDriftKind {
     MissingSnapshot,
-    /// Column is removed in the current schema
     ColumnRemoved,
-    /// Type changed in an incompatible way (e.g. Uuid -> Int)
     IncompatibleType { old: SqlType, new: SqlType },
-    /// T became T?
     NonNullBecameNullable,
-    /// T? became T
     NullableBecameNonNull,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApiDriftKind {
+    EndpointRemoved,
+    FieldRemoved { field: String },
+    TypeChanged { field: String, old: String, new: String },
+    RequiredChanged { field: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DriftKind {
+    Sql(SqlDriftKind),
+    Api(ApiDriftKind),
 }
 
 #[derive(Debug, Clone)]
@@ -28,24 +37,21 @@ pub struct DriftRecord {
     pub severity: DriftSeverity,
 }
 
-/// Evaluates if the current live type drifts from the expected type.
-pub fn compare_column_drift(target: &str, expected: &SqlType, actual: Option<&SqlType>) -> Option<DriftRecord> {
+pub fn compare_sql_column(target: &str, expected: &SqlType, actual: Option<&SqlType>) -> Option<DriftRecord> {
     let actual = match actual {
         Some(ty) => ty,
         None => return Some(DriftRecord {
             target: target.to_string(),
-            kind: DriftKind::ColumnRemoved,
+            kind: DriftKind::Sql(SqlDriftKind::ColumnRemoved),
             severity: DriftSeverity::Error,
         }),
     };
 
-    // Fast path: identical types
     if expected == actual {
         return None;
     }
 
     match (expected, actual) {
-        // T expected, T? actual -> Error
         (SqlType::Uuid, SqlType::Nullable(inner)) |
         (SqlType::String, SqlType::Nullable(inner)) |
         (SqlType::Int32, SqlType::Nullable(inner)) |
@@ -55,36 +61,32 @@ pub fn compare_column_drift(target: &str, expected: &SqlType, actual: Option<&Sq
             if &**inner == expected {
                 return Some(DriftRecord {
                     target: target.to_string(),
-                    kind: DriftKind::NonNullBecameNullable,
+                    kind: DriftKind::Sql(SqlDriftKind::NonNullBecameNullable),
                     severity: DriftSeverity::Error,
                 });
             }
         }
-        
-        // T? expected, T actual -> Warning
-        (SqlType::Nullable(inner), actual_base) => {
-            if &**inner == actual_base {
+        (SqlType::Nullable(inner), actual_base)
+            if &**inner == actual_base => {
                 return Some(DriftRecord {
                     target: target.to_string(),
-                    kind: DriftKind::NullableBecameNonNull,
+                    kind: DriftKind::Sql(SqlDriftKind::NullableBecameNonNull),
                     severity: DriftSeverity::Warning,
                 });
             }
-        }
         _ => {}
     }
 
-    // Check base incompatibility
     let exp_base = if let SqlType::Nullable(inner) = expected { &**inner } else { expected };
     let act_base = if let SqlType::Nullable(inner) = actual { &**inner } else { actual };
 
     if exp_base != act_base {
         return Some(DriftRecord {
             target: target.to_string(),
-            kind: DriftKind::IncompatibleType {
+            kind: DriftKind::Sql(SqlDriftKind::IncompatibleType {
                 old: expected.clone(),
                 new: actual.clone(),
-            },
+            }),
             severity: DriftSeverity::Error,
         });
     }

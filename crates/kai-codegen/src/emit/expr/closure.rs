@@ -50,7 +50,7 @@ pub(crate) fn emit_closure<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, clo: 
                 let llvm = ctx.context.void_type().fn_type(&[ptr.into()], false);
                 let dtor = ctx.module.add_function(&dname, llvm, None);
                 let saved_block = ctx.builder.get_insert_block();
-            let was_reversible = ctx.reversible_active.get();
+            let _was_reversible = ctx.reversible_active.get();
             ctx.reversible_active.set(false);
                 let was_reversible = ctx.reversible_active.get();
                 ctx.reversible_active.set(false);

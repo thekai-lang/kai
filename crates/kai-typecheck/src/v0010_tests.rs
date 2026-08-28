@@ -33,7 +33,7 @@ fn assert_err(source: &str, expected_msg: &str) {
         program: &ast,
     }];
     let resolution = analyze_modules(&inputs).unwrap();
-    let result = check_with(&ast, &resolution, setup_snapshots());
+    let result = check_with(&ast, &resolution, setup_snapshots(), std::collections::HashMap::new());
     
     match result {
         Ok(_) => panic!("Expected error '{}', but got success", expected_msg),
@@ -52,7 +52,7 @@ fn assert_ok(source: &str) {
         program: &ast,
     }];
     let resolution = analyze_modules(&inputs).unwrap();
-    let result = check_with(&ast, &resolution, setup_snapshots());
+    let result = check_with(&ast, &resolution, setup_snapshots(), std::collections::HashMap::new());
     if let Err(diags) = result {
         panic!("Expected ok, got errors: {:?}", diags);
     }
@@ -218,7 +218,7 @@ fn assert_drift(source: &str, expected_msg: Option<&str>, live_snap: crate::sql:
         program: &ast,
     }];
     let resolution = kai_resolver::analyze_modules(&inputs).unwrap();
-    let result = crate::check_with_schema(&ast, &resolution, setup_snapshots(), Some(live_snap));
+    let result = crate::check_with_schema(&ast, &resolution, setup_snapshots(), std::collections::HashMap::new(), Some(live_snap));
     
     match (result, expected_msg) {
         (Ok(_), None) => {},

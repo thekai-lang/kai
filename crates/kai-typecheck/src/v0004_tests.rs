@@ -35,7 +35,7 @@ fn check_multi(
             .cloned()
             .collect(),
     };
-    check_with(&merged, &resolution, std::collections::HashMap::new())
+    check_with(&merged, &resolution, std::collections::HashMap::new(), std::collections::HashMap::new())
 }
 
 const ENTRY_USE: &str = "use support.util;\n";

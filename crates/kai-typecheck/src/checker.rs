@@ -48,6 +48,7 @@ pub(crate) struct Checker {
     /// diagnostic so multi-file programs attribute errors correctly (§8.6).
     pub(crate) cur_file: String,
     pub(crate) snapshots: std::collections::HashMap<u32, SqlSnapshot>,
+    pub(crate) api_snapshots: std::collections::HashMap<(String, u32), crate::api::snapshot::ApiSnapshot>,
     pub(crate) current_schema: Option<SqlSnapshot>,
 }
 
@@ -62,6 +63,7 @@ impl Checker {
             current_module: 0,
             cur_file: String::new(),
             snapshots: std::collections::HashMap::new(),
+            api_snapshots: std::collections::HashMap::new(),
             current_schema: None,
         }
     }

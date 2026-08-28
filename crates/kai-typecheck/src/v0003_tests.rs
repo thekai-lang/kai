@@ -7,7 +7,7 @@ fn check_src(src: impl AsRef<str>) -> Result<TypedProgram, Vec<Diagnostic>> {
     let src = src.as_ref();
     let ast = parse_ok(src);
     let resolution = kai_resolver::analyze(&ast).expect("resolution failed");
-    check_with(&ast, &resolution, std::collections::HashMap::new())
+    check_with(&ast, &resolution, std::collections::HashMap::new(), std::collections::HashMap::new())
 }
 
 const POINT: &str = "type Point = { x: int32; y: int32; }\n";
