@@ -714,11 +714,16 @@ dsl sql raw(v12) -> User[] {
 }
 ```
 
-The exact same principles apply to external APIs (`dsl api`):
+The exact same principles apply to external APIs (`dsl api`). Kai tidak pernah men-*generate source code* dari OpenAPI (berbeda dengan `openapi-generator`). Kai melakukan *dynamic typechecking* secara statis terhadap *snapshot* JSON/YAML OpenAPI yang tersinkronisasi offline.
+
 ```kai
 dsl api("stripe", v3) -> PaymentIntent {
     POST /payment_intents
-    body: { amount: int, currency: string }
+    with path: { id: "pi_123" }
+    with query: { expand: "customer" }
+    with header: { "Idempotency-Key": "req_123" }
+    with body: { amount: 2000, currency: "usd" }
+    with auth: bearer("sk_12345")
 }
 ```
 

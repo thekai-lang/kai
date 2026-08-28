@@ -1,0 +1,15 @@
+{
+  "endpoints": {
+    "POST /payment_intents": {
+      "request": {
+        "amount": "int64",
+        "currency": "string"
+      },
+      "response": {
+        "id": "string"
+      }
+    }
+  },
+  "source": "stripe",
+  "version": 3
+}

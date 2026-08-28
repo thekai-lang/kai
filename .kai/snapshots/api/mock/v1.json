@@ -1,0 +1,48 @@
+{
+  "endpoints": {
+    "GET /users": {
+      "parameters": [
+        {
+          "location": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "format": null,
+            "kind": "int32",
+            "nullable": false,
+            "type": "Primitive"
+          }
+        }
+      ],
+      "request_body": null,
+      "response": {
+        "items": {
+          "nullable": false,
+          "properties": {
+            "id": {
+              "format": null,
+              "kind": "string",
+              "nullable": false,
+              "type": "Primitive"
+            },
+            "name": {
+              "format": null,
+              "kind": "string",
+              "nullable": false,
+              "type": "Primitive"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "Object"
+        },
+        "nullable": false,
+        "type": "Array"
+      }
+    }
+  },
+  "servers": [],
+  "source": "mock",
+  "version": 1
+}
