@@ -56,8 +56,30 @@ enum ReversibleEntry {
     },
 }
 
+
+
+impl Drop for ReversibleEntry {
+    fn drop(&mut self) {
+        match self {
+            Self::Snapshot { snapshot, dtor, .. } => {
+                if let Some(d) = dtor.take() {
+                    d(snapshot.as_mut_ptr());
+                }
+            }
+            Self::Compensate { env, release, .. } => {
+                if let Some(r) = release.take() {
+                    if !env.ptr.is_null() {
+                        r(env.ptr);
+                    }
+                }
+            }
+        }
+    }
+}
+
+
 thread_local! {
-    static REVERSE_STACK: RefCell<Vec<Vec<ReversibleEntry>>> = RefCell::new(Vec::new());
+    static REVERSE_STACK: RefCell<Vec<Vec<ReversibleEntry>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Enter a new `reversible` activation — pushes an empty ledger for this call.
@@ -108,7 +130,7 @@ pub unsafe extern "C" fn kai_reversible_push_compensate(
     }
     let sz = usize::try_from(env_size).unwrap_or(0);
     // Align to 16 bytes minimum, enough for all LLVM types in Kai (ptr, struct, vector).
-    let mut buf = AlignedBuffer::new(sz, 16);
+    let buf = AlignedBuffer::new(sz, 16);
     if sz > 0 && !env_ptr.is_null() {
         unsafe { std::ptr::copy_nonoverlapping(env_ptr, buf.ptr, sz) };
     }
@@ -130,16 +152,16 @@ pub unsafe extern "C" fn kai_reversible_push_compensate(
 pub extern "C" fn kai_reversible_commit() {
     let entries = REVERSE_STACK.with(|s| s.borrow_mut().pop());
     let Some(entries) = entries else { return; };
-    for e in entries {
-        match e {
+    for mut e in entries {
+        match &mut e {
             ReversibleEntry::Snapshot { snapshot, dtor, .. } => {
-                if let Some(dtor) = dtor {
-                    dtor(snapshot.as_ptr() as *mut u8);
+                if let Some(d) = dtor.take() {
+                    d(snapshot.as_mut_ptr());
                 }
             }
             ReversibleEntry::Compensate { env, release, .. } => {
-                if let Some(release_fn) = release {
-                    release_fn(env.ptr);
+                if let Some(r) = release.take() {
+                    r(env.ptr);
                 }
             }
         }
@@ -161,15 +183,15 @@ pub unsafe extern "C" fn kai_reversible_unwind() {
                 let mut cur = vec![0u8; sz];
                 unsafe { std::ptr::copy_nonoverlapping(*place, cur.as_mut_ptr(), sz) };
                 unsafe { std::ptr::copy_nonoverlapping(snapshot.as_ptr(), *place, sz) };
-                if let Some(dtor) = dtor {
-                    dtor(cur.as_mut_ptr());
+                if let Some(d) = dtor.take() {
+                    d(cur.as_mut_ptr());
                 }
             }
             ReversibleEntry::Compensate { env, thunk, release } => {
                 crate::runtime::UNWIND_STATE.with(|s| s.set(Some("compensation-failed")));
                 thunk(env.ptr);
-                if let Some(release_fn) = release {
-                    release_fn(env.ptr);
+                if let Some(r) = release.take() {
+                    r(env.ptr);
                 }
             }
         }

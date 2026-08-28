@@ -32,8 +32,11 @@ pub(crate) fn walk_block(
             // AFTER the return value exists (it may still read locals it
             // borrows; the §9.5 retain on the value keeps heap content
             // alive past the releases). One node carries both.
-            ret @ TypedStmt::Return(_) => {
-                let ret = finish_return(heap, ret, scopes, fresh, is_reversible);
+            TypedStmt::Return(mut value) => {
+                if let Some(e) = &mut value {
+                    hoist_borrow_temps(heap, e, fresh, scopes, &mut out, true);
+                }
+                let ret = finish_return(heap, TypedStmt::Return(value), scopes, fresh, is_reversible);
                 let TypedStmt::Return(value) = ret else {
                     unreachable!("finish_return returns a Return");
                 };
@@ -41,9 +44,6 @@ pub(crate) fn walk_block(
                     value,
                     releases: scopes.releases_all(),
                 });
-                // The block has terminated: nothing after this executes,
-                // and emitting anything past a terminator would produce
-                // invalid IR. Remaining source statements are dead code.
                 break;
             }
             TypedStmt::ReturnCleanup { .. } => unreachable!("pass-generated node"),
@@ -374,8 +374,11 @@ pub(crate) fn walk_expr(
             let mut done: Vec<TypedStmt> = Vec::with_capacity(stmts.len());
             for s in std::mem::take(stmts) {
                 match s {
-                    ret @ TypedStmt::Return(_) => {
-                        let ret = finish_return(heap, ret, scopes, fresh, is_reversible);
+                    TypedStmt::Return(mut value) => {
+                        if let Some(e) = &mut value {
+                            hoist_borrow_temps(heap, e, fresh, scopes, &mut done, true);
+                        }
+                        let ret = finish_return(heap, TypedStmt::Return(value), scopes, fresh, is_reversible);
                         let TypedStmt::Return(value) = ret else {
                             unreachable!("finish_return returns a Return");
                         };
@@ -419,8 +422,11 @@ pub(crate) fn walk_expr(
             let mut done: Vec<TypedStmt> = Vec::with_capacity(stmts.len());
             for s in std::mem::take(stmts) {
                 match s {
-                    ret @ TypedStmt::Return(_) => {
-                        let ret = finish_return(heap, ret, scopes, fresh, false);
+                    TypedStmt::Return(mut value) => {
+                        if let Some(e) = &mut value {
+                            hoist_borrow_temps(heap, e, fresh, scopes, &mut done, true);
+                        }
+                        let ret = finish_return(heap, TypedStmt::Return(value), scopes, fresh, false);
                         let TypedStmt::Return(value) = ret else {
                             unreachable!("finish_return returns a Return");
                         };

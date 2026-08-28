@@ -90,6 +90,31 @@ pub(crate) fn alloc_bytes(byte_len: usize) -> *mut u8 {
 ///
 /// # Safety
 /// `data` must be readable for `len` bytes unless `len <= 0`.
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kai_print(s: *const KaiHeapHeader) { unsafe {
+    if s.is_null() { return; }
+    let payload = (*s).payload;
+    let nbytes = (*s).nbytes as usize;
+    let slice = std::slice::from_raw_parts(payload, nbytes);
+    if let Ok(st) = std::str::from_utf8(slice) {
+        use std::io::Write;
+        print!("{}", st);
+        let _ = std::io::stdout().flush();
+    }
+}}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kai_println(s: *const KaiHeapHeader) { unsafe {
+    if s.is_null() { println!(); return; }
+    let payload = (*s).payload;
+    let nbytes = (*s).nbytes as usize;
+    let slice = std::slice::from_raw_parts(payload, nbytes);
+    if let Ok(st) = std::str::from_utf8(slice) {
+        println!("{}", st);
+    }
+}}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kai_string_new(data: *const u8, len: i64) -> *mut KaiHeapHeader {
     let byte_len = usize::try_from(len).unwrap_or(0);
@@ -372,7 +397,9 @@ pub(crate) fn panic_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {
 /// (LLVM symbol, host address) pairs wired into the JIT via global mapping.
 /// Taking these addresses also keeps the functions alive in the linked
 /// binary; the linker may otherwise strip unreferenced `#[no_mangle]` fns.
-pub(crate) const INTRINSICS: [(&str, *const ()); 16] = [
+pub(crate) const INTRINSICS: [(&str, *const ()); 18] = [
+    ("kai_print", kai_print as *const ()),
+    ("kai_println", kai_println as *const ()),
     ("kai_string_new", kai_string_new as *const ()),
     ("kai_array_new", kai_array_new as *const ()),
     ("kai_string_eq", kai_string_eq as *const ()),
