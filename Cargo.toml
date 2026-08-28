@@ -12,11 +12,11 @@ members = [
     "crates/kai-codegen",
     "crates/kai-driver",
     "crates/kai-test-support",
-    "crates/kai-effects",
+    "crates/kai-effects", "crates/kai-sync",
 ]
 
 [workspace.package]
-version = "0.0.10"
+version = "0.0.11"
 edition = "2024"
 
 [workspace.dependencies]

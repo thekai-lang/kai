@@ -18,3 +18,9 @@ kai-parser = { workspace = true }
 kai-resolver = { workspace = true }
 kai-tast = { workspace = true }
 kai-typecheck = { workspace = true }
+kai-sync = { path = "../kai-sync" }
+
+[[bin]]
+name = "debug_ast"
+path = "src/bin.rs"
+

@@ -172,7 +172,7 @@ fn lower_modules(modules: &[kai_driver_modules::LoadedModule]) -> Result<TypedPr
     let resolution =
         kai_resolver::analyze_modules(&inputs).map_err(fail("resolve"))?;
 
-    let mut program = kai_typecheck::check_with(&merged, &resolution, load_sql_snapshots(modules))
+    let mut program = kai_typecheck::check_with(&merged, &resolution, load_sql_snapshots(modules), load_api_snapshots(modules))
         .map_err(fail("typecheck"))?;
     kai_ownership::resolve(&mut program);
     let effect_diags = kai_effects::analyze(&mut program);
@@ -209,7 +209,7 @@ fn lower(source: &str) -> Result<TypedProgram, Failure> {
     let resolution = kai_resolver::analyze(&ast).map_err(fail("resolve"))?;
 
     let mut program =
-        kai_typecheck::check_with(&ast, &resolution, std::collections::HashMap::new()).map_err(fail("typecheck"))?;
+        kai_typecheck::check_with(&ast, &resolution, std::collections::HashMap::new(), std::collections::HashMap::new()).map_err(fail("typecheck"))?;
     kai_ownership::resolve(&mut program);
     let effect_diags = kai_effects::analyze(&mut program);
     if !effect_diags.is_empty() {
@@ -233,6 +233,40 @@ fn internal(message: String) -> Diagnostic {
     )
 }
 
+
+fn load_api_snapshots(modules: &[crate::modules::LoadedModule]) -> std::collections::HashMap<(String, u32), kai_typecheck::api::snapshot::ApiSnapshot> {
+    let mut snapshots = std::collections::HashMap::new();
+    if let Some(first) = modules.first() {
+        let entry_path = std::path::Path::new(&first.file);
+        if let Some(parent) = entry_path.parent() {
+            let snap_dir = parent.join(".kai").join("snapshots").join("api");
+            if snap_dir.exists() && snap_dir.is_dir()
+                && let Ok(services) = std::fs::read_dir(snap_dir) {
+                    for service_entry in services.flatten() {
+                        let svc_path = service_entry.path();
+                        if svc_path.is_dir() {
+                            let service_name = svc_path.file_name().unwrap().to_str().unwrap().to_string();
+                            if let Ok(entries) = std::fs::read_dir(svc_path) {
+                                for entry in entries.flatten() {
+                                    let path = entry.path();
+                                    if path.extension().and_then(|e| e.to_str()) == Some("json")
+                                        && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                                            && stem.starts_with('v')
+                                                && let Ok(version) = stem[1..].parse::<u32>()
+                                                    && let Ok(content) = std::fs::read_to_string(&path)
+                                                        && let Ok(snapshot) = kai_typecheck::api::snapshot::parse_snapshot(&content) {
+                                                            snapshots.insert((service_name.clone(), version), snapshot);
+                                                        }
+                                }
+                            }
+                        }
+                    }
+                }
+        }
+    }
+    snapshots
+}
+
 fn load_sql_snapshots(modules: &[crate::modules::LoadedModule]) -> std::collections::HashMap<u32, kai_typecheck::sql::snapshot::SqlSnapshot> {
     let mut snapshots = std::collections::HashMap::new();
     
@@ -241,27 +275,22 @@ fn load_sql_snapshots(modules: &[crate::modules::LoadedModule]) -> std::collecti
         let entry_path = std::path::Path::new(&first.file);
         if let Some(parent) = entry_path.parent() {
             let snap_dir = parent.join(".kai").join("snapshots").join("sql");
-            if snap_dir.exists() && snap_dir.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(snap_dir) {
+            if snap_dir.exists() && snap_dir.is_dir()
+                && let Ok(entries) = std::fs::read_dir(snap_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.extension().and_then(|e| e.to_str()) == Some("json") {
                             // Extract version number from filename, e.g. "v12.json" -> 12
-                            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                                if stem.starts_with('v') {
-                                    if let Ok(version) = stem[1..].parse::<u32>() {
-                                        if let Ok(content) = std::fs::read_to_string(&path) {
-                                            if let Ok(snapshot) = kai_typecheck::sql::snapshot::parse_snapshot(&content) {
+                            if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                                && stem.starts_with('v')
+                                    && let Ok(version) = stem[1..].parse::<u32>()
+                                        && let Ok(content) = std::fs::read_to_string(&path)
+                                            && let Ok(snapshot) = kai_typecheck::sql::snapshot::parse_snapshot(&content) {
                                                 snapshots.insert(version, snapshot);
                                             }
-                                        }
-                                    }
-                                }
-                            }
                         }
                     }
                 }
-            }
         }
     }
     

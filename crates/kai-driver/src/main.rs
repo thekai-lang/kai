@@ -9,6 +9,8 @@ fn main() -> ExitCode {
         Ok(cli::Command::Build { input, output }) => build(&input, output.as_deref()),
         Ok(cli::Command::Run { input }) => run(&input),
         Ok(cli::Command::Check { input, schema }) => check(&input, schema),
+        Ok(cli::Command::SyncSqlPostgres { version, conn_str }) => sync_sql_postgres(version, &conn_str),
+        Ok(cli::Command::SyncApiOpenapi { version, url, service }) => sync_api_openapi(version, &url, &service),
         Ok(cli::Command::Help) => {
             print!("{}", cli::usage());
             ExitCode::SUCCESS
@@ -75,5 +77,46 @@ fn check(input: &str, schema: bool) -> ExitCode {
     match pipeline::check_file(Path::new(input), schema) {
         Ok(()) => ExitCode::SUCCESS,
         Err(failure) => report_failure(&failure),
+    }
+}
+
+fn sync_sql_postgres(version: u32, conn_str: &str) -> ExitCode {
+    // Generate snapshot output path: .kai/snapshots/sql/v{version}.json
+    let out_dir = Path::new(".kai/snapshots/sql");
+    if let Err(e) = std::fs::create_dir_all(out_dir) {
+        eprintln!("Failed to create snapshot directory: {}", e);
+        return ExitCode::from(1);
+    }
+    let out_path = out_dir.join(format!("v{}.json", version));
+
+    match kai_sync::postgres::sync_schema(version, conn_str, out_path.to_str().unwrap()) {
+        Ok(_) => {
+            println!("Snapshot v{} generated successfully at {}", version, out_path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("kai sync error: {}", e);
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn sync_api_openapi(version: u32, url: &str, service: &str) -> ExitCode {
+    let out_dir = Path::new(".kai/snapshots/api").join(service);
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("Failed to create snapshot directory: {}", e);
+        return ExitCode::from(1);
+    }
+    let out_path = out_dir.join(format!("v{}.json", version));
+
+    match kai_sync::openapi::sync_openapi(version, url, service, out_path.to_str().unwrap()) {
+        Ok(_) => {
+            println!("Snapshot v{} for service '{}' generated successfully at {}", version, service, out_path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("kai sync error: {}", e);
+            ExitCode::from(1)
+        }
     }
 }

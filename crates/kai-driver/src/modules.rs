@@ -135,6 +135,15 @@ impl Loader {
                 continue;
             }
 
+            if target == "std.io" {
+                self.load_module(
+                    "std.io",
+                    "std.io".to_string(),
+                    "public fn print(s: string) -> unit {}\npublic fn println(s: string) -> unit {}\n".to_string(),
+                )?;
+                continue;
+            }
+
             let path = self.root.join(&expected);
             match std::fs::read_to_string(&path) {
                 Ok(source) => {
