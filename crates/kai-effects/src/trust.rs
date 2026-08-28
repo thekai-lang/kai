@@ -111,3 +111,18 @@ mod tests {
         assert!(line.contains("\"outcome\":false"));
     }
 }
+
+pub fn debt_reversibility_jsonl(
+    timestamp_micros: i64,
+    kind: &str,
+    location: &str,
+    condition: &str,
+) -> String {
+    format!(
+        "{{\"timestamp\":\"{}\",\"category\":\"reversibility\",\"kind\":\"{}\",\"location\":\"{}\",\"condition\":\"{}\",\"event\":\"violation\"}}",
+        rfc3339_utc(timestamp_micros),
+        kind,
+        json_escape(location),
+        json_escape(condition),
+    )
+}

@@ -147,10 +147,15 @@ fn check_expr(
             }
             check_expr(tail, all_fns, false, diagnostics);
         }
-        kai_tast::TypedExprKind::ClosureLit(clo) => {
-            for s in &clo.body.stmts {
-                check_stmt(s, all_fns, diagnostics);
-            }
+        kai_tast::TypedExprKind::ClosureLit(_) => {
+            diagnostics.push(Diagnostic::error(
+                "closures inside `reversible` functions are not supported (they cannot securely carry transactional effects into deferred execution)",
+                expr.span,
+            ));
+
+            // Closures do not inherit the `reversible` context.
+            // They execute on their own, outside the transactional activation.
+            // Note: Since closures in v0.0.9 cannot be `reversible` themselves, they cannot contain transactional effects.
         }
         kai_tast::TypedExprKind::SomeLit(v)
         | kai_tast::TypedExprKind::OkLit(v)

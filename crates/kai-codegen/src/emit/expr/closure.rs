@@ -50,6 +50,10 @@ pub(crate) fn emit_closure<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, clo: 
                 let llvm = ctx.context.void_type().fn_type(&[ptr.into()], false);
                 let dtor = ctx.module.add_function(&dname, llvm, None);
                 let saved_block = ctx.builder.get_insert_block();
+            let was_reversible = ctx.reversible_active.get();
+            ctx.reversible_active.set(false);
+                let was_reversible = ctx.reversible_active.get();
+                ctx.reversible_active.set(false);
                 let entry = ctx.context.append_basic_block(dtor, "entry");
                 ctx.builder.position_at_end(entry);
                 let hdr = dtor.get_nth_param(0).expect("hdr").into_pointer_value();
@@ -79,6 +83,7 @@ pub(crate) fn emit_closure<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, clo: 
                 }
                 let _ = ctx.builder.build_return(None);
                 if let Some(saved) = saved_block {
+                    ctx.reversible_active.set(was_reversible);
                     ctx.builder.position_at_end(saved);
                 }
                 dtor.as_global_value().as_pointer_value().into()
@@ -172,6 +177,8 @@ pub(crate) fn emit_closure<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, clo: 
             let body_fn = ctx.module.add_function(&fn_name, llvm, None);
 
             let saved_block = ctx.builder.get_insert_block();
+            let was_reversible = ctx.reversible_active.get();
+            ctx.reversible_active.set(false);
             let entry = ctx.context.append_basic_block(body_fn, "entry");
             ctx.builder.position_at_end(entry);
             let mut inner = Frame::new(frame.module.clone());
@@ -218,6 +225,7 @@ pub(crate) fn emit_closure<'ctx>(ctx: &Ctx<'ctx>, frame: &mut Frame<'ctx>, clo: 
             }
             crate::emit::fallback_return(ctx, &ret_ty, &inner);
             if let Some(saved) = saved_block {
+                ctx.reversible_active.set(was_reversible);
                 ctx.builder.position_at_end(saved);
             }
 

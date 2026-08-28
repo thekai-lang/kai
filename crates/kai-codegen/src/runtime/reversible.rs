@@ -153,6 +153,7 @@ pub unsafe extern "C" fn kai_reversible_unwind() {
     for mut e in entries.into_iter().rev() {
         match &mut e {
             ReversibleEntry::Snapshot { place, snapshot, dtor } => {
+                crate::runtime::UNWIND_STATE.with(|s| s.set(Some("rollback-failed")));
                 let sz = snapshot.len();
                 if sz == 0 || place.is_null() {
                     continue;
@@ -165,6 +166,7 @@ pub unsafe extern "C" fn kai_reversible_unwind() {
                 }
             }
             ReversibleEntry::Compensate { env, thunk, release } => {
+                crate::runtime::UNWIND_STATE.with(|s| s.set(Some("compensation-failed")));
                 thunk(env.ptr);
                 if let Some(release_fn) = release {
                     release_fn(env.ptr);
@@ -172,6 +174,7 @@ pub unsafe extern "C" fn kai_reversible_unwind() {
             }
         }
     }
+    crate::runtime::UNWIND_STATE.with(|s| s.set(None));
 }
 
 pub(crate) fn reversible_enter_fn<'ctx>(ctx: &Ctx<'ctx>) -> FunctionValue<'ctx> {

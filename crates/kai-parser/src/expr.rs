@@ -326,6 +326,12 @@ fn primary(parser: &mut Parser) -> Expr {
             let params = decl::params(parser);
             parser.expect_simple(&TokenKind::Arrow);
             let ret = ty_parser::ty(parser);
+            if let TokenKind::Ident(name) = &parser.peek().kind {
+                if name == "reversible" {
+                    parser.diagnostics.push(error::custom("first-class `reversible` closures are not yet supported (deferred to Appendix A)", parser.peek().span));
+                    parser.bump();
+                }
+            }
             let body = stmt::block(parser);
             Expr {
                 span: Span::merge(token.span, body.span),

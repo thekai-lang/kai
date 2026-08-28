@@ -1,3 +1,14 @@
+## v0.0.9.1 — Reversible Stabilization (v0.0.9.x)
+
+- **Reject `fn() reversible`**: The parser now strictly rejects first-class reversible closures (e.g. `let f = fn() reversible`). Support is explicitly deferred, preventing silently unsound behavior.
+- **Closure Context Isolation**: Closures declared inside a `reversible` activation are now correctly isolated.
+  - *Typechecker*: Explicitly rejects escaping closures if they carry activation-bound transactional effects, emitting a clean compile error.
+  - *Codegen*: The thread-local `reversible_active` flag is strictly cleared when generating a closure's inner body, preventing unintentional leakage of ledger tracking.
+- **Synchronous Rollback Failure Debt**: Refined unwind panic handling for robust observability.
+  - Added a thread-local `UNWIND_STATE` to track whether the runtime is currently executing a snapshot restore (`rollback-failed`) or a compensate thunk (`compensation-failed`).
+  - If a panic (or a refcount underflow) occurs during unwind, `kai_panic` checks this state and synchronously writes the appropriate event record directly to `.kai/debt.log` before emitting the panic trace and exiting with code `101`.
+  - Refcount underflows now invoke `kai_panic` to ensure this path executes cleanly.
+
 ## v0.0.9 — Reversible Ledgers (§5.3) & CompensateThunk
 
 - **CompensateThunk & Capture Semantics (P2)**: Implemented complete `compensate` blocks for `reversible` functions. A `compensate` block registers a self-contained, typed LLVM environment and an anonymous thunk to the `REVERSE_STACK` ledger. Variables captured from the outer scope are copied *by-value* at registration (shallow copy), providing strict snapshot semantics that insulate the compensation logic from subsequent outer mutations.

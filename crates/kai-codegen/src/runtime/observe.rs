@@ -12,7 +12,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// UTC microseconds since epoch — same instant shape as §5.1.7 headers.
-fn micros_now() -> i64 {
+pub(crate) fn micros_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
@@ -27,7 +27,7 @@ unsafe fn cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
     unsafe { CStr::from_ptr(ptr) }.to_str().ok()
 }
 
-fn append_line(sink_path: &str, line: &str) {
+pub(crate) fn append_line(sink_path: &str, line: &str) {
     let path = Path::new(sink_path);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);

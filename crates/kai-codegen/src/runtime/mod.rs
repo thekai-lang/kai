@@ -21,6 +21,10 @@
 //! co-owned arrays never double-release elements.
 
 pub(crate) mod observe;
+
+thread_local! {
+    pub(crate) static UNWIND_STATE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
 pub(crate) mod reversible;
 pub(crate) mod wallclock;
 use wallclock::{kai_wallclock_new, kai_wallclock_now, kai_wallclock_release};
@@ -163,8 +167,8 @@ pub unsafe extern "C" fn kai_release(value: *mut KaiHeapHeader) {
         // Invariant breach (compiler bug, not user error): report and stop
         // hard instead of corrupting the heap. Distinct from §10 panics —
         // this never stems from source-level mistakes.
-        eprintln!("kai runtime error: refcount underflow (double release)");
-        std::process::abort();
+        let msg = b"refcount underflow (double release)";
+        unsafe { kai_panic(msg.as_ptr(), msg.len() as i64, std::ptr::null(), 0, 0) };
     }
     hdr.rc -= 1;
     if hdr.rc > 0 {
@@ -254,6 +258,14 @@ pub unsafe extern "C" fn kai_panic(
 
     let stderr = std::io::stderr();
     let mut out = stderr.lock();
+
+    let unwind_kind = UNWIND_STATE.with(|s| s.get());
+    if let Some(kind) = unwind_kind {
+        let cond = String::from_utf8_lossy(msg);
+        let loc = format!("{}:{}:{}", file, line, col);
+        let debt = kai_effects::trust::debt_reversibility_jsonl(crate::runtime::observe::micros_now(), kind, &loc, &cond);
+        crate::runtime::observe::append_line(".kai/debt.log", &debt);
+    }
     let _ = writeln!(out, "kai runtime panic: {}", String::from_utf8_lossy(msg));
     let _ = writeln!(out, "  at {}:{}:{}", file, line, col);
     let _ = out.flush();
