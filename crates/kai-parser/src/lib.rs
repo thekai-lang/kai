@@ -2,6 +2,7 @@
 //! Errors are diagnostics with spans; parsing never panics on bad input.
 
 pub(crate) mod sql;
+pub(crate) mod api;
 pub mod decl;
 pub mod error;
 pub mod expr;

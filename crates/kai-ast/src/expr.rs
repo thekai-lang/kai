@@ -246,6 +246,7 @@ pub struct DslBlockExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DslVariant {
     StructuredSql(SqlQuery),
+    StructuredApi(ApiContract),
     Raw(String),
 }
 
@@ -308,4 +309,18 @@ pub enum SqlExpr {
     BoolLit { value: bool, span: kai_diagnostics::Span },
     Variable(Ident),
     BinaryOp(Box<SqlExpr>, SqlOp, Box<SqlExpr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiContract {
+    pub service: String,
+    pub version: u32,
+    pub method: String,
+    pub path: String,
+    pub path_params: Option<Vec<(Ident, Expr)>>,
+    pub query_params: Option<Vec<(Ident, Expr)>>,
+    pub header_params: Option<Vec<(Ident, Expr)>>,
+    pub body: Option<Vec<(Ident, Expr)>>,
+    pub auth: Option<Box<Expr>>,
+
 }
