@@ -8,6 +8,7 @@ fn main() -> ExitCode {
     match cli::parse_args(&args) {
         Ok(cli::Command::Build { input, output }) => build(&input, output.as_deref()),
         Ok(cli::Command::Run { input }) => run(&input),
+        Ok(cli::Command::Check { input, schema }) => check(&input, schema),
         Ok(cli::Command::Help) => {
             print!("{}", cli::usage());
             ExitCode::SUCCESS
@@ -67,4 +68,12 @@ fn default_output(input: &str) -> String {
         |stem| stem.to_string_lossy().into_owned(),
     );
     format!("{stem}.ll")
+}
+
+
+fn check(input: &str, schema: bool) -> ExitCode {
+    match pipeline::check_file(Path::new(input), schema) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(failure) => report_failure(&failure),
+    }
 }

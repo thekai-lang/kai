@@ -31,6 +31,8 @@ pub enum TokenKind {
     // operator that attaches an external-effect compensation block to a call.
     Reversible,
     Compensate,
+    // v0.0.10 keywords (§5.4)
+    Dsl,
     /// Bare `_`, carved out of `Ident` as of v0.0.6 (§9.9b): reserved
     /// exclusively for the discard statement, never a binding name.
     Underscore,
@@ -148,6 +150,7 @@ impl TokenKind {
             TokenKind::Catch => "`catch`".into(),
             TokenKind::Reversible => "`reversible`".into(),
             TokenKind::Compensate => "`compensate`".into(),
+            TokenKind::Dsl => "`dsl`".into(),
             TokenKind::Underscore => "`_`".into(),
             TokenKind::True | TokenKind::False => "boolean literal".into(),
             TokenKind::Ident(name) => format!("identifier `{name}`"),

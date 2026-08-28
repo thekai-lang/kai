@@ -38,6 +38,7 @@ pub fn lookup(word: &str) -> Option<TokenKind> {
         // external-effect compensation block to a call.
         "reversible" => Some(TokenKind::Reversible),
         "compensate" => Some(TokenKind::Compensate),
+        "dsl" => Some(TokenKind::Dsl),
         // v0.0.7 keywords (§5.1 temporal, §5.2 require/observe syntax stable)
         "require" => Some(TokenKind::Require),
         "observe" => Some(TokenKind::Observe),

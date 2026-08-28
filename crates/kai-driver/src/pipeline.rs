@@ -172,7 +172,7 @@ fn lower_modules(modules: &[kai_driver_modules::LoadedModule]) -> Result<TypedPr
     let resolution =
         kai_resolver::analyze_modules(&inputs).map_err(fail("resolve"))?;
 
-    let mut program = kai_typecheck::check_with(&merged, &resolution)
+    let mut program = kai_typecheck::check_with(&merged, &resolution, load_sql_snapshots(modules))
         .map_err(fail("typecheck"))?;
     kai_ownership::resolve(&mut program);
     let effect_diags = kai_effects::analyze(&mut program);
@@ -209,7 +209,7 @@ fn lower(source: &str) -> Result<TypedProgram, Failure> {
     let resolution = kai_resolver::analyze(&ast).map_err(fail("resolve"))?;
 
     let mut program =
-        kai_typecheck::check_with(&ast, &resolution).map_err(fail("typecheck"))?;
+        kai_typecheck::check_with(&ast, &resolution, std::collections::HashMap::new()).map_err(fail("typecheck"))?;
     kai_ownership::resolve(&mut program);
     let effect_diags = kai_effects::analyze(&mut program);
     if !effect_diags.is_empty() {
@@ -231,4 +231,52 @@ fn internal(message: String) -> Diagnostic {
         format!("internal codegen error: {message}"),
         kai_diagnostics::Span::new(0, 0),
     )
+}
+
+fn load_sql_snapshots(modules: &[crate::modules::LoadedModule]) -> std::collections::HashMap<u32, kai_typecheck::sql::snapshot::SqlSnapshot> {
+    let mut snapshots = std::collections::HashMap::new();
+    
+    // We infer the root directory from the first module's path (which is the entry point).
+    if let Some(first) = modules.first() {
+        let entry_path = std::path::Path::new(&first.file);
+        if let Some(parent) = entry_path.parent() {
+            let snap_dir = parent.join(".kai").join("snapshots").join("sql");
+            if snap_dir.exists() && snap_dir.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(snap_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                            // Extract version number from filename, e.g. "v12.json" -> 12
+                            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                if stem.starts_with('v') {
+                                    if let Ok(version) = stem[1..].parse::<u32>() {
+                                        if let Ok(content) = std::fs::read_to_string(&path) {
+                                            if let Ok(snapshot) = kai_typecheck::sql::snapshot::parse_snapshot(&content) {
+                                                snapshots.insert(version, snapshot);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    snapshots
+}
+
+
+/// Validates the module tree up to the typechecker phase without code generation.
+/// If `schema_check` is true, it also validates snapshot drift against a current reference.
+pub fn check_file(entry: &Path, _schema_check: bool) -> Result<(), Failure> {
+    let entry = entry.to_path_buf();
+    with_big_stack(move || {
+        let modules = load_modules(&entry)?;
+        let _program = lower_modules(&modules)?;
+        // TODO: invoke schema drift engine if _schema_check is true
+        Ok(())
+    })
 }

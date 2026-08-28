@@ -5,6 +5,7 @@ use crate::scope::Locals;
 use kai_diagnostics::Diagnostic;
 use kai_resolver::Resolution;
 use kai_tast::{KaiType, StructId};
+use crate::sql::snapshot::SqlSnapshot;
 
 /// One struct's resolved layout: fields in declaration order. Field ORDER is
 /// ABI — it drives LLVM struct types and getelementptr indices.
@@ -46,6 +47,8 @@ pub(crate) struct Checker {
     /// Display file of the declaration being lowered, stamped onto every
     /// diagnostic so multi-file programs attribute errors correctly (§8.6).
     pub(crate) cur_file: String,
+    pub(crate) snapshots: std::collections::HashMap<u32, SqlSnapshot>,
+    pub(crate) current_schema: Option<SqlSnapshot>,
 }
 
 impl Checker {
@@ -58,6 +61,8 @@ impl Checker {
             fns: Vec::new(),
             current_module: 0,
             cur_file: String::new(),
+            snapshots: std::collections::HashMap::new(),
+            current_schema: None,
         }
     }
 

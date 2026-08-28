@@ -12,6 +12,10 @@ pub enum Command {
     Run {
         input: String,
     },
+    Check {
+        input: String,
+        schema: bool,
+    },
     Help,
     Version,
 }
@@ -21,6 +25,7 @@ const USAGE: &str = "Kai compiler
 USAGE:
     kai build <file.kai> [-o <out.ll>]    Compile to LLVM IR
     kai run <file.kai>                    Compile and execute via JIT
+    kai check <file.kai> [--schema]       Typecheck only (offline validation)
     kai --version                         Print version
     kai --help                            Print this help";
 
@@ -37,6 +42,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
         [command, rest @ ..] => match command.as_str() {
             "build" => parse_build(rest),
             "run" => parse_positional(rest, |input| Command::Run { input }),
+            "check" => parse_check(rest),
             other => Err(format!("unknown command `{other}`\n\n{USAGE}")),
         },
     }
@@ -114,5 +120,24 @@ mod tests {
     #[test]
     fn empty_args_is_usage() {
         assert!(parse_args(&[]).is_err());
+    }
+}
+
+
+fn parse_check(rest: &[String]) -> Result<Command, String> {
+    let mut input = None;
+    let mut schema = false;
+    for arg in rest {
+        if arg == "--schema" {
+            schema = true;
+        } else if !arg.starts_with('-') && input.is_none() {
+            input = Some(arg.clone());
+        } else {
+            return Err(format!("unexpected argument `{arg}`\n\n{USAGE}"));
+        }
+    }
+    match input {
+        Some(input) => Ok(Command::Check { input, schema }),
+        None => Err(format!("`kai check` requires an input file\n\n{USAGE}")),
     }
 }

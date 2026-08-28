@@ -318,6 +318,7 @@ fn primary(parser: &mut Parser) -> Expr {
                 }),
             }
         }
+        TokenKind::Dsl => crate::sql::parse_dsl_block(parser, token.span),
         TokenKind::Fn => {
             // Closure literal (v0.0.6, §3.5): `fn(params) -> T { body }`.
             // Top-level `fn` declarations are handled by decl.rs dispatch;

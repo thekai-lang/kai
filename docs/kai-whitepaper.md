@@ -703,6 +703,8 @@ dsl sql(v12) -> User[] {
 
 By making the DSL a fully parsed subset of the language (a native SQL AST), Kai can provide strict structural guarantees: the compiler verifies that the table exists in snapshot `v12`, that `id` and `name` are valid columns, and that their types match the `User` struct perfectly.
 
+**Strict DSL Limits**: Certain semantic restrictions are applied by design to guarantee predictable runtime behavior and compile-time verification. For instance, the `LIMIT` clause is strictly confined to compile-time integer literals (`limit 10`). Dynamic limits or expressions (`limit page_size`) are unsupported.
+
 When a query exceeds the compiler's supported DSL subset, developers must use an explicit `raw` escape hatch. This makes the loss of structural validation *visible and deliberate* in the Trust model:
 
 ```kai
@@ -721,12 +723,25 @@ dsl api("stripe", v3) -> PaymentIntent {
 ```
 
 **Identity vs. Reality (Schema Drift):**
-The version (`v12`) identifies the *contract* the code was compiled against. `kai build` does not care if the live database is currently at `v16`; it silently and deterministically builds against `v12`. 
+The version (`v12`) identifies the *contract* the code was compiled against, defined by a locally committed snapshot file (`.kai/snapshots/sql/v12.json`). Snapshots carry their own immutable metadata:
 
-To measure how far the codebase has drifted from external reality, developers use explicit tooling:
-- `kai db sync`: Bumps the snapshot version and writes new introspection data from the live external system.
-- `kai check --schema`: Explicitly compares the compiled contracts against the latest snapshot (e.g., separating safe lag warnings from semantic break errors).
-- `kai debt`: Aggregates this drift into the global observability dashboard.
+```json
+{
+  "version": 12,
+  "source": { "kind": "postgres", "database": "app" },
+  "captured_at": "2026-08-28T03:10:00Z",
+  "schema": {
+    "users": { "id": "uuid", "name": "varchar" }
+  }
+}
+```
+
+`kai build` and `kai check` do not care if the live database is currently at `v15`; they silently and deterministically build against the local `v12` contract offline. 
+
+To measure how far the codebase has drifted from external reality, developers use two distinct commands to explicitly manage the boundary between contracts and the live environment:
+1. **`kai db sync` (Write Operation)**: Connects to the external live database, generates a fresh snapshot (e.g., `v15`), and writes it to `.kai/snapshots/sql/v15.json`. This snapshot represents the newly committed contract and must be tracked in version control.
+2. **`kai check --schema` (Read-Only Validation)**: Connects to the external live database (or reads a temporary introspection file) to acquire the *current* schema. The **Drift Engine** then compares this live schema against the specific contracts used in the codebase (`v12.json`). It filters the comparison through the *actual queries* used in code. If the database drops `users.email` but the codebase's `dsl sql(v12)` never selects `email`, the drift is deemed non-breaking and the engine stays silent.
+3. **`kai debt`**: Aggregates all contract-breaking drift into the global observability dashboard.
 
 ### 5.5 Overrides — escape hatch, always owned
 

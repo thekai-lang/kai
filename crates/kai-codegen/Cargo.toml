@@ -8,3 +8,6 @@ kai-diagnostics = { workspace = true }
 kai-effects = { workspace = true }
 kai-tast = { workspace = true }
 inkwell = { workspace = true }
+
+[dev-dependencies]
+kai-ownership = { workspace = true }

@@ -221,6 +221,7 @@ pub enum ExprKind {
     /// v0.0.9 (§5.3) — postfix compensation block on a call inside a
     /// `reversible` function.
     Compensate(CompensateExpr),
+    DslBlock(DslBlockExpr),
     /// Poisoned node produced only by parser error recovery (e.g. an
     /// expression nested past the recursion budget). Downstream phases treat
     /// it as an error marker, never as compilable code.
@@ -231,4 +232,80 @@ pub enum ExprKind {
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DslBlockExpr {
+    pub kind: String, // "sql" or "api"
+    pub variant: DslVariant,
+    pub version: u32,
+    pub return_ty: Option<Box<Ty>>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DslVariant {
+    StructuredSql(SqlQuery),
+    Raw(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SqlQuery {
+    pub select: Vec<SqlSelectExpr>,
+    pub from: SqlTableRef,
+    pub joins: Vec<SqlJoin>,
+    pub where_clause: Option<SqlExpr>,
+    pub group_by: Vec<String>,
+    pub order_by: Vec<SqlOrderBy>,
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SqlTableRef {
+    pub name: String,
+    pub span: kai_diagnostics::Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SqlSelectExpr {
+    pub expr: SqlExpr,
+    pub alias: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SqlJoin {
+    pub table: SqlTableRef,
+    pub on_clause: SqlExpr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SqlOrderBy {
+    pub expr: SqlExpr,
+    pub descending: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SqlOp {
+    Eq,
+    NotEq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SqlExpr {
+    Column {
+        qualifier: Option<String>,
+        name: String,
+        span: kai_diagnostics::Span,
+    },
+    StringLit { value: String, span: kai_diagnostics::Span },
+    IntLit { value: i64, span: kai_diagnostics::Span },
+    BoolLit { value: bool, span: kai_diagnostics::Span },
+    Variable(Ident),
+    BinaryOp(Box<SqlExpr>, SqlOp, Box<SqlExpr>),
 }

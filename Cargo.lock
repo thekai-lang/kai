@@ -68,6 +68,7 @@ dependencies = [
  "inkwell",
  "kai-diagnostics",
  "kai-effects",
+ "kai-ownership",
  "kai-tast",
 ]
 

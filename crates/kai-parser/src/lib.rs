@@ -1,6 +1,7 @@
 //! Hand-written recursive-descent parser: tokens -> untyped AST.
 //! Errors are diagnostics with spans; parsing never panics on bad input.
 
+pub(crate) mod sql;
 pub mod decl;
 pub mod error;
 pub mod expr;

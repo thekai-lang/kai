@@ -136,6 +136,7 @@ pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType
         ExprKind::ClosureLit(clo) => tagged::closure_literal(checker, clo),
         // Poisoned parser-recovery node. The program already failed upstream;
         // this defensive diagnostic keeps the phase contract explicit.
+        ExprKind::DslBlock(dsl) => crate::sql::check_dsl_block(checker, dsl),
         ExprKind::Invalid => {
             let span = expr.span;
             checker.error(error::invalid_expression(span));

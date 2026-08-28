@@ -1,3 +1,8 @@
+## v0.0.10 — Versioned Contracts & Offline Validation
+
+- **Zero-Dependency JSON Parser**: Implemented a minimal, hand-rolled JSON recursive-descent parser for `.kai/snapshots/sql/vN.json` (approx. 200 LOC), consistent with Kai's hand-written toolchain philosophy (§8) and the precedent set by `observe.log` formatting in `v0.0.8`. This avoids introducing `serde` as an external dependency. Note: while adequate for the narrow SQL schema structure, this trade-off must be explicitly re-evaluated before `v0.0.11`'s OpenAPI integration, which involves vastly more complex JSON shapes.
+- **Dsl AST Integration**: Added `DslBlockExpr` to represent structured and raw fallback SQL queries to enable offline struct-to-schema validation against offline snapshots.
+
 ## v0.0.9.2 — Reversible Stabilization (v0.0.9.x)
 
 - **Reject `fn() reversible`**: The parser now strictly rejects first-class reversible closures (e.g. `let f = fn() reversible`). Support is explicitly deferred, preventing silently unsound behavior.

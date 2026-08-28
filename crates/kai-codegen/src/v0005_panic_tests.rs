@@ -3,7 +3,8 @@ use kai_tast::{BinaryOp, KaiType, TypedExpr, TypedExprKind, TypedProgram};
 
 /// `main` returning one expression — the smallest vehicle for a check.
 fn returns(expr: TypedExpr) -> TypedProgram {
-    use kai_tast::{EffectSet, FunctionId, TypedBlock, TypedFnDecl, TypedStmt};
+    use kai_tast::{EffectSet, FunctionId, TypedBlock, TypedFnDecl, TypedStmt, TypedLet};
+    let ty = expr.ty.clone();
     TypedProgram {
         structs: Vec::new(),
         fns: vec![TypedFnDecl {
@@ -11,12 +12,22 @@ fn returns(expr: TypedExpr) -> TypedProgram {
             name: "main".into(),
             module: String::new(),
             params: Vec::new(),
-            ret: expr.ty.clone(),
+            ret: ty.clone(),
             declared_effects: None,
             inferred_effects: EffectSet::default(),
             is_reversible: false,
             body: TypedBlock {
-                stmts: vec![TypedStmt::Return(Some(expr))],
+                stmts: vec![
+                    TypedStmt::Let(TypedLet {
+                        local: kai_tast::LocalId(0),
+                        name: "tmp".into(),
+                        init: expr,
+                    }),
+                    TypedStmt::Return(Some(kai_tast::TypedExpr::new(
+                        kai_tast::TypedExprKind::LocalRef(kai_tast::LocalId(0)),
+                        ty
+                    ))),
+                ],
             },
         }],
     }
@@ -60,13 +71,20 @@ fn indexed_reads_carry_bounds_guards() {
         },
         Kt::Int32,
     );
-    let ir = compile_ir("test", &returns(read.clone())).unwrap();
+    let mut prog = returns(read.clone());
+    kai_ownership::resolve(&mut prog);
+    let ir = compile_ir("test", &prog).unwrap();
+    println!("IR:\n{}", ir);
+    println!("AST:\n{:#?}", prog);
     assert!(
         ir.contains("array index out of bounds"),
         "no bounds message global:\n{ir}"
     );
     assert!(ir.contains("@kai_panic"), "no panic call:\n{ir}");
-    assert_eq!(run_jit(&returns(read)).unwrap(), 10);
+    
+    let mut prog_run = returns(read);
+    kai_ownership::resolve(&mut prog_run);
+    assert_eq!(run_jit(&prog_run).unwrap(), 10);
 }
 
 #[test]
