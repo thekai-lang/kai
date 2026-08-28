@@ -8,6 +8,8 @@ kai-ast = { workspace = true }
 kai-tast = { workspace = true }
 kai-diagnostics = { workspace = true }
 kai-resolver = { workspace = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 
 [dev-dependencies]
 kai-lexer = { workspace = true }

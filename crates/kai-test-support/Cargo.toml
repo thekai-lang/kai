@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-kai-lexer = { workspace = true }
-kai-parser = { workspace = true }
+kai-lexer.workspace = true
+kai-parser.workspace = true
 kai-ast = { workspace = true }
 kai-resolver = { workspace = true }
 kai-tast = { workspace = true }
