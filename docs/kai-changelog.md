@@ -1,4 +1,4 @@
-## v0.0.9.1 — Reversible Stabilization (v0.0.9.x)
+## v0.0.9.2 — Reversible Stabilization (v0.0.9.x)
 
 - **Reject `fn() reversible`**: The parser now strictly rejects first-class reversible closures (e.g. `let f = fn() reversible`). Support is explicitly deferred, preventing silently unsound behavior.
 - **Closure Context Isolation**: Closures declared inside a `reversible` activation are now correctly isolated.
