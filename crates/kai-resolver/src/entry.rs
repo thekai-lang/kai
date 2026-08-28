@@ -34,7 +34,7 @@ fn check_main(
 
     match mains.as_slice() {
         [] => {
-            let span = program.fns.first().map_or(Span::new(0, 0), |f| f.span);
+            let span = program.fns.first().map_or(Span::new(0, 0), |f| f.name.span);
             diagnostics.push(Diagnostic::error("program has no `main` function", span));
         }
         [main] => {

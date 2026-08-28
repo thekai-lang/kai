@@ -41,7 +41,9 @@ pub fn render_multi(diagnostics: &[Diagnostic], sources: &[(String, String)]) ->
         out.push_str(&format!("{:>4} |\n", ""));
         out.push_str(&format!("{:>4} | {line_text}\n", lc.line));
 
-        let caret_len = diag.span.end.saturating_sub(diag.span.start).max(1);
+        let raw_caret_len = diag.span.end.saturating_sub(diag.span.start).max(1);
+        let max_caret = line_text.chars().count().saturating_sub(lc.col - 1);
+        let caret_len = raw_caret_len.min(max_caret.max(1));
         let pad: String = " ".repeat(lc.col - 1);
         let carets: String = "^".repeat(caret_len);
         out.push_str(&format!("     | {pad}{carets}\n"));
