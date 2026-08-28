@@ -1,7 +1,7 @@
 # Kai
 ### A trust-aware programming language
 
-**Status:** Draft v0.25 — pre-implementation specification
+**Status:** Draft v0.27 — pre-implementation specification
 **Purpose:** Freeze scope before writing any compiler code. Nothing described here is authoritative until it appears in this document. Feature ideas that arise during implementation go into an `IDEAS.md` backlog, not into the compiler.
 
 **Amendment process:** Small additions (new syntax sugar, clarifying rationale) may be edited directly. Anything touching §2 (principles), §4 (non-goals), or introducing a new Trust kind beyond §5.0's taxonomy must first exist as an entry in Appendix A, be discussed explicitly, and only then be promoted into the main body — never patched in ad hoc during implementation.
@@ -1208,4 +1208,6 @@ These are known unresolved design questions. They are *not* to be decided ad-hoc
   - **P0 — Hard failure (must be 0):** use-after-free, double-free, invalid memory access, ownership violation, unhandled leak on ephemeral objects, crash from lifecycle violation.
   - **P1 — Memory stability:** on representative workload, heap reaches steady state; no sustained growth; retained objects have valid owners; caches/pools have stated bounds.
   - **P2 — Diagnostic quality:** failing test answers WHAT/WHERE/WHO/WHEN/WHY/PATH. "Memory increased by 47 MB" is not a diagnostic.
-  - **P3 — Regression resistance:** memory tests are CI gates, not manual pre-release checks.
+  - **P3 — Regression resistance:** memory tests are CI gates, not manual pre-release checks.- **Closure escaping a `reversible` function body.** If a closure is created inside a `reversible` function and returned (or stored) to be called later, what happens to its captured environment in relation to the ledger? Does it interact with the transaction? Candidate resolution: No. The `reversible` activation is committed and popped when the parent function returns. If the closure is called later, it executes outside the transactional scope (unless called within another `reversible` block). If the closure itself contains `compensate` or transactional mutations, it must be marked `reversible` in its own signature.
+- **First-class `reversible` closures.** Can a closure be declared as `reversible` (`let f = fn() -> void reversible { ... }`)? The current v0.0.9 implementation focuses on named functions. Allowing first-class reversible closures implies propagating the `reversible` effect through function pointers and trait boundaries, requiring effect-system extensions. This is currently open and deferred.
+- **Rollback failure `Trust` kind in `kai debt`.** If a panic triggers an unwind, but the unwind itself fails catastrophically (e.g. a refcount underflow or a panic inside a `compensate` thunk that causes a hard exit), how is this recorded in the debt ledger? The Trust category is `reversibility`. The proposed `kind` value is `"rollback-failed"` or `"unwind-fatal"`, representing a terminal failure to honor the transactional contract. Since the process aborts, writing this debt requires a guaranteed pre-exit flush mechanism or a supervisor process.
