@@ -4,8 +4,7 @@
 covering the v0.0.7 trust-aware layer's syntax (`@local`/`@wallclock`,
 locked in whitepaper v0.15 and refined through v0.17's §5.1.7) and §9a
 covering the v0.0.8 `require`/`observe` pair — **syntax AND semantics both
-locked** (whitepaper v0.20–v0.22, §5.2). The rest of the trust-aware layer —
-`dsl sql`, `dsl api`, `@override` — remains **excluded**: those sections of §5 aren't locked yet, so their grammar isn't written until they are, **same discipline as before.**
+locked** (whitepaper v0.20–v0.22, §5.2). The rest of the trust-aware layer (`@override`) remains **excluded**. `dsl sql` (v0.0.10) and `dsl api` (v0.0.11) grammar are locked and provided in §11.
 
 **Method:** every rule below is derived from an example that already exists in
 the whitepaper or the actual v0.0.1/v0.0.2 implementation. Nothing here is
@@ -405,7 +404,7 @@ ClosureLit   ::= 'fn' '(' [ ParamList ] ')' '->' Type Block
 
 ## 9. Trust-aware layer grammar — v0.0.7 (`@local`/`@wallclock` only)
 
-Only §5.1 (temporal types), locked in whitepaper v0.15, gets grammar here alongside §9a below. `require`/`observe` (§5.2) is **v0.0.8** scope per roadmap §7 — syntax stable since v0.2, semantics formalized in whitepaper v0.20–v0.22 (§5.2.1–§5.2.2); kept separate so a reader doesn't infer v0.0.7 implements it. `reversible`/`compensate` (§5.3) is **v0.0.9** scope, locked in v0.25. `dsl sql`/`dsl api` (§5.4) stay excluded entirely until those sections go through the same lock-then-grammar sequence.
+Only §5.1 (temporal types), locked in whitepaper v0.15, gets grammar here alongside §9a below. `require`/`observe` (§5.2) is **v0.0.8** scope per roadmap §7 — syntax stable since v0.2, semantics formalized in whitepaper v0.20–v0.22 (§5.2.1–§5.2.2); kept separate so a reader doesn't infer v0.0.7 implements it. `reversible`/`compensate` (§5.3) is **v0.0.9** scope, locked in v0.25. `dsl sql`/`dsl api` (§5.4) are locked in v0.0.10/v0.0.11 and covered in §11.
 
 ```ebnf
 DurationLit  ::= DecimalInt DurationUnit
@@ -497,4 +496,33 @@ own changelog.
 ```ebnf
 FnDecl ::= "fn" Ident "(" ParamList ")" [ "->" Type ] [ "reversible" ] Block
 Expr   ::= CallExpr [ "compensate" Block ]
+```
+
+## 11. External Contracts grammar — v0.0.10 & v0.0.11 (`dsl sql`/`dsl api`)
+
+```ebnf
+DslExpr ::= 'dsl' DslKind ( 'raw' )? '(' DslArgs ')' ( '->' Type )? '{' DslBody '}'
+
+DslKind ::= 'sql' | 'api'
+
+DslArgs ::=
+    | 'v' DecimalInt                 (* sql: v12 *)
+    | StringLit ',' 'v' DecimalInt   (* api: "stripe", v3 *)
+
+DslBody ::=
+    | StringLit                      (* when 'raw' *)
+    | SqlQuery                       (* when kind='sql' and not 'raw' *)
+    | ApiContract                    (* when kind='api' and not 'raw' *)
+
+ApiContract ::= ApiMethod ApiPath ApiWithClause*
+
+ApiMethod ::= 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
+ApiPath ::= '/' ( Ident | '/' )*
+
+ApiWithClause ::=
+    | 'with' 'path' ':' StructLit
+    | 'with' 'query' ':' StructLit
+    | 'with' 'header' ':' StructLit
+    | 'with' 'body' ':' StructLit
+    | 'with' 'auth' ':' Expr
 ```
