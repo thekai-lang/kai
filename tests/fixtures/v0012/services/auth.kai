@@ -1,0 +1,13 @@
+// using module aliasing and direct symbol import
+use domain.user as u;
+use domain.user.User;
+
+public fn login(id: int32) -> User {
+    // Calling associated function via explicit module alias + type
+    let user = u.User.create(id);
+    
+    // Calling associated function directly on imported symbol
+    let inactive = User.deactivate(user);
+    
+    return inactive;
+}

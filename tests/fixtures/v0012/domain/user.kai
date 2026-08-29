@@ -1,0 +1,18 @@
+public type User = {
+    id: int32;
+    active: bool;
+}
+
+public fn User.create(id: int32) -> User {
+    return User {
+        id: id,
+        active: true,
+    };
+}
+
+public fn User.deactivate(u: User) -> User {
+    return User {
+        id: u.id,
+        active: false,
+    };
+}

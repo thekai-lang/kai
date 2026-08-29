@@ -1843,3 +1843,23 @@ fn v009_compensate_rejects_mutation_of_outer_variable() {
         "cannot assign to outer variable 'x' inside compensate block",
     );
 }
+
+// -- v0.0.12 tests ----------------------------------------------------------
+
+const V0012: &str = "v0012/main.kai";
+
+fn v0012_entry() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/v0012/main.kai")
+}
+
+#[test]
+fn v0012_full_pipeline_matches_golden_ir() {
+    let ir = pipeline::compile_file(&v0012_entry()).expect("compilation should succeed");
+    assert_golden("v0012/main.expected.ll", &ir);
+}
+
+#[test]
+fn v0012_jit_module_tree_returns_expected_value() {
+    assert_eq!(pipeline::jit_file(&v0012_entry()).unwrap(), 0);
+}

@@ -1,0 +1,14 @@
+use services.auth;
+use domain.user.User;
+
+fn main() -> int32 {
+    let u = auth.login(42);
+    
+    // If it works properly, id should be 42 and active false
+    if u.id == 42 {
+        if !u.active {
+            return 0; // Success
+        }
+    }
+    return 1;
+}
