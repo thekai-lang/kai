@@ -69,6 +69,7 @@ pub(crate) fn emit<'ctx>(
         // Poisoned recovery node; only reachable in programs that failed
         // upstream. `undef` keeps emission total without inventing behavior.
         TypedExprKind::Invalid => undef_of(ctx, &ty),
+        TypedExprKind::ModuleRef(_) | TypedExprKind::TypeRef(_) | TypedExprKind::FnRef(_) => unreachable!("Compile-time semantic node reached codegen"),
         // -- v0.0.6 (§9.9a/§9.10) ----------------------------------------
         TypedExprKind::NoneLit => tagged::tagged_none_const(ctx, &ty),
         TypedExprKind::SomeLit(value) => {

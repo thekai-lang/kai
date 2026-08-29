@@ -23,7 +23,7 @@ fn optional_type_both_spellings_one_form() {
         match &program.fns[0].body.stmts[0].kind {
             StmtKind::Let(l) => match l.ty.as_ref().expect("annotation") {
                 Ty::Optional(inner) => {
-                    assert!(matches!(inner.as_ref(), Ty::Named(n) if n.name == "string"));
+                    assert!(matches!(inner.as_ref(), Ty::Path(n) if n.last().unwrap().name == "string"));
                 }
                 other => panic!("expected optional type, got {other:?}"),
             },
@@ -56,8 +56,8 @@ fn q() -> Result<int32, string> { return Result { }; }",
     match &program.fns[0].body.stmts[0].kind {
         StmtKind::Let(l) => match l.ty.as_ref().expect("annotation") {
             Ty::Result { ok, err } => {
-                assert!(matches!(ok.as_ref(), Ty::Named(n) if n.name == "int32"));
-                assert!(matches!(err.as_ref(), Ty::Named(n) if n.name == "string"));
+                assert!(matches!(ok.as_ref(), Ty::Path(n) if n.last().unwrap().name == "int32"));
+                assert!(matches!(err.as_ref(), Ty::Path(n) if n.last().unwrap().name == "string"));
             }
             other => panic!("expected result type, got {other:?}"),
         },
@@ -76,7 +76,7 @@ fn q() -> (int32, string) -> bool { return f; }",
         StmtKind::Let(l) => match l.ty.as_ref().expect("annotation") {
             Ty::Closure { params, ret } => {
                 assert_eq!(params.len(), 2);
-                assert!(matches!(ret.as_ref(), Ty::Named(n) if n.name == "bool"));
+                assert!(matches!(ret.as_ref(), Ty::Path(n) if n.last().unwrap().name == "bool"));
             }
             other => panic!("expected closure type, got {other:?}"),
         },
@@ -271,7 +271,7 @@ fn main() -> int32 { return 0; }",
             ExprKind::ClosureLit(clo) => {
                 assert_eq!(clo.params.len(), 1);
                 assert_eq!(clo.body.stmts.len(), 1);
-                assert!(matches!(&clo.ret, Ty::Named(n) if n.name == "int32"));
+                assert!(matches!(&clo.ret, Ty::Path(n) if n.last().unwrap().name == "int32"));
             }
             other => panic!("expected closure literal, got {other:?}"),
         },

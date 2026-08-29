@@ -91,7 +91,7 @@ fn build_fn_signatures(checker: &mut Checker, program: &Program) {
             .collect();
         let ret = ty::resolve(checker, &decl.ret);
         checker.fns.push(crate::checker::FnInfo {
-            name: decl.name.name.clone(),
+            name: decl.path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join("."),
             param_tys,
             ret,
         });
@@ -156,7 +156,7 @@ fn fn_decl(checker: &mut Checker, decl: &kai_ast::FnDecl, id: FunctionId) -> Typ
     });
     TypedFnDecl {
         id,
-        name: decl.name.name.clone(),
+        name: decl.path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join("."),
         module: module_path(checker, checker.current_module),
         params,
         ret,
@@ -216,6 +216,6 @@ fn ensure_returns_on_all_paths(
         return;
     }
     let span = decl.span;
-    let name = decl.name.name.clone();
+    let name = decl.path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(".");
     checker.error(error::function_needs_return(&name, ret.clone(), span));
 }

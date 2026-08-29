@@ -9,21 +9,51 @@ use kai_tast::{KaiType, StructId};
 
 pub(crate) fn resolve(checker: &mut Checker, ty: &Ty) -> KaiType {
     match ty {
-        Ty::Named(ident) => match ident.name.as_str() {
-            "int32" | "int" => KaiType::Int32,
-            "int64" => KaiType::Int64,
-            "float64" | "float" => KaiType::Float64,
-            "bool" => KaiType::Bool,
-            "string" => KaiType::String,
-            "unit" => KaiType::Unit,
-            other => match checker.local_types().get(other) {
-                Some(&idx) => KaiType::Struct(StructId(idx as u32)),
-                None => {
-                    let span = ident.span;
-                    checker.error(error::unknown_type(other, span));
-                    KaiType::Int32 // placeholder; program is discarded on error anyway
+        Ty::Path(path) => {
+            if path.len() == 1 {
+                let name = path[0].name.as_str();
+                match name {
+                    "int32" | "int" => KaiType::Int32,
+                    "int64" => KaiType::Int64,
+                    "float64" | "float" => KaiType::Float64,
+                    "bool" => KaiType::Bool,
+                    "string" => KaiType::String,
+                    "unit" => KaiType::Unit,
+                    other => match checker.local_types().get(other) {
+                        Some(&idx) => KaiType::Struct(StructId(idx as u32)),
+                        None => {
+                            let span = path[0].span;
+                            checker.error(error::unknown_type(other, span));
+                            KaiType::Int32
+                        }
+                    },
                 }
-            },
+            } else if path.len() == 2 {
+                let alias = path[0].name.as_str();
+                let type_name = path[1].name.as_str();
+                let m_idx = checker.current_module;
+                
+                if let Some(&target_mod) = checker.resolution.imports[m_idx].get(alias) {
+                    if let Some(&idx) = checker.resolution.module_types[target_mod].get(type_name) {
+                        if checker.resolution.type_is_public[idx] {
+                            KaiType::Struct(StructId(idx as u32))
+                        } else {
+                            checker.diagnostics.push(kai_diagnostics::Diagnostic::error(format!("type `{type_name}` is private"), path[1].span).with_file(&checker.cur_file));
+                            KaiType::Int32
+                        }
+                    } else {
+                        checker.diagnostics.push(kai_diagnostics::Diagnostic::error(format!("module `{alias}` has no type `{type_name}`"), path[1].span).with_file(&checker.cur_file));
+                        KaiType::Int32
+                    }
+                } else {
+                    checker.diagnostics.push(kai_diagnostics::Diagnostic::error(format!("unknown module alias `{alias}`"), path[0].span).with_file(&checker.cur_file));
+                    KaiType::Int32
+                }
+            } else {
+                let span = path[0].span; // simplified
+                checker.diagnostics.push(kai_diagnostics::Diagnostic::error("invalid type path length".to_string(), span).with_file(&checker.cur_file));
+                KaiType::Int32
+            }
         },
         // `T[]`: the element type resolves like any other reference.
         Ty::Array(elem) => KaiType::Array(Box::new(resolve(checker, elem))),

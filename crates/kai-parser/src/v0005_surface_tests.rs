@@ -63,7 +63,7 @@ fn parses_array_type_annotation() {
     match &stmts[0].kind {
         kai_ast::StmtKind::Let(l) => match l.ty.as_ref().expect("annotation") {
             kai_ast::Ty::Array(elem) => match elem.as_ref() {
-                kai_ast::Ty::Named(t) => assert_eq!(t.name, "int64"),
+                kai_ast::Ty::Path(t) => assert_eq!(t.last().unwrap().name, "int64"),
                 other => panic!("named element expected, got {other:?}"),
             },
             other => panic!("array type expected, got {other:?}"),

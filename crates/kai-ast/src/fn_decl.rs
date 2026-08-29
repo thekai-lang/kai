@@ -17,7 +17,7 @@ pub struct FnDecl {
     /// `public fn` — visible through an importing module's alias; a plain
     /// `fn` is module-private (§3.6).
     pub is_public: bool,
-    pub name: Ident,
+    pub path: Vec<Ident>,
     pub params: Vec<Param>,
     pub ret: Ty,
     /// `effects { ... }` verified contract (§5.1.2): `inferred ⊆ declared`, checked, never trusted.

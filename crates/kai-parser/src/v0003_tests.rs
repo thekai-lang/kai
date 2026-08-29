@@ -14,7 +14,7 @@ fn main() -> int32 { return 0; }";
     assert_eq!(params[0].name.name, "a");
     assert!(!params[0].mutable);
     match &params[0].ty {
-        kai_ast::Ty::Named(t) => assert_eq!(t.name, "int32"),
+        kai_ast::Ty::Path(t) => assert_eq!(t.last().unwrap().name, "int32"),
         other => panic!("expected named type, got {other:?}"),
     }
     assert_eq!(params[1].name.name, "b");
@@ -263,7 +263,7 @@ fn parses_typed_binding() {
     let stmts = &program.fns[0].body.stmts;
     match &stmts[0].kind {
         kai_ast::StmtKind::Let(l) => match l.ty.as_ref().expect("annotation") {
-            kai_ast::Ty::Named(ident) => assert_eq!(ident.name, "int64"),
+            kai_ast::Ty::Path(ident) => assert_eq!(ident.last().unwrap().name, "int64"),
             other => panic!("expected named type, got {other:?}"),
         },
         other => panic!("expected let, got {other:?}"),

@@ -114,64 +114,6 @@ pub(crate) fn build_multi(
     resolution.module_fns.resize_with(modules.len(), HashMap::new);
     resolution.imports.resize_with(modules.len(), HashMap::new);
 
-    // Import aliases first: they are validated against the loaded module
-    // list, which also catches imports pointing outside the loaded set.
-    let name_to_index: HashMap<&str, usize> = modules
-        .iter()
-        .enumerate()
-        .map(|(idx, m)| (m.name, idx))
-        .collect();
-
-    for (m_idx, module) in modules.iter().enumerate() {
-        for decl in &module.program.use_decls {
-            let target = decl.dotted_name();
-            let Some(alias) = decl.path.last().cloned() else {
-                diagnostics.push(
-                    Diagnostic::error(
-                        "internal error: empty import path — compiler bug",
-                        decl.span,
-                    )
-                    .with_file(module.file),
-                );
-                continue;
-            };
-
-            let Some(&target_idx) = name_to_index.get(target.as_str()) else {
-                diagnostics.push(
-                    Diagnostic::error(
-                        format!("cannot find module `{target}`"),
-                        decl.span,
-                    )
-                    .with_file(module.file),
-                );
-                continue;
-            };
-            if target_idx == m_idx {
-                diagnostics.push(
-                    Diagnostic::error(
-                        format!("cyclic import: {target} -> {target}"),
-                        decl.span,
-                    )
-                    .with_file(module.file),
-                );
-                continue;
-            }
-
-            if resolution.imports[m_idx]
-                .insert(alias.name.clone(), target_idx)
-                .is_some()
-            {
-                diagnostics.push(
-                    Diagnostic::error(
-                        format!("duplicate import alias `{}`", alias.name),
-                        alias.span,
-                    )
-                    .with_file(module.file),
-                );
-            }
-        }
-    }
-
     for (m_idx, module) in modules.iter().enumerate() {
         for decl in &module.program.types {
             let global = resolution.type_module.len();
@@ -195,14 +137,30 @@ pub(crate) fn build_multi(
 
         for decl in &module.program.fns {
             let global = resolution.fn_module.len();
+
+            let name_str = decl.path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(".");
+            let span = kai_diagnostics::Span::merge(decl.path.first().unwrap().span, decl.path.last().unwrap().span);
+            if decl.path.len() >= 2 {
+                let owner_type = &decl.path[0].name;
+                if !resolution.module_types[m_idx].contains_key(owner_type) {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            format!("associated function `{}` must be defined in the same module that owns the type `{}`", name_str, owner_type),
+                            span,
+                        )
+                        .with_file(module.file),
+                    );
+                }
+            }
+
             if resolution.module_fns[m_idx]
-                .insert(decl.name.name.clone(), global)
+                .insert(decl.path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join("."), global)
                 .is_some()
             {
                 diagnostics.push(
                     Diagnostic::error(
-                        format!("duplicate function `{}`", decl.name.name),
-                        decl.name.span,
+                        format!("duplicate function `{}`", decl.path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(".")),
+                        kai_diagnostics::Span::merge(decl.path.first().unwrap().span, decl.path.last().unwrap().span),
                     )
                     .with_file(module.file),
                 );
@@ -212,6 +170,96 @@ pub(crate) fn build_multi(
             resolution.fn_file.push(module.file.to_string());
         }
     }
+
+    // Import aliases first: they are validated against the loaded module
+    // list, which also catches imports pointing outside the loaded set.
+
+
+
+    let name_to_index: HashMap<&str, usize> = modules
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| (m.name, idx))
+        .collect();
+    for (m_idx, module) in modules.iter().enumerate() {
+        for decl in &module.program.use_decls {
+            let target = decl.dotted_name();
+            let alias = decl.as_alias.clone().unwrap_or_else(|| decl.path.last().unwrap().clone());
+            if false {
+                diagnostics.push(
+                    Diagnostic::error(
+                        "internal error: empty import path — compiler bug",
+                        decl.span,
+                    )
+                    .with_file(module.file),
+                );
+                continue;
+            };
+
+            if let Some(&target_idx) = name_to_index.get(target.as_str()) {
+                if target_idx == m_idx {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            format!("cyclic import: {target} -> {target}"),
+                            decl.span,
+                        )
+                        .with_file(module.file),
+                    );
+                    continue;
+                }
+
+                if resolution.imports[m_idx]
+                    .insert(alias.name.clone(), target_idx)
+                    .is_some()
+                {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            format!("duplicate import alias `{}`", alias.name),
+                            alias.span,
+                        )
+                        .with_file(module.file),
+                    );
+                }
+            } else {
+                // Not a direct module match. Check for direct symbol import.
+                if decl.path.len() >= 2 {
+                    let parent = decl.path[..decl.path.len()-1].iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(".");
+                    let symbol = &decl.path.last().unwrap().name;
+                    if let Some(&target_idx) = name_to_index.get(parent.as_str()) {
+                        let mut found = false;
+                        if let Some(&global_idx) = resolution.module_types[target_idx].get(symbol) {
+                            if !resolution.type_is_public[global_idx] {
+                                diagnostics.push(Diagnostic::error(format!("type `{symbol}` is private"), decl.span).with_file(module.file));
+                            } else {
+                                resolution.module_types[m_idx].insert(symbol.clone(), global_idx);
+                                found = true;
+                            }
+                        }
+                        if let Some(&global_idx) = resolution.module_fns[target_idx].get(symbol) {
+                            if !resolution.fn_is_public[global_idx] {
+                                diagnostics.push(Diagnostic::error(format!("function `{symbol}` is private"), decl.span).with_file(module.file));
+                            } else {
+                                resolution.module_fns[m_idx].insert(symbol.clone(), global_idx);
+                                found = true;
+                            }
+                        }
+                        if !found {
+                            diagnostics.push(Diagnostic::error(format!("cannot find module or symbol `{target}`"), decl.span).with_file(module.file));
+                        }
+                        continue;
+                    }
+                }
+                diagnostics.push(
+                    Diagnostic::error(
+                        format!("cannot find module `{target}`"),
+                        decl.span,
+                    )
+                    .with_file(module.file),
+                );
+            }
+        }
+    }
+
 
     resolution
 }
@@ -281,7 +329,7 @@ pub(crate) fn detect_cycles(
         /// value's layout, so they inherit the payload's edges.
         fn ty_edges(ty: &Ty, table: &HashMap<String, usize>) -> Vec<usize> {
             match ty {
-                Ty::Named(ident) => table.get(&ident.name).copied().into_iter().collect(),
+                Ty::Path(path) => if path.len() == 1 { table.get(&path[0].name).copied().into_iter().collect() } else { vec![] },
                 Ty::Array(_) | Ty::Closure { .. } => Vec::new(),
                 Ty::Optional(inner) => ty_edges(inner, table),
                 Ty::Result { ok, err } => {
@@ -413,7 +461,7 @@ pub(crate) fn compute_closure_bearing(
             Ty::Temporal { inner, .. } => ty_poisons(inner, module_idx, resolution, decls, state, out),
             // Field type names resolve through the OWNING module's table —
             // unqualified references never cross modules (§3.6).
-            Ty::Named(ident) => match resolution.module_types[module_idx].get(&ident.name) {
+            Ty::Path(path) => match if path.len() == 1 { resolution.module_types[module_idx].get(&path[0].name) } else { None } {
                 Some(&global) => visit(global, resolution, decls, state, out),
                 None => false, // unknown type reported later, per use
             },

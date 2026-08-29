@@ -8,6 +8,7 @@ use kai_diagnostics::Span;
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseDecl {
     pub path: Vec<Ident>,
+    pub as_alias: Option<Ident>,
     pub span: Span,
 }
 
@@ -25,6 +26,6 @@ impl UseDecl {
 
     /// Alias is the last segment (`c` in `a.b.c`).
     pub fn alias(&self) -> Option<&Ident> {
-        self.path.last()
+        self.as_alias.as_ref().or_else(|| self.path.last())
     }
 }

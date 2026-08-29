@@ -17,9 +17,9 @@ fn parses_minimal_program() {
     let program = parse_src("fn main() -> int32 { return 0; }").unwrap();
     assert_eq!(program.fns.len(), 1);
     let main = &program.fns[0];
-    assert_eq!(main.name.name, "main");
+    assert_eq!(main.path.last().unwrap().name, "main");
     match &main.ret {
-        kai_ast::Ty::Named(ident) => assert_eq!(ident.name, "int32"),
+        kai_ast::Ty::Path(ident) => assert_eq!(ident.last().unwrap().name, "int32"),
         other => panic!("expected named type, got {other:?}"),
     }
     assert_eq!(main.body.stmts.len(), 1);

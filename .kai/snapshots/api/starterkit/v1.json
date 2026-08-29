@@ -1,0 +1,48 @@
+{
+  "endpoints": {
+    "GET /test": {
+      "parameters": [],
+      "request_body": null,
+      "response": {
+        "nullable": false,
+        "properties": {
+          "detail": {
+            "format": null,
+            "kind": "string",
+            "nullable": false,
+            "type": "Primitive"
+          },
+          "instance": {
+            "format": "uri",
+            "kind": "string",
+            "nullable": false,
+            "type": "Primitive"
+          },
+          "status": {
+            "format": "int32",
+            "kind": "int32",
+            "nullable": false,
+            "type": "Primitive"
+          },
+          "title": {
+            "format": null,
+            "kind": "string",
+            "nullable": false,
+            "type": "Primitive"
+          },
+          "type": {
+            "format": "uri",
+            "kind": "string",
+            "nullable": false,
+            "type": "Primitive"
+          }
+        },
+        "required": [],
+        "type": "Object"
+      }
+    }
+  },
+  "servers": [],
+  "source": "starterkit",
+  "version": 1
+}

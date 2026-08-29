@@ -30,8 +30,8 @@ pub(crate) use struct_lit::{field_access, resolve_field_hop, resolve_index_hop, 
 pub(crate) use array::{array_lit, index_expr};
 pub(crate) use tagged::{capture_poisoned, catch_expr, closure_literal, coalesce_expr, compensate_expr};
 pub(crate) use collect::{collect_local_refs, collect_refs_expr, collect_refs_stmt, is_import_alias};
-pub(crate) use call::{call_expr, qualified_callee, try_closure_call, unwrap_or_builtin};
-pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType>) -> TypedExpr {
+pub(crate) use call::{call_expr, try_closure_call, unwrap_or_builtin};
+pub(crate) fn lower_namespace_aware(checker: &mut Checker, expr: &Expr, expected: Option<KaiType>) -> TypedExpr {
     let mut typed = match &expr.kind {
         ExprKind::IntLit(lit) => {
             let span = lit.span;
@@ -193,16 +193,27 @@ fn int_lit(checker: &mut Checker, value: u64, expected: Option<&KaiType>, span: 
 }
 
 fn ident_ref(checker: &mut Checker, ident: &Ident) -> TypedExpr {
-    match checker.locals.lookup(&ident.name) {
-        Some(info) => TypedExpr::new(TypedExprKind::LocalRef(info.id), info.ty.clone()),
-        None => {
-            let span = ident.span;
-            let name = ident.name.clone();
-            checker.error(error::undeclared_variable(&name, span));
-            // Placeholder keeps compilation going; program is discarded.
-            zero_int()
-        }
+    if let Some(info) = checker.locals.lookup(&ident.name) {
+        return TypedExpr::new(TypedExprKind::LocalRef(info.id), info.ty.clone());
     }
+    
+    if let Some(&idx) = checker.local_fns().get(&ident.name) {
+        return TypedExpr::new(TypedExprKind::FnRef(kai_tast::symbol::FunctionId(idx as u32)), KaiType::NAMESPACE);
+    }
+    
+    if let Some(&idx) = checker.local_types().get(&ident.name) {
+        return TypedExpr::new(TypedExprKind::TypeRef(idx), KaiType::NAMESPACE);
+    }
+    
+    let m_idx = checker.current_module;
+    if let Some(&target) = checker.resolution.imports[m_idx].get(&ident.name) {
+        return TypedExpr::new(TypedExprKind::ModuleRef(target), KaiType::NAMESPACE);
+    }
+    
+    let span = ident.span;
+    let name = ident.name.clone();
+    checker.error(error::undeclared_variable(&name, span));
+    zero_int()
 }
 
 fn unary_expr(checker: &mut Checker, op: UnaryOp, operand: &Expr) -> TypedExpr {
@@ -399,3 +410,15 @@ fn lhs_placeholder_ty(lhs: KaiType) -> KaiType {
 
 // -- v0.0.3: calls, field access, struct literals ---------------------------
 
+
+pub(crate) fn lower(checker: &mut Checker, expr: &Expr, expected: Option<KaiType>) -> TypedExpr {
+    let mut typed = lower_namespace_aware(checker, expr, expected);
+    match typed.kind {
+        TypedExprKind::ModuleRef(_) | TypedExprKind::TypeRef(_) | TypedExprKind::FnRef(_) => {
+            checker.diagnostics.push(kai_diagnostics::Diagnostic::error("symbol cannot be used as a value".to_string(), expr.span).with_file(&checker.cur_file));
+            typed.kind = TypedExprKind::Invalid;
+        }
+        _ => {}
+    }
+    typed
+}

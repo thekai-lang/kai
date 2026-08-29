@@ -26,7 +26,7 @@ fn check_main(
         .enumerate()
         // Ownership filter: only the entry module can provide `main`.
         .filter(|(idx, decl)| {
-            decl.name.name == "main"
+            decl.path.last().unwrap().name == "main"
                 && resolution.fn_module.get(*idx).copied() == Some(0)
         })
         .map(|(_, decl)| decl)
@@ -34,14 +34,14 @@ fn check_main(
 
     match mains.as_slice() {
         [] => {
-            let span = program.fns.first().map_or(Span::new(0, 0), |f| f.name.span);
+            let span = program.fns.first().map_or(Span::new(0, 0), |f| f.path.last().unwrap().span);
             diagnostics.push(Diagnostic::error("program has no `main` function", span));
         }
         [main] => {
             if !main.params.is_empty() {
                 diagnostics.push(Diagnostic::error(
                     "`main` must take no parameters",
-                    main.name.span,
+                    main.path.last().unwrap().span,
                 ));
             }
             if !returns_int32(main) {
@@ -59,7 +59,7 @@ fn check_main(
 /// v0.0.1 compares the surface name; the type checker re-validates against
 /// resolved types once aliases exist.
 fn returns_int32(decl: &kai_ast::FnDecl) -> bool {
-    matches!(&decl.ret, Ty::Named(ident) if ident.name == "int32" || ident.name == "int")
+    matches!(&decl.ret, Ty::Path(path) if path.len() == 1 && (path[0].name == "int32" || path[0].name == "int"))
 }
 
 #[cfg(test)]
@@ -69,19 +69,13 @@ mod tests {
     use kai_diagnostics::Span;
 
     fn named(name: &str) -> Ty {
-        Ty::Named(Ident {
-            name: name.into(),
-            span: Span::new(0, 0),
-        })
+        Ty::Path(vec![Ident { name: name.into(), span: Span::new(0, 0) }])
     }
 
     fn decl(name: &str, ret: Ty) -> FnDecl {
         FnDecl {
             is_public: false,
-            name: Ident {
-                name: name.into(),
-                span: Span::new(0, 0),
-            },
+            path: vec![Ident { name: name.into(), span: Span::new(0, 0) }],
             params: Vec::<Param>::new(),
             ret,
             effects: None,

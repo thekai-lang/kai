@@ -171,6 +171,6 @@ fn check_expr(
         | kai_tast::TypedExprKind::BoolLit(_)
         | kai_tast::TypedExprKind::StrLit { .. }
         | kai_tast::TypedExprKind::NoneLit
-        | kai_tast::TypedExprKind::Invalid => {}
+        | kai_tast::TypedExprKind::Invalid | kai_tast::TypedExprKind::ModuleRef(_) | kai_tast::TypedExprKind::TypeRef(_) | kai_tast::TypedExprKind::FnRef(_) => {}
     }
 }

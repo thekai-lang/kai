@@ -89,6 +89,10 @@ impl KaiType {
     }
 }
 
+impl KaiType {
+    pub const NAMESPACE: Self = KaiType::Unit;
+}
+
 impl std::fmt::Display for KaiType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

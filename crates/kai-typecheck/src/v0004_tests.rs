@@ -69,7 +69,7 @@ fn private_fn_rejects_qualified_call() {
     assert!(
         diags
             .iter()
-            .any(|d| d.message == "function `util.helper` is not public")
+            .any(|d| d.message == "function `helper` is private")
     );
 }
 
@@ -84,7 +84,7 @@ fn unknown_member_reports_the_qualified_path() {
     assert!(
         diags
             .iter()
-            .any(|d| d.message == "unknown function `util.nope`")
+            .any(|d| d.message == "module has no public member `nope`")
     );
 }
 

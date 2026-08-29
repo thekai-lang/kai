@@ -449,6 +449,6 @@ pub(crate) fn walk_expr(
         }
         // A literal is a fresh heap allocation (unconditionally
         // heap-bearing): an owned temp like any StrLit/ArrayLit.
-        TypedExprKind::ClosureLit(_) => {}
+        TypedExprKind::ClosureLit(_) | TypedExprKind::ModuleRef(_) | TypedExprKind::TypeRef(_) | TypedExprKind::FnRef(_) => {}
     }
 }

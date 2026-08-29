@@ -406,7 +406,7 @@ fn file_pipeline_reports_missing_module_from_loader() {
     assert_eq!(failure.phase, "resolve");
     assert_eq!(
         failure.diagnostics[0].message,
-        "cannot find module `ghost.thing`"
+        "cannot find module or symbol `ghost.thing`"
     );
     assert_eq!(failure.diagnostics[0].file.as_deref(), Some("main.kai"));
 }
@@ -431,7 +431,7 @@ fn file_pipeline_rejects_private_access_across_modules() {
         failure
             .diagnostics
             .iter()
-            .any(|d| d.message == "function `core.secret` is not public"),
+            .any(|d| d.message == "function `secret` is private"),
         "{:?}",
         failure.diagnostics
     );

@@ -64,6 +64,8 @@ mod v0005_string_extra;
 mod v0010_tests;
 #[cfg(test)]
 mod v0011_tests;
+#[cfg(test)]
+mod v0012_tests;
 
 pub fn check_with_schema(
     program: &Program,

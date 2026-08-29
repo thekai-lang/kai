@@ -38,46 +38,37 @@ pub(crate) fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> T
         return unwrap_or_builtin(checker, access, call, span);
     }
 
-    let func_id = match &call.callee.kind {
-        ExprKind::Ident(ident) => match checker.local_fns().get(&ident.name) {
-            Some(&idx) => FunctionId(idx as u32),
-            None => {
-                // Not a declared function — maybe a closure-VALUED local
-                // (v0.0.6 first-class calls).
-                if checker
-                    .locals
-                    .lookup(&ident.name)
-                    .is_some_and(|info| matches!(info.ty, KaiType::Closure { .. }))
-                    && let Some(t) = try_closure_call(checker, call, span)
-                {
-                    return t;
+    let func_id = {
+        let callee_val = super::lower_namespace_aware(checker, &call.callee, None);
+        if let TypedExprKind::FnRef(id) = callee_val.kind {
+            id
+        } else {
+            // Fallback for closures or local fns not caught by FnRef?
+            // Actually, ident_ref currently doesn't check local_fns! It only checks locals.
+            // Let's modify ident_ref to return FnRef if it's a local function!
+            // Wait, what if we just check local_fns here? No, if it's a local function, `lower` will fail with "undeclared variable".
+            // So we MUST change ident_ref to check local_fns!
+            
+            // For now, let's keep the old behavior for Ident and closure:
+            match &call.callee.kind {
+                ExprKind::Ident(ident) => {
+                    if let Some(&idx) = checker.local_fns().get(&ident.name) {
+                        FunctionId(idx as u32)
+                    } else if let Some(t) = try_closure_call(checker, call, span) {
+                        return t;
+                    } else {
+                        checker.error(error::unknown_function(&ident.name, ident.span));
+                        return poisoned();
+                    }
+                },
+                _ => {
+                    if let Some(t) = try_closure_call(checker, call, span) {
+                        return t;
+                    }
+                    checker.error(error::indirect_call(span));
+                    return poisoned();
                 }
-                checker.error(error::unknown_function(&ident.name, ident.span));
-                return poisoned();
             }
-        },
-        ExprKind::FieldAccess(access) => {
-            if !is_import_alias(checker, &access.base)
-                && access.field.name != "unwrap_or"
-            {
-                // Maybe a closure stored in a field / reached by projection.
-                if let Some(t) = try_closure_call(checker, call, span) {
-                    return t;
-                }
-            }
-            match qualified_callee(checker, access) {
-                Some(id) => id,
-                None => return poisoned(),
-            }
-        }
-        _ => {
-            // Not a named function: maybe a closure VALUE. Typing supports
-            // the call; emission goes indirect (P5).
-            if let Some(t) = try_closure_call(checker, call, span) {
-                return t;
-            }
-            checker.error(error::indirect_call(span));
-            return poisoned();
         }
     };
 
@@ -122,42 +113,13 @@ pub(crate) fn call_expr(checker: &mut Checker, call: &CallExpr, span: Span) -> T
 /// (two-branch rule, §9.3): field access lowers normally and calling its
 /// result is rejected.
 
-pub(crate) fn qualified_callee(checker: &mut Checker, access: &FieldAccessExpr) -> Option<FunctionId> {
-    let alias = match &access.base.kind {
-        ExprKind::Ident(ident) => ident,
-        _ => {
-            checker.error(error::indirect_call(access.base.span));
-            return None;
-        }
-    };
-
-    let Some(&target) = checker.imports().get(&alias.name) else {
-        // Not an import alias: ordinary value semantics. Lower the field
-        // access for its diagnostics, then reject the call itself.
-        let _ = super::field_access(checker, access);
-        checker.error(error::indirect_call(access.base.span));
-        return None;
-    };
-
-    let path = format!("{}.{}", alias.name, access.field.name);
-    let Some(&idx) = checker.resolution.module_fns[target].get(&access.field.name)
-    else {
-        checker.error(error::unknown_qualified_function(&path, access.field.span));
-        return None;
-    };
-    if !checker.resolution.fn_is_public[idx] {
-        checker.error(error::private_function(&path, access.field.span));
-        return None;
-    }
-    Some(FunctionId(idx as u32))
-}
 
 /// One `.` hop resolved against a known type — the shared core of
 /// expression field access and assignment-place walking, so both report
 /// identical errors keyed to the segment's span.
 
 pub(crate) fn try_closure_call(checker: &mut Checker, call: &CallExpr, span: Span) -> Option<TypedExpr> {
-    let callee_val = lower(checker, &call.callee, None);
+    let callee_val = super::lower_namespace_aware(checker, &call.callee, None);
     let KaiType::Closure { params, ret } = callee_val.ty.clone() else {
         return None;
     };

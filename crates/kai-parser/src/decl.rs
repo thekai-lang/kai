@@ -64,9 +64,15 @@ fn use_decl(parser: &mut Parser) -> UseDecl {
     while parser.eat_simple(&TokenKind::Dot) {
         path.push(parser.expect_ident("a module path segment"));
     }
+    
+    let mut as_alias = None;
+    if parser.eat_simple(&TokenKind::As) {
+        as_alias = Some(parser.expect_ident("an alias name"));
+    }
+    
     let end = parser.expect_simple(&TokenKind::Semi);
     let span = Span::merge(start, end);
-    UseDecl { path, span }
+    UseDecl { path, as_alias, span }
 }
 
 fn fn_decl(parser: &mut Parser) -> FnDecl {
@@ -74,7 +80,10 @@ fn fn_decl(parser: &mut Parser) -> FnDecl {
     let is_public = parser.eat_simple(&TokenKind::Public);
     parser.bump(); // `fn`
 
-    let name = parser.expect_ident("a function name");
+    let mut path = vec![parser.expect_ident("a function name")];
+    while parser.eat_simple(&TokenKind::Dot) {
+        path.push(parser.expect_ident("a function name segment"));
+    }
     let params = params(parser);
     parser.expect_simple(&TokenKind::Arrow);
     let ret = ty::ty(parser);
@@ -87,7 +96,7 @@ fn fn_decl(parser: &mut Parser) -> FnDecl {
 
     FnDecl {
         is_public,
-        name,
+        path,
         params,
         ret,
         effects,

@@ -106,6 +106,7 @@ pub(crate) fn collect_refs_expr(e: &TypedExpr, out: &mut Vec<LocalId>) {
         TypedExprKind::ClosureLit(_) | TypedExprKind::NoneLit => {}
         TypedExprKind::IntLit(_) | TypedExprKind::FloatLit(_) | TypedExprKind::BoolLit(_)
         | TypedExprKind::StrLit { .. } | TypedExprKind::Invalid => {}
+        TypedExprKind::ModuleRef(_) | TypedExprKind::TypeRef(_) | TypedExprKind::FnRef(_) => {}
     }
 }
 

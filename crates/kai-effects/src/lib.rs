@@ -219,7 +219,7 @@ fn collect_expr_calls(expr: &kai_tast::TypedExpr, out: &mut Vec<u32>) {
         kai_tast::TypedExprKind::SomeLit(v) | kai_tast::TypedExprKind::OkLit(v) | kai_tast::TypedExprKind::ErrLit(v) | kai_tast::TypedExprKind::Neg(v) | kai_tast::TypedExprKind::Not(v) | kai_tast::TypedExprKind::Retain(v) => {
             collect_expr_calls(v, out);
         }
-        kai_tast::TypedExprKind::LocalRef(_) | kai_tast::TypedExprKind::IntLit(_) | kai_tast::TypedExprKind::FloatLit(_) | kai_tast::TypedExprKind::BoolLit(_) | kai_tast::TypedExprKind::StrLit { .. } | kai_tast::TypedExprKind::NoneLit | kai_tast::TypedExprKind::Invalid => {}
+        kai_tast::TypedExprKind::LocalRef(_) | kai_tast::TypedExprKind::IntLit(_) | kai_tast::TypedExprKind::FloatLit(_) | kai_tast::TypedExprKind::BoolLit(_) | kai_tast::TypedExprKind::StrLit { .. } | kai_tast::TypedExprKind::NoneLit | kai_tast::TypedExprKind::Invalid | kai_tast::TypedExprKind::ModuleRef(_) | kai_tast::TypedExprKind::TypeRef(_) | kai_tast::TypedExprKind::FnRef(_) => {}
     }
 }
 

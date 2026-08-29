@@ -102,10 +102,7 @@ fn base_ty(parser: &mut Parser) -> Ty {
                 .diagnostics
                 .push(error::expected("a type name", &found));
             parser.bump();
-            Ty::Named(Ident {
-                name: String::new(),
-                span: found.span,
-            })
+            Ty::Path(vec![Ident { name: String::new(), span: found.span }])
         }
     }
 }
@@ -116,14 +113,19 @@ fn base_ty(parser: &mut Parser) -> Ty {
 /// exactly two. Any other name followed by `<` is a diagnostic.
 fn named_ty(parser: &mut Parser, head: String) -> Ty {
     let tok = parser.bump();
-    let ident = Ident {
+    let mut path = vec![Ident {
         name: head,
         span: tok.span,
-    };
-    if !parser.eat_simple(&TokenKind::Lt) {
-        return Ty::Named(ident);
+    }];
+    
+    while parser.eat_simple(&TokenKind::Dot) {
+        path.push(parser.expect_ident("a type name segment"));
     }
-    match ident.name.as_str() {
+
+    if !parser.eat_simple(&TokenKind::Lt) {
+        return Ty::Path(path);
+    }
+    match path.last().unwrap().name.as_str() {
         "Optional" => {
             let inner = ty(parser);
             if parser.eat_simple(&TokenKind::Comma) {
@@ -150,10 +152,10 @@ fn named_ty(parser: &mut Parser, head: String) -> Ty {
                 parser.expect_simple(&TokenKind::Gt);
                 return Ty::Result {
                     ok: Box::new(ok),
-                    err: Box::new(Ty::Named(Ident {
+                    err: Box::new(Ty::Path(vec![Ident {
                         name: String::new(),
                         span: found.span,
-                    })),
+                    }])),
                 };
             }
             let err = ty(parser);
@@ -164,13 +166,13 @@ fn named_ty(parser: &mut Parser, head: String) -> Ty {
             }
         }
         _ => {
-            let name = ident.name.clone();
+            let name = path.last().unwrap().name.clone();
             parser.diagnostics.push(error::custom(
                 format!("`{name}` cannot take type parameters (only Optional and Result)"),
-                ident.span,
+                path.last().unwrap().span,
             ));
             skip_type_args(parser);
-            Ty::Named(ident)
+            Ty::Path(path)
         }
     }
 }

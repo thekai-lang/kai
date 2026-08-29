@@ -146,6 +146,6 @@ fn seed_expr(expr: &TypedExpr, max: &mut u32) {
         | TypedExprKind::BoolLit(_)
         | TypedExprKind::NoneLit
         | TypedExprKind::StrLit { .. }
-        | TypedExprKind::Invalid => {}
+        | TypedExprKind::Invalid | TypedExprKind::ModuleRef(_) | TypedExprKind::TypeRef(_) | TypedExprKind::FnRef(_) => {}
     }
 }

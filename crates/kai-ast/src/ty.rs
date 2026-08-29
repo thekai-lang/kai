@@ -27,7 +27,7 @@ pub enum TemporalOrigin {
 /// resolution to concrete types happens in the type checker, never the parser.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
-    Named(Ident),
+    Path(Vec<Ident>),
     /// `T[]` (v0.0.5). Arrays are unconditionally heap-bearing (§9.1),
     /// whatever the element type.
     Array(Box<Ty>),
@@ -53,7 +53,11 @@ pub enum Ty {
 impl Ty {
     pub fn span(&self) -> Span {
         match self {
-            Ty::Named(ident) => ident.span,
+            Ty::Path(path) => {
+                let start = path.first().unwrap().span;
+                let end = path.last().unwrap().span;
+                kai_diagnostics::Span::new(start.start, end.end)
+            },
             Ty::Array(elem) => elem.span(),
             Ty::Optional(inner) => inner.span(),
             Ty::Result { ok, .. } => ok.span(),
