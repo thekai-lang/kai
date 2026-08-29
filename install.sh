@@ -34,14 +34,35 @@ add_to_profile() {
     fi
 }
 
+add_to_fish() {
+    local fish_config="$HOME/.config/fish/config.fish"
+    local fish_string="set -gx PATH \"\$HOME/.kai/bin\" \$PATH"
+    if [ -d "$HOME/.config/fish" ]; then
+        if [ ! -f "$fish_config" ]; then
+            touch "$fish_config"
+        fi
+        if ! grep -q "set -gx PATH .*\/\\.kai\/bin" "$fish_config" && ! grep -q "fish_add_path .*\/\\.kai\/bin" "$fish_config"; then
+            echo "" >> "$fish_config"
+            echo "# Kai Compiler" >> "$fish_config"
+            echo "$fish_string" >> "$fish_config"
+            echo "=> Added ~/.kai/bin to $fish_config"
+        else
+            echo "=> ~/.kai/bin is already in $fish_config"
+        fi
+    fi
+}
+
 echo "=> Configuring PATH..."
 add_to_profile "$HOME/.bashrc"
 add_to_profile "$HOME/.zshrc"
+add_to_fish
 
 echo ""
 echo "=========================================================="
 echo "INSTALLATION SUCCESSFUL!"
 echo "To use Kai in this current terminal immediately, run:"
-echo "  source ~/.bashrc   (or source ~/.zshrc)"
+echo "  source ~/.bashrc   (for bash)"
+echo "  source ~/.zshrc    (for zsh)"
+echo "  source ~/.config/fish/config.fish (for fish)"
 echo "Or simply restart your terminal."
 echo "=========================================================="
