@@ -34,7 +34,7 @@ pub(crate) fn walk_block(
             // alive past the releases). One node carries both.
             TypedStmt::Return(mut value) => {
                 if let Some(e) = &mut value {
-                    hoist_borrow_temps(heap, e, fresh, scopes, &mut out, true);
+                    hoist_borrow_temps(heap, e, fresh, scopes, &mut out, true, is_reversible);
                 }
                 let ret = finish_return(heap, TypedStmt::Return(value), scopes, fresh, is_reversible);
                 let TypedStmt::Return(value) = ret else {
@@ -99,7 +99,7 @@ pub(crate) fn walk_stmt(
             // materialized first (in evaluation order); the root itself is
             // a transfer into the owning slot.
             let mut out = Vec::new();
-            hoist_borrow_temps(heap, &mut binding.init, fresh, scopes, &mut out, true);
+            hoist_borrow_temps(heap, &mut binding.init, fresh, scopes, &mut out, true, is_reversible);
             walk_expr(heap, &mut binding.init, scopes, fresh, is_reversible);
             // Owning slot: co-own borrowed sources (§9.4/§9.5 row 3).
             wrap_retain_if_borrowed(heap, &mut binding.init);
@@ -117,10 +117,10 @@ pub(crate) fn walk_stmt(
             // index temporaries in that same order.
             for step in assign.path.iter_mut() {
                 if let kai_tast::TypedPlaceStep::Index(idx) = step {
-                    hoist_borrow_temps(heap, idx, fresh, scopes, &mut out, false);
+                    hoist_borrow_temps(heap, idx, fresh, scopes, &mut out, false, is_reversible);
                 }
             }
-            hoist_borrow_temps(heap, &mut assign.value, fresh, scopes, &mut out, true);
+            hoist_borrow_temps(heap, &mut assign.value, fresh, scopes, &mut out, true, is_reversible);
             if is_reversible {
                 assign.push_reversible = true;
             }
@@ -131,7 +131,7 @@ pub(crate) fn walk_stmt(
         }
         TypedStmt::If(mut if_) => {
             let mut out = Vec::new();
-            hoist_borrow_temps(heap, &mut if_.cond, fresh, scopes, &mut out, false);
+            hoist_borrow_temps(heap, &mut if_.cond, fresh, scopes, &mut out, false, is_reversible);
             walk_expr(heap, &mut if_.cond, scopes, fresh, is_reversible);
             if_.then_block = walk_block(heap, if_.then_block, scopes, fresh, is_reversible);
             if_.else_block =
@@ -154,7 +154,7 @@ pub(crate) fn walk_stmt(
             // loop exit — one release per evaluation, never zero.
             scopes.push();
             let mut pre = Vec::new();
-            hoist_borrow_temps(heap, &mut while_.cond, fresh, scopes, &mut pre, false);
+            hoist_borrow_temps(heap, &mut while_.cond, fresh, scopes, &mut pre, false, is_reversible);
             walk_expr(heap, &mut while_.cond, scopes, fresh, is_reversible);
             let cond_releases: Vec<(LocalId, KaiType)> = scopes
                 .frames
@@ -177,14 +177,14 @@ pub(crate) fn walk_stmt(
         }
         TypedStmt::Require(mut e) => {
             let mut out = Vec::new();
-            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
+            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false, is_reversible);
             walk_expr(heap, &mut e, scopes, fresh, is_reversible);
             out.push(TypedStmt::Require(e));
             out
         }
         TypedStmt::Observe(mut e) => {
             let mut out = Vec::new();
-            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
+            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false, is_reversible);
             walk_expr(heap, &mut e, scopes, fresh, is_reversible);
             out.push(TypedStmt::Observe(e));
             out
@@ -195,10 +195,10 @@ pub(crate) fn walk_stmt(
                 // A heap value computed and thrown away: bind it to a
                 // hidden local so scope exit releases it (the statement has
                 // no other consumer).
-                hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
+                hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false, is_reversible);
                 return out;
             }
-            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false);
+            hoist_borrow_temps(heap, &mut e, fresh, scopes, &mut out, false, is_reversible);
             walk_expr(heap, &mut e, scopes, fresh, is_reversible);
             out.push(TypedStmt::Expr(e));
             out
@@ -376,7 +376,7 @@ pub(crate) fn walk_expr(
                 match s {
                     TypedStmt::Return(mut value) => {
                         if let Some(e) = &mut value {
-                            hoist_borrow_temps(heap, e, fresh, scopes, &mut done, true);
+                            hoist_borrow_temps(heap, e, fresh, scopes, &mut done, true, is_reversible);
                         }
                         let ret = finish_return(heap, TypedStmt::Return(value), scopes, fresh, is_reversible);
                         let TypedStmt::Return(value) = ret else {
@@ -424,7 +424,7 @@ pub(crate) fn walk_expr(
                 match s {
                     TypedStmt::Return(mut value) => {
                         if let Some(e) = &mut value {
-                            hoist_borrow_temps(heap, e, fresh, scopes, &mut done, true);
+                            hoist_borrow_temps(heap, e, fresh, scopes, &mut done, true, is_reversible);
                         }
                         let ret = finish_return(heap, TypedStmt::Return(value), scopes, fresh, false);
                         let TypedStmt::Return(value) = ret else {

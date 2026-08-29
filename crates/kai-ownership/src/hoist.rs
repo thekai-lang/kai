@@ -22,6 +22,7 @@ pub(crate) fn hoist_children(
     fresh: &mut FreshIds,
     scopes: &mut Scopes,
     out: &mut Vec<TypedStmt>,
+    is_reversible: bool,
 ) {
     match &mut expr.kind {
         // Short-circuit: lhs is always evaluated, rhs is lazy (guarded).
@@ -36,7 +37,7 @@ pub(crate) fn hoist_children(
             rhs,
             rhs_hoists,
         } => {
-            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false, is_reversible);
             // Use a throwaway scope for rhs so that nested owned-temp
             // hoists inside the rhs (e.g. string literals in `a == "x"`)
             // are NOT registered in the real scope. If they were, the
@@ -47,8 +48,8 @@ pub(crate) fn hoist_children(
             let mut throwaway = Scopes::default();
             throwaway.push();
             let mut conditional_out = Vec::new();
-            hoist_children(heap, rhs, fresh, &mut throwaway, &mut conditional_out);
-            hoist_root(heap, rhs, fresh, &mut throwaway, &mut conditional_out, false, false);
+            hoist_children(heap, rhs, fresh, &mut throwaway, &mut conditional_out, is_reversible);
+            hoist_root(heap, rhs, fresh, &mut throwaway, &mut conditional_out, false, false, is_reversible);
             *rhs_hoists = conditional_out;
         }
         // v0.0.6: `Some`/`Ok`/`Err` payloads are owning slots handled by
@@ -57,42 +58,42 @@ pub(crate) fn hoist_children(
         TypedExprKind::SomeLit(value)
         | TypedExprKind::OkLit(value)
         | TypedExprKind::ErrLit(value) => {
-            hoist_borrow_temps(heap, value, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, value, fresh, scopes, out, false, is_reversible);
         }
         // v0.0.8.4 (F2/F3): the ALWAYS-evaluated positions (coalesce lhs,
         // unwrap_or receiver, catch base) DO recurse — heap-bearing owned
         // temps inside them were previously never hoisted, leaking one
         // orphan claim per evaluation (t2a/t2b repro).
         TypedExprKind::Coalesce { lhs, .. } => {
-            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false, is_reversible);
         }
         TypedExprKind::UnwrapOr { receiver, .. } => {
-            hoist_borrow_temps(heap, receiver, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, receiver, fresh, scopes, out, false, is_reversible);
         }
         TypedExprKind::Catch { base, .. } => {
-            hoist_borrow_temps(heap, base, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, base, fresh, scopes, out, false, is_reversible);
         }
         TypedExprKind::Compensate { base, .. } => {
-            hoist_borrow_temps(heap, base, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, base, fresh, scopes, out, false, is_reversible);
         }
         TypedExprKind::CallIndirect { .. }
         | TypedExprKind::ClosureLit(_)
         | TypedExprKind::NoneLit => {}
         TypedExprKind::Binary { lhs, rhs, .. } => {
-            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false);
-            hoist_borrow_temps(heap, rhs, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, lhs, fresh, scopes, out, false, is_reversible);
+            hoist_borrow_temps(heap, rhs, fresh, scopes, out, false, is_reversible);
         }
         TypedExprKind::Call { args, .. } => {
             for a in args.iter_mut() {
-                hoist_borrow_temps(heap, a, fresh, scopes, out, false);
+                hoist_borrow_temps(heap, a, fresh, scopes, out, false, is_reversible);
             }
         }
         TypedExprKind::Index { base, index } => {
-            hoist_borrow_temps(heap, base, fresh, scopes, out, false);
-            hoist_borrow_temps(heap, index, fresh, scopes, out, false);
+            hoist_borrow_temps(heap, base, fresh, scopes, out, false, is_reversible);
+            hoist_borrow_temps(heap, index, fresh, scopes, out, false, is_reversible);
         }
         TypedExprKind::FieldAccess { base, .. } => {
-            hoist_borrow_temps(heap, base, fresh, scopes, out, false)
+            hoist_borrow_temps(heap, base, fresh, scopes, out, false, is_reversible)
         }
         // Neg/Not: scalar unary — no heap children to hoist.
         // StructLit/ArrayLit: owning slots — children released by dtor.
@@ -123,9 +124,10 @@ pub(crate) fn hoist_borrow_temps(
     scopes: &mut Scopes,
     out: &mut Vec<TypedStmt>,
     root_is_transfer: bool,
+    is_reversible: bool,
 ) {
-    hoist_children(heap, expr, fresh, scopes, out);
-    hoist_root(heap, expr, fresh, scopes, out, root_is_transfer, true);
+    hoist_children(heap, expr, fresh, scopes, out, is_reversible);
+    hoist_root(heap, expr, fresh, scopes, out, root_is_transfer, true, is_reversible);
 }
 
 /// Materialize the root node if it is a heap-bearing owned temp.
@@ -141,15 +143,18 @@ fn hoist_root(
     out: &mut Vec<TypedStmt>,
     root_is_transfer: bool,
     register_scope: bool,
+    is_reversible: bool,
 ) {
     if !root_is_transfer && heap.is(&expr.ty) && is_owned_temp(expr) {
         let local = fresh.alloc();
         let ty = expr.ty.clone();
-        let init =
+        let mut init =
             std::mem::replace(expr, TypedExpr::new(TypedExprKind::LocalRef(local), ty.clone()));
         if register_scope {
             scopes.declare(local, ty, true);
         }
+        crate::walk::walk_expr(heap, &mut init, scopes, fresh, is_reversible);
+        crate::heap::wrap_retain_if_borrowed(heap, &mut init);
         out.push(TypedStmt::Let(kai_tast::TypedLet {
             local,
             name: "$tmp".into(),

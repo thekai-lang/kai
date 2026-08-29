@@ -105,7 +105,7 @@ use super::*;
         let mut scopes = Scopes::default();
         scopes.push(); // production always has a scope open (walk_block pushes)
         let mut pre = Vec::new();
-        hoist_borrow_temps(&heap, &mut co, &mut fresh, &mut scopes, &mut pre, false);
+        hoist_borrow_temps(&heap, &mut co, &mut fresh, &mut scopes, &mut pre, false, false);
         // The Coalesce IS materialized into a hidden $tmp local.
         assert_eq!(pre.len(), 1, "coalesce must be materialized for leak tracking");
         if let TypedStmt::Let(binding) = &pre[0] {
