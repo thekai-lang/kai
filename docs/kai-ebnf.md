@@ -526,3 +526,12 @@ ApiWithClause ::=
     | 'with' 'body' ':' StructLit
     | 'with' 'auth' ':' Expr
 ```
+
+## 12. Module Behavior & Associated Types — v0.0.12
+
+```ebnf
+FnDecl ::= "public"? "fn" Path "(" ParamList ")" "->" Type [ "reversible" ] Block
+Type ::= Path { '[' ']' } [ '?' ]
+UseDecl ::= "use" Path [ "as" Ident ] ";"
+```
+*Note: `Path` replacing `Ident` in `FnDecl` allows for associated functions (`fn User.create()`). In `Type`, it allows for module-qualified types (`auth.User`). In `UseDecl`, `Path` can now resolve to a specific symbol for direct import.*
